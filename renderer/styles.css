@@ -466,6 +466,37 @@ html, body {
   padding: 10px 12px; background: #fff;
 }
 .memo-edit:focus { border-color: var(--green); }
+/* 编辑态：contenteditable 富文本，与顶部输入框一致的 markdown 渲染 */
+.memo-edit-richtext {
+  resize: none; overflow-y: auto;
+  font-size: 15px; line-height: 1.7; color: #374151;
+  min-height: 96px; white-space: pre-wrap; word-break: break-word;
+}
+.memo-edit-richtext:empty::before {
+  content: attr(data-placeholder); color: #9ca3af; pointer-events: none;
+}
+.memo-edit-richtext p { margin: 0 0 6px; }
+.memo-edit-richtext p:last-child { margin-bottom: 0; }
+.memo-edit-richtext a { color: var(--green); }
+.memo-edit-richtext .md-li { margin: 0 0 2px; color: #374151; }
+.memo-edit-richtext .md-li:first-child { margin-top: 4px; }
+.memo-edit-richtext .md-marker { color: #c6c2bc; }
+.memo-edit-richtext strong { font-weight: 600; }
+.memo-edit-richtext code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em; background: #f0eeea; border-radius: 4px; padding: 1px 4px;
+}
+.memo-edit-richtext blockquote {
+  margin: 4px 0; padding-left: 10px; border-left: 3px solid #d9d5cf; color: #9ca3af;
+}
+.memo-edit-richtext pre {
+  background: #f0eeea; border-radius: 6px; padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em; overflow-x: auto;
+}
+.memo-edit-richtext pre code { background: transparent; padding: 0; }
+/* 编辑态工具栏：置于编辑器上方，顶部输入框同款 */
+.memo-edit-toolbar { margin-top: 0; padding-top: 0; margin-bottom: 8px; border-top: none; }
 .edit-actions { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
 .edit-actions button {
   border: none; border-radius: 8px; padding: 5px 14px; font-size: 13px; cursor: pointer;

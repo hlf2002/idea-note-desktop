@@ -413,9 +413,26 @@
   function buildEditor(memo) {
     const wrap = document.createElement('div');
     wrap.style.width = '100%';
-    const ta = document.createElement('textarea');
-    ta.className = 'memo-edit';
-    ta.value = memo.content;
+
+    // 所见即所得编辑器：与顶部输入框同一套 MarkdownComposer（实时 markdown 渲染）
+    const editEl = document.createElement('div');
+    editEl.className = 'memo-edit memo-edit-richtext';
+    editEl.contentEditable = 'true';
+    editEl.spellcheck = false;
+    editEl.dataset.placeholder = '编辑内容…';
+
+    // 工具栏（与顶部输入框一致：#、Aa、无序/有序列表）
+    const tb = document.createElement('div');
+    tb.className = 'composer-toolbar memo-edit-toolbar';
+    tb.innerHTML =
+      '<div class="toolbar-left">' +
+        '<button type="button" class="tool-btn" data-edit-tool="tag" title="标签"><i class="fa-solid fa-hashtag"></i></button>' +
+        '<div class="tool-divider"></div>' +
+        '<button type="button" class="tool-btn font-btn" data-edit-tool="font" title="字体">Aa</button>' +
+        '<button type="button" class="tool-btn" data-edit-tool="ul" title="无序列表"><i class="fa-solid fa-list"></i></button>' +
+        '<button type="button" class="tool-btn" data-edit-tool="ol" title="有序列表"><i class="fa-solid fa-list-ol"></i></button>' +
+      '</div>';
+
     const act = document.createElement('div');
     act.className = 'edit-actions';
     const save = document.createElement('button');
@@ -425,16 +442,20 @@
     cancel.className = 'edit-cancel';
     cancel.textContent = '取消';
     act.appendChild(save); act.appendChild(cancel);
-    wrap.appendChild(ta); wrap.appendChild(act);
 
-    requestAnimationFrame(() => {
-      ta.focus();
-      ta.setSelectionRange(ta.value.length, ta.value.length);
+    wrap.appendChild(tb);
+    wrap.appendChild(editEl);
+    wrap.appendChild(act);
+
+    // 初始化 composer（⌘/⇧+Enter 保存，与顶部一致）
+    const composer = window.MarkdownComposer(editEl, {
+      render: (text) => window.Md.renderWysiwyg(text),
+      onCommit: (text) => { saveEdit(text); }
     });
+    composer.setValue(memo.content);
 
-    save.addEventListener('click', async () => {
-      const val = ta.value;
-      if (!val.trim()) return;
+    async function saveEdit(val) {
+      if (!val || !val.trim()) return;
       try {
         const updated = await window.ideaNote.sync.update(memo.id, val);
         state.editingId = null;
@@ -442,19 +463,24 @@
       } catch (err) {
         handleSyncError(err, '保存失败');
       }
-    });
+    }
+
+    save.addEventListener('click', () => saveEdit(composer.value()));
     cancel.addEventListener('click', () => {
       state.editingId = null;
       renderList();
     });
-    ta.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.shiftKey) && !e.isComposing) {
-        e.preventDefault();
-        save.click();
-      } else if (e.key === 'Escape') {
-        cancel.click();
-      }
+    // Escape 取消编辑（composer 只处理 Enter，这里兜底）
+    editEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cancel.click(); }
     });
+
+    // 工具栏插入 markdown 语法
+    tb.querySelector('[data-edit-tool="tag"]').addEventListener('click', () => composer.insertText(' #'));
+    tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
+    tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
+    tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
+
     return wrap;
   }
 
@@ -610,6 +636,7 @@
         renderList();
       } else if (action === 'delete') {
         if (state.pendingDeleteId === id) {
+          // 二次确认：真正删除
           try {
             await window.ideaNote.sync.remove(id);
             state.pendingDeleteId = null;
@@ -619,13 +646,13 @@
             handleSyncError(err, '删除失败');
           }
         } else {
+          // 第一次点击：进入确认态。保持菜单打开，按钮直接变为「确认删除？」，用户再点一次即删除
           state.pendingDeleteId = id;
-          closeMenus();
-          renderList();
+          actionBtn.textContent = '确认删除？';
           setTimeout(() => {
             if (state.pendingDeleteId === id) {
               state.pendingDeleteId = null;
-              renderList();
+              if (actionBtn.isConnected) actionBtn.textContent = '删除';
             }
           }, 2500);
         }
