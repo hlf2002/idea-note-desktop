@@ -33,11 +33,15 @@ html, body {
 /* ===== 主布局 ===== */
 #app-view { display: flex; height: 100vh; width: 100vw; }
 
-/* ===== 无边框窗口：拖拽区 ===== */
+/* ===== 无边框窗口：拖拽区（固定顶部、带底色，遮住滚动内容） ===== */
 .titlebar {
   height: 44px;
   flex-shrink: 0;
-  -webkit-app-region: drag;   /* 红黄绿交通灯区域，可拖动窗口 */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-side);   /* 底色与侧边栏一致，滚动内容从下方经过时被遮住 */
+  -webkit-app-region: drag;     /* 红黄绿交通灯区域，可拖动窗口 */
 }
 .titlebar:active { cursor: grabbing; }
 
@@ -52,6 +56,7 @@ html, body {
   padding: 0 16px 12px;
   user-select: none;
   overflow-y: auto;
+  overflow-x: hidden;
   scrollbar-width: none;
 }
 .sidebar::-webkit-scrollbar { display: none; }
@@ -132,9 +137,8 @@ html, body {
 .nav-ico { font-size: 14px; width: 18px; text-align: center; }
 .nav-item:not(.active) .nav-ico { color: #6b7280; }
 
-/* 全部标签 */
-.tag-section { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 6px; scrollbar-width: none; }
-.tag-section::-webkit-scrollbar { display: none; }
+/* 全部标签（跟随侧边栏整体滚动，不再单独滚动） */
+.tag-section { padding-bottom: 6px; }
 .tag-title {
   font-size: 12px; font-weight: 400; color: var(--muted);
   padding: 8px 16px 4px;
@@ -274,7 +278,7 @@ html, body {
 }
 .composer pre code { background: transparent; padding: 0; }
 
-/* 工具条 */
+/* 工具条：始终显示；未聚焦暗淡，聚焦时亮起 */
 .composer-toolbar {
   display: flex; align-items: center; justify-content: space-between;
   margin-top: 8px; padding-top: 8px;
@@ -282,22 +286,29 @@ html, body {
 }
 .toolbar-left { display: flex; align-items: center; gap: 10px; }
 .tool-btn {
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1;
   border: none; background: transparent; cursor: pointer;
-  color: #d1d5db; font-size: 14px; padding: 2px;
-  display: inline-flex; align-items: center;
-  transition: color .12s;
+  color: #d1d5db;
+  border-radius: 6px;
+  transition: color .15s, background .15s;
 }
-.tool-btn:hover { color: #6b7280; }
-.tool-btn.font-btn { font-family: serif; font-weight: 700; font-size: 15px; }
+.tool-btn:hover { color: #9ca3af; }
+.tool-btn.font-btn { font-weight: 700; font-size: 13px; font-family: inherit; }
 .tool-divider { width: 1px; height: 16px; background: #e5e7eb; }
 .composer-send {
   border: none; cursor: pointer;
-  background: #f0fdf4; color: #a7f3d0;
+  background: #f9fafb; color: #d1d5db;
   border-radius: 6px; padding: 6px 16px;
   font-size: 14px; display: inline-flex; align-items: center; justify-content: center;
   transition: background .15s, color .15s;
 }
-.composer-send:hover { background: #dcfce7; color: #34d399; }
+/* 聚焦：工具条亮起 */
+.composer-card:focus-within .tool-btn { color: #6b7280; }
+.composer-card:focus-within .tool-btn:hover { color: #111827; background: #f3f4f6; }
+.composer-card:focus-within .composer-send { background: #dcfce7; color: #059669; }
+.composer-card:focus-within .composer-send:hover { background: #a7f3d0; color: #047857; }
 .composer-send:active { transform: scale(.96); }
 
 /* 旧数据导入提示条 */
