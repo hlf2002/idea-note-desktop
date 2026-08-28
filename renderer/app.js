@@ -308,7 +308,8 @@
         const cellEl = document.createElement('div');
         let cls = 'heatmap-cell';
         if (cell.count > 0) {
-          const lv = Math.min(4, 1 + Math.floor((cell.count - 1) / 2));
+          // 1~4 条逐级加深，≥5 条用 lv5（primary 色）
+          const lv = Math.min(5, cell.count);
           cls += ' lv' + lv;
         }
         cellEl.className = cls;

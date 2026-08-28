@@ -144,12 +144,14 @@ html, body {
 .heatmap-cell {
   width: 15px; height: 15px;
   border-radius: 3px;
-  background: #e0d2b6;
+  background: #efe4cc;   /* 空内容：浅色 */
 }
-.heatmap-cell.lv1 { background: #ecd7b8; }
-.heatmap-cell.lv2 { background: #ddbd93; }
-.heatmap-cell.lv3 { background: #c9995f; }
-.heatmap-cell.lv4 { background: #b6774c; }
+/* 内容越多颜色越深；lv5（一天 ≥5 条）用 primary 色 */
+.heatmap-cell.lv1 { background: #e8d4b0; }
+.heatmap-cell.lv2 { background: #dcbd8d; }
+.heatmap-cell.lv3 { background: #cfa46c; }
+.heatmap-cell.lv4 { background: #c28e58; }
+.heatmap-cell.lv5 { background: var(--green); }
 
 /* 导航 */
 .nav { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 10px; }
