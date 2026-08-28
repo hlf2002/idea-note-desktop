@@ -38,7 +38,9 @@
     userAvatar: $('#user-avatar'),
     userName: $('#user-name'),
     syncRefresh: $('#sync-refresh'),
-    userLogout: $('#user-logout'),
+    userMenu: $('#user-menu'),
+    userMenuBtn: $('#user-menu-btn'),
+    userDropdownLogout: $('#user-dropdown-logout'),
     statMemos: $('#stat-memos'),
     statTags: $('#stat-tags'),
     statDays: $('#stat-days'),
@@ -746,7 +748,17 @@
 
     // 登录视图
     el.qrRefresh.addEventListener('click', startQr);
-    el.userLogout.addEventListener('click', async () => {
+
+    // 用户菜单（头像 + 昵称下拉）：点外部关闭，退出项登出
+    el.userMenuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      el.userMenu.classList.toggle('open');
+    });
+    document.addEventListener('click', (e) => {
+      if (!el.userMenu.contains(e.target)) el.userMenu.classList.remove('open');
+    });
+    el.userDropdownLogout.addEventListener('click', async () => {
+      el.userMenu.classList.remove('open');
       try { await window.ideaNote.auth.logout(); } catch (e) { /* noop */ }
       state.memos = [];
       renderAll();

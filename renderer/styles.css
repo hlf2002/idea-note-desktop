@@ -61,7 +61,16 @@ html, body {
 .sidebar::-webkit-scrollbar { display: none; }
 
 /* 用户区 */
-.user-bar { display: flex; align-items: center; gap: 12px; padding: 0 4px 16px; }
+.user-bar { display: flex; align-items: center; gap: 8px; padding: 0 4px 16px; }
+/* 头像 + 昵称下拉菜单 */
+.user-menu { position: relative; flex: 1; min-width: 0; }
+.user-menu-btn {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 4px; border: none; background: transparent;
+  cursor: pointer; text-align: left; border-radius: 8px;
+  transition: background .12s;
+}
+.user-menu-btn:hover { background: #ecdfc4; }
 .avatar-wrap { flex-shrink: 0; }
 .user-avatar {
   width: 40px; height: 40px; border-radius: 50%;
@@ -73,12 +82,26 @@ html, body {
   font-size: 18px; font-weight: 700; color: #5d4430;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px;
 }
-.pro-badge {
-  flex-shrink: 0;
-  font-size: 10px; font-weight: 600; letter-spacing: .3px;
-  color: #8a7358; background: #e0d2b6;
-  border-radius: 3px; padding: 1px 5px;
+.user-caret { font-size: 10px; color: #8a7358; transition: transform .15s; }
+.user-menu.open .user-caret { transform: rotate(180deg); }
+.user-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
+  min-width: 130px;
+  background: #fbf7ee; border: 1px solid #e0d2b6; border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.10);
+  padding: 4px; display: none; flex-direction: column;
 }
+.user-menu.open .user-dropdown { display: flex; }
+.user-dropdown-item {
+  border: none; background: transparent; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left; font-size: 13.5px; color: #6b5942;
+  padding: 8px 12px; border-radius: 6px;
+  transition: background .12s, color .12s;
+}
+.user-dropdown-item:hover { background: #efe3c9; color: #5d4430; }
+.user-dropdown-item.danger { color: #c94f3d; }
+.user-dropdown-item.danger:hover { background: #f8e8e0; }
 .icon-btn {
   flex-shrink: 0;
   border: none; background: transparent;

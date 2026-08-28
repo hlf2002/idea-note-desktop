@@ -40,13 +40,22 @@
       <div class="titlebar"></div>
       <!-- 用户区 -->
       <div class="user-bar">
-        <div class="avatar-wrap">
-          <img id="user-avatar" class="user-avatar" alt="头像" />
-        </div>
-        <div class="user-info">
-          <div class="user-name-row">
-            <span id="user-name" class="user-name">…</span>
-            <span class="pro-badge">PRO</span>
+        <div class="user-menu" id="user-menu">
+          <button class="user-menu-btn" id="user-menu-btn" title="账户菜单">
+            <span class="avatar-wrap">
+              <img id="user-avatar" class="user-avatar" alt="头像" />
+            </span>
+            <span class="user-info">
+              <span class="user-name-row">
+                <span id="user-name" class="user-name">…</span>
+                <i class="fa-solid fa-chevron-down user-caret"></i>
+              </span>
+            </span>
+          </button>
+          <div class="user-dropdown" id="user-dropdown">
+            <button class="user-dropdown-item danger" id="user-dropdown-logout">
+              <i class="fa-solid fa-arrow-right-from-bracket"></i> 退出
+            </button>
           </div>
         </div>
         <button id="sync-refresh" class="icon-btn" title="刷新同步"><i class="fa-solid fa-arrows-rotate"></i></button>
@@ -89,7 +98,6 @@
 
       <div class="sidebar-footer">
         <button id="open-data-path" class="footer-link" title="打开数据目录">数据文件 · 打开目录</button>
-        <button id="user-logout" class="footer-link logout-link" title="退出登录">退出登录</button>
       </div>
     </aside>
 
