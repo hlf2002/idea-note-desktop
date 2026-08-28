@@ -27,28 +27,32 @@ const APP_ICON = () => process.platform === 'darwin'
   ? path.join(__dirname, 'assets', 'icon-mac.png')
   : path.join(__dirname, 'assets', 'icon-win.png');
 
-// 旧版数据目录（应用曾名为 flomo-local）：应用更名后 userData 路径变化，
-// 首次启动时把旧登录态/缓存/待导入数据迁移到新目录，避免登录态丢失。
-// 仅复制「新目录中不存在」的文件，绝不覆盖已有数据。
-const OLD_DATA_DIR = () => path.join(app.getPath('appData'), 'flomo-local');
+// 旧版数据目录：应用改名/打包后 userData 路径可能变化（flomo-local → idea-note-local → 灵感笔记），
+// 首次启动把旧登录态/缓存/待导入数据迁移到当前目录，避免登录态丢失。
+// 仅复制「当前目录中不存在」的文件，绝不覆盖已有数据。
+const OLD_DATA_DIRS = () => [
+  path.join(app.getPath('appData'), 'flomo-local'),
+  path.join(app.getPath('appData'), 'idea-note-local')
+];
 
 function migrateLegacyDataDir() {
   const nd = DATA_DIR();
-  const od = OLD_DATA_DIR();
-  if (!fs.existsSync(od)) return;
-  try {
-    if (!fs.existsSync(nd)) fs.mkdirSync(nd, { recursive: true });
-    for (const f of fs.readdirSync(od)) {
-      if (!/^(auth|idea-cache|flomo-local)\.json(\.imported-.*)?$/.test(f)) continue;
-      const src = path.join(od, f);
-      const dst = path.join(nd, f);
-      if (fs.existsSync(src) && !fs.existsSync(dst)) {
-        fs.copyFileSync(src, dst);
-        console.log('[idea-note-local] 已迁移旧数据: ' + f);
+  for (const od of OLD_DATA_DIRS()) {
+    if (od === nd || !fs.existsSync(od)) continue;
+    try {
+      if (!fs.existsSync(nd)) fs.mkdirSync(nd, { recursive: true });
+      for (const f of fs.readdirSync(od)) {
+        if (!/^(auth|idea-cache|flomo-local)\.json(\.imported-.*)?$/.test(f)) continue;
+        const src = path.join(od, f);
+        const dst = path.join(nd, f);
+        if (fs.existsSync(src) && !fs.existsSync(dst)) {
+          fs.copyFileSync(src, dst);
+          console.log('[idea-note-local] 已迁移旧数据: ' + f);
+        }
       }
+    } catch (e) {
+      console.warn('[idea-note-local] 旧数据迁移跳过 (' + od + '): ' + e.message);
     }
-  } catch (e) {
-    console.warn('[idea-note-local] 旧数据迁移跳过: ' + e.message);
   }
 }
 
