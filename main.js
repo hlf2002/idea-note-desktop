@@ -59,7 +59,7 @@ function createWindow() {
     minWidth: 760,
     minHeight: 520,
     title: '灵感笔记 · Q助理',
-    backgroundColor: '#faf9f8',
+    backgroundColor: '#f4e9d3',
     show: false,
     icon: APP_ICON(),
     // 无边框窗口：隐藏原生标题栏，保留 macOS 红黄绿交通灯按钮

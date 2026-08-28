@@ -237,7 +237,7 @@
     if (counts.length === 0) {
       const li = document.createElement('li');
       li.textContent = '暂无标签';
-      li.style.cssText = 'padding:7px 12px;font-size:12.5px;color:#b3aeaa;';
+      li.style.cssText = 'padding:7px 12px;font-size:12.5px;color:#a08a70;';
       el.tagList.appendChild(li);
     } else {
       counts.forEach((t) => {
