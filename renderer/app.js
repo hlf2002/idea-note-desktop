@@ -40,6 +40,7 @@
     syncRefresh: $('#sync-refresh'),
     userMenu: $('#user-menu'),
     userMenuBtn: $('#user-menu-btn'),
+    userMenuBackdrop: $('#user-menu-backdrop'),
     userDropdownLogout: $('#user-dropdown-logout'),
     statMemos: $('#stat-memos'),
     statTags: $('#stat-tags'),
@@ -755,7 +756,11 @@
       el.userMenu.classList.toggle('open');
     });
     // 用户菜单（头像 + 昵称下拉）：点任意其他位置即收起
-    // mousedown 捕获阶段先于目标元素任何 stopPropagation 触发，覆盖不冒泡的点击场景
+    // 全屏遮罩：打开时铺满窗口，点击任何位置（含拖拽区/不冒泡元素）先命中遮罩收起
+    el.userMenuBackdrop.addEventListener('click', () => {
+      el.userMenu.classList.remove('open');
+    });
+    // mousedown 捕获阶段兜底：先于目标元素任何 stopPropagation 触发
     document.addEventListener('mousedown', (e) => {
       if (!el.userMenu.contains(e.target)) el.userMenu.classList.remove('open');
     }, true);
