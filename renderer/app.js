@@ -327,7 +327,7 @@
     if (list.length === 0) {
       el.emptyState.classList.remove('hidden');
       el.emptyState.querySelector('p').textContent = state.memos.length > 0
-        ? '没有符合条件的 MEMO'
+        ? '没有符合条件的笔记'
         : '写下第一条想法吧';
       return;
     }
@@ -388,7 +388,7 @@
     });
     card.appendChild(content);
 
-    // 引用块（关联其他 MEMO）
+    // 引用块（关联其他笔记）
     if (memo.refText) {
       const ref = document.createElement('div');
       ref.className = 'memo-ref';
