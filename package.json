@@ -8,6 +8,13 @@
     "test": "node --test test/"
   },
   "license": "MIT",
+  "build": {
+    "appId": "com.ideanote.desktop",
+    "directories": { "output": "dist" },
+    "mac": { "icon": "build/icon.icns" },
+    "win": { "icon": "build/icon.ico" },
+    "linux": { "icon": "assets/icon-win.png" }
+  },
   "devDependencies": {
     "electron": "^33.0.0"
   },

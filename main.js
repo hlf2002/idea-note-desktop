@@ -22,6 +22,11 @@ const AUTH_FILE = () => path.join(DATA_DIR(), 'auth.json');
 const CACHE_FILE = () => path.join(DATA_DIR(), 'idea-cache.json');
 const LEGACY_FILE = () => path.join(DATA_DIR(), 'flomo-local.json');
 
+// 应用图标（平台相关）：mac 用 macOS 版，Windows/Linux 用 Windows 版
+const APP_ICON = () => process.platform === 'darwin'
+  ? path.join(__dirname, 'assets', 'icon-mac.png')
+  : path.join(__dirname, 'assets', 'icon-win.png');
+
 // 旧版数据目录（应用曾名为 flomo-local）：应用更名后 userData 路径变化，
 // 首次启动时把旧登录态/缓存/待导入数据迁移到新目录，避免登录态丢失。
 // 仅复制「新目录中不存在」的文件，绝不覆盖已有数据。
@@ -56,6 +61,7 @@ function createWindow() {
     title: '灵感笔记 · Q助理',
     backgroundColor: '#faf9f8',
     show: false,
+    icon: APP_ICON(),
     // 无边框窗口：隐藏原生标题栏，保留 macOS 红黄绿交通灯按钮
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 14 },
@@ -141,6 +147,10 @@ function registerGlobalShortcut() {
 // ---- 应用生命周期 ----
 app.whenReady().then(async () => {
   migrateLegacyDataDir();
+  // macOS Dock 图标（开发/运行期即替换为产品图标）
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(APP_ICON());
+  }
   initApp({
     authFile: AUTH_FILE(),
     cacheFile: CACHE_FILE(),
