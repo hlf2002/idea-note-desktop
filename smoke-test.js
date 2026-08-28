@@ -15,7 +15,7 @@ const os = require('os');
 const fs = require('fs');
 const { initApp } = require('./app-core');
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flomo-smoke-'));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'idea-note-smoke-'));
 app.setPath('userData', tmpDir); // 独立数据目录，不污染真实数据
 
 // ---- mock QzApi（模拟 Q助理服务端） ----
@@ -104,18 +104,18 @@ app.whenReady().then(async () => {
       out.memoCount = document.getElementById('memo-count').textContent;
 
       // 登录态 API
-      const auth = await window.flomo.auth.get();
+      const auth = await window.ideaNote.auth.get();
       out.authUid = auth ? auth.uid : null;
       out.authNickname = auth ? auth.nickname : null;
 
       // 同步 CRUD 全链路
-      const created = await window.flomo.sync.create('新增 #测试');
+      const created = await window.ideaNote.sync.create('新增 #测试');
       out.createdId = created.id;
       out.createdTags = created.tags;
-      const updated = await window.flomo.sync.update(created.id, '已改 #改过');
+      const updated = await window.ideaNote.sync.update(created.id, '已改 #改过');
       out.updatedContent = updated.content;
-      await window.flomo.sync.remove(created.id);
-      const after = await window.flomo.sync.pull();
+      await window.ideaNote.sync.remove(created.id);
+      const after = await window.ideaNote.sync.pull();
       out.pullCount = after.length;
 
       // 标签筛选交互

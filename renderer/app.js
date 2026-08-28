@@ -1,6 +1,6 @@
 /**
- * app.js —— 渲染层逻辑（flomo 风格 · Q助理灵感笔记桌面客户端）
- * 依赖：window.flomo（preload）、window.Tags、window.Md
+ * app.js —— 渲染层逻辑（ideaNote 风格 · Q助理灵感笔记桌面客户端）
+ * 依赖：window.ideaNote（preload）、window.Tags、window.Md
  *
  * 视图状态机：
  *  未登录 -> 登录视图（扫码 + 轮询）
@@ -80,7 +80,7 @@
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   }
 
-  /** flomo 风格完整时间：2026-08-20 13:51:06 */
+  /** ideaNote 风格完整时间：2026-08-20 13:51:06 */
   function formatFullTime(ts) {
     const d = new Date(ts);
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
@@ -148,7 +148,7 @@
     el.qrStatus.className = 'qr-status';
     el.qrExpire.textContent = '';
     try {
-      const qr = await window.flomo.qr.create();
+      const qr = await window.ideaNote.qr.create();
       el.qrImage.src = qr.qrDataUrl;
       el.qrImage.style.display = 'block';
       el.qrLoading.classList.add('hidden');
@@ -166,7 +166,7 @@
   async function pollOnce(sceneId) {
     if (state.pollSceneId !== sceneId) return; // 已被刷新/停止
     try {
-      const res = await window.flomo.qr.status(sceneId);
+      const res = await window.ideaNote.qr.status(sceneId);
       if (state.pollSceneId !== sceneId) return;
       if (res.status === 'pending') {
         el.qrStatus.textContent = '等待扫码…';
@@ -178,7 +178,7 @@
         stopPolling();
         el.qrStatus.textContent = '登录成功！';
         el.qrStatus.className = 'qr-status success';
-        const user = await window.flomo.auth.get();
+        const user = await window.ideaNote.auth.get();
         if (user) {
           showApp(user);
           showToast('登录成功，正在同步灵感笔记…');
@@ -435,7 +435,7 @@
       const val = ta.value;
       if (!val.trim()) return;
       try {
-        const updated = await window.flomo.sync.update(memo.id, val);
+        const updated = await window.ideaNote.sync.update(memo.id, val);
         state.editingId = null;
         upsertLocal(updated);
       } catch (err) {
@@ -521,7 +521,7 @@
   function handleSyncError(err, fallback) {
     if (err && err.code === 401) {
       showToast('登录已失效，请重新登录');
-      setTimeout(() => { window.flomo.auth.logout().then(() => { showLogin(); startQr(); }); }, 800);
+      setTimeout(() => { window.ideaNote.auth.logout().then(() => { showLogin(); startQr(); }); }, 800);
     } else {
       showToast((err && err.message) || fallback);
     }
@@ -530,7 +530,7 @@
   async function loadData(showProgress) {
     // 先展示本地缓存（离线/快速启动），再拉服务端刷新
     try {
-      const cached = await window.flomo.sync.cache();
+      const cached = await window.ideaNote.sync.cache();
       if (cached && cached.length) {
         state.memos = cached;
         renderAll();
@@ -538,7 +538,7 @@
     } catch (e) { /* 缓存失败忽略 */ }
 
     try {
-      const memos = await window.flomo.sync.pull();
+      const memos = await window.ideaNote.sync.pull();
       state.memos = memos;
       renderAll();
     } catch (err) {
@@ -549,7 +549,7 @@
   // ---------- 旧数据导入 ----------
   async function checkLegacy() {
     try {
-      const has = await window.flomo.sync.hasLegacy();
+      const has = await window.ideaNote.sync.hasLegacy();
       if (has) el.legacyBar.classList.remove('hidden');
     } catch (e) { /* noop */ }
   }
@@ -565,7 +565,7 @@
 
   // ---------- 事件 ----------
   function bindEvents() {
-    // 所见即所得 Markdown 输入框（flomo 风格，保留源标记）
+    // 所见即所得 Markdown 输入框（ideaNote 风格，保留源标记）
     state.composer = window.MarkdownComposer(el.composer, {
       render: (text) => window.Md.renderWysiwyg(text),
       onCommit: async () => { await saveMemo(); }
@@ -609,7 +609,7 @@
       } else if (action === 'delete') {
         if (state.pendingDeleteId === id) {
           try {
-            await window.flomo.sync.remove(id);
+            await window.ideaNote.sync.remove(id);
             state.pendingDeleteId = null;
             closeMenus();
             removeLocal(id);
@@ -709,7 +709,7 @@
     // 登录视图
     el.qrRefresh.addEventListener('click', startQr);
     el.userLogout.addEventListener('click', async () => {
-      try { await window.flomo.auth.logout(); } catch (e) { /* noop */ }
+      try { await window.ideaNote.auth.logout(); } catch (e) { /* noop */ }
       state.memos = [];
       renderAll();
       showLogin();
@@ -748,7 +748,7 @@
       el.legacyImport.disabled = true;
       el.legacyImport.textContent = '导入中…';
       try {
-        const r = await window.flomo.sync.importLegacy();
+        const r = await window.ideaNote.sync.importLegacy();
         el.legacyBar.classList.add('hidden');
         showToast('已导入 ' + (r && r.imported || 0) + ' 条记录');
         await loadData(false);
@@ -761,10 +761,10 @@
     });
 
     // 数据目录
-    el.openDataPath.addEventListener('click', () => window.flomo.app.openDataPath());
+    el.openDataPath.addEventListener('click', () => window.ideaNote.app.openDataPath());
 
     // 全局快捷键/托盘唤起
-    window.flomo.app.onFocusInput(() => {
+    window.ideaNote.app.onFocusInput(() => {
       if (!document.hidden && state.authed) {
         state.composer.focus();
       }
@@ -838,7 +838,7 @@
     const val = state.composer.value();
     if (!val.trim()) return;
     try {
-      const memo = await window.flomo.sync.create(val);
+      const memo = await window.ideaNote.sync.create(val);
       state.composer.clear();
       upsertLocal(memo);
       state.composer.focus();
@@ -852,7 +852,7 @@
     bindEvents();
     let user = null;
     try {
-      user = await window.flomo.auth.get();
+      user = await window.ideaNote.auth.get();
     } catch (e) { /* noop */ }
 
     if (user) {

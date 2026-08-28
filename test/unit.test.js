@@ -83,8 +83,8 @@ test('md: 行内代码且内部不解析格式', () => {
 });
 
 test('md: 链接', () => {
-  const html = Md.render('见 [flomo](https://flomoapp.com)');
-  assert.ok(html.includes('<a href="https://flomoapp.com" target="_blank" rel="noreferrer">flomo</a>'));
+  const html = Md.render('见 [ideaNote](https://ideanote.com)');
+  assert.ok(html.includes('<a href="https://ideanote.com" target="_blank" rel="noreferrer">ideaNote</a>'));
 });
 
 test('md: 危险协议链接不被渲染成可点击链接', () => {
@@ -113,18 +113,20 @@ test('md: 围栏代码块', () => {
 
 test('md: 多段落', () => {
   const html = Md.render('第一段\n\n第二段');
-  const pCount = (html.match(/<p>/g) || []).length;
-  assert.strictEqual(pCount, 2);
+  // 空行渲染为段落分隔（<p><br></p>），两段文本都保留
+  assert.ok(html.includes('<p>第一段</p>'));
+  assert.ok(html.includes('<p>第二段</p>'));
 });
 
 test('md: 空输入', () => {
-  assert.strictEqual(Md.render(''), '');
-  assert.strictEqual(Md.render(null), '');
+  // 空输入渲染为单个空段落（空行的 DOM 载体）
+  assert.strictEqual(Md.render(''), '<p><br></p>');
+  assert.strictEqual(Md.render(null), '<p><br></p>');
 });
 
 // ============ store.js ============
 function tmpStore() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flomo-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'idea-note-test-'));
   return new MemoStore(path.join(dir, 'data.json'));
 }
 
@@ -182,7 +184,7 @@ test('store: 空内容拒绝', async () => {
 });
 
 test('store: 持久化后重新加载数据仍在', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flomo-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'idea-note-test-'));
   const file = path.join(dir, 'data.json');
   const s1 = new MemoStore(file);
   await s1.load();
@@ -195,7 +197,7 @@ test('store: 持久化后重新加载数据仍在', async () => {
 });
 
 test('store: 损坏文件 -> 备份 + 空数据，且原始文件保留', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flomo-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'idea-note-test-'));
   const file = path.join(dir, 'data.json');
   fs.writeFileSync(file, '{ this is not valid json !!!');
   const s = new MemoStore(file);

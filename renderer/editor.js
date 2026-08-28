@@ -1,5 +1,5 @@
 /**
- * editor.js —— flomo 风格所见即所得 Markdown 输入框（UMD）
+ * editor.js —— ideaNote 风格所见即所得 Markdown 输入框（UMD）
  *
  * 基于 contenteditable 实现：
  *  - 输入时实时按 markdown 渲染（**粗体**、#标签、`代码`、> 引用、- 列表…）

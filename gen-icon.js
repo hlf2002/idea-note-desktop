@@ -1,5 +1,5 @@
 /**
- * gen-icon.js —— 生成托盘/应用图标（红色圆点，flomo 风格）
+ * gen-icon.js —— 生成托盘/应用图标（红色圆点，ideaNote 风格）
  * 运行：node gen-icon.js  ->  输出 assets/tray.png
  */
 'use strict';
@@ -61,7 +61,7 @@ const SIZE = 24;
 const rgba = Buffer.alloc(SIZE * SIZE * 4);
 const cx = (SIZE - 1) / 2;
 const R = SIZE / 2 - 1;
-const FILL = [0xe8, 0x5a, 0x4e]; // flomo 珊瑚红
+const FILL = [0xe8, 0x5a, 0x4e]; // ideaNote 珊瑚红
 for (let y = 0; y < SIZE; y++) {
   for (let x = 0; x < SIZE; x++) {
     const d = Math.sqrt((x - cx) ** 2 + (y - cx) ** 2);

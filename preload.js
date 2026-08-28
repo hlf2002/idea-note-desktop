@@ -5,7 +5,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('flomo', {
+contextBridge.exposeInMainWorld('ideaNote', {
   // 登录态
   auth: {
     get: () => ipcRenderer.invoke('auth:get'),

@@ -9,6 +9,7 @@
 
 const { app, BrowserWindow, Tray, Menu, globalShortcut, shell, nativeImage } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { initApp } = require('./app-core');
 
 let mainWindow = null;
@@ -21,13 +22,38 @@ const AUTH_FILE = () => path.join(DATA_DIR(), 'auth.json');
 const CACHE_FILE = () => path.join(DATA_DIR(), 'idea-cache.json');
 const LEGACY_FILE = () => path.join(DATA_DIR(), 'flomo-local.json');
 
+// 旧版数据目录（应用曾名为 flomo-local）：应用更名后 userData 路径变化，
+// 首次启动时把旧登录态/缓存/待导入数据迁移到新目录，避免登录态丢失。
+// 仅复制「新目录中不存在」的文件，绝不覆盖已有数据。
+const OLD_DATA_DIR = () => path.join(app.getPath('appData'), 'flomo-local');
+
+function migrateLegacyDataDir() {
+  const nd = DATA_DIR();
+  const od = OLD_DATA_DIR();
+  if (!fs.existsSync(od)) return;
+  try {
+    if (!fs.existsSync(nd)) fs.mkdirSync(nd, { recursive: true });
+    for (const f of fs.readdirSync(od)) {
+      if (!/^(auth|idea-cache|flomo-local)\.json(\.imported-.*)?$/.test(f)) continue;
+      const src = path.join(od, f);
+      const dst = path.join(nd, f);
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.copyFileSync(src, dst);
+        console.log('[idea-note-local] 已迁移旧数据: ' + f);
+      }
+    }
+  } catch (e) {
+    console.warn('[idea-note-local] 旧数据迁移跳过: ' + e.message);
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1040,
     height: 720,
     minWidth: 760,
     minHeight: 520,
-    title: 'flomo · 浮墨笔记（本地版）',
+    title: '灵感笔记 · Q助理',
     backgroundColor: '#faf9f8',
     show: false,
     // 无边框窗口：隐藏原生标题栏，保留 macOS 红黄绿交通灯按钮
@@ -65,7 +91,7 @@ function createWindow() {
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'tray.png'));
   tray = new Tray(icon);
-  tray.setToolTip('flomo · 浮墨笔记（本地版）');
+  tray.setToolTip('灵感笔记 · Q助理');
   const menu = Menu.buildFromTemplate([
     { label: '显示 / 隐藏主窗口', click: toggleWindow },
     { type: 'separator' },
@@ -109,11 +135,12 @@ function registerGlobalShortcut() {
     }
     focusInput();
   });
-  if (!ok) console.warn('[flomo-local] 全局快捷键注册失败（可能被其它应用占用）');
+  if (!ok) console.warn('[idea-note-local] 全局快捷键注册失败（可能被其它应用占用）');
 }
 
 // ---- 应用生命周期 ----
 app.whenReady().then(async () => {
+  migrateLegacyDataDir();
   initApp({
     authFile: AUTH_FILE(),
     cacheFile: CACHE_FILE(),
