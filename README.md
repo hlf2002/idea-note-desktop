@@ -1,11 +1,11 @@
-# flomo · 灵感笔记桌面端（Q助理版）
+# 灵感笔记桌面端（Q助理版）
 
-一个用 Electron 构建的 flomo 风格桌面端，**连接 Q助理服务端**：使用 Q助理 App 扫码登录，灵感笔记自动双向同步到手机，同时保留本地缓存（离线可用）。
+一个用 Electron 构建的极简卡片式桌面端，**连接 Q助理服务端**：使用 Q助理 App 扫码登录，灵感笔记自动双向同步到手机，同时保留本地缓存（离线可用）。
 
 ## 快速开始
 
 ```bash
-cd flomo-local
+cd idea-note-desktop
 npm install     # 首次需要（已含 electron 依赖）
 npm start       # 启动应用
 ```
@@ -23,7 +23,7 @@ npm start       # 启动应用
 | 📅 打卡热力图 | 侧边栏 12 周热力图，颜色深浅反映当天记录密度 |
 | #标签 | 侧边栏标签列表点击筛选，笔记内绿色标签高亮 |
 | 🔍 搜索 | 顶栏搜索框实时过滤，`⌘K` 聚焦，命中关键词高亮 |
-| 每日回顾 | 「每日回顾」随机抽取一条历史 MEMO 漫游 |
+| 每日回顾 | 「每日回顾」随机抽取一条历史笔记漫游 |
 | 编辑/删除 | 卡片 hover 显示 `…` 菜单，编辑/删除（删除需二次确认） |
 | 🎨 无边框窗口 | 隐藏系统标题栏，保留 macOS 红黄绿交通灯，顶栏/侧栏可拖动 |
 | 全局唤起 | `Cmd/Ctrl + Shift + M` 随时唤起窗口并聚焦输入框 |
@@ -31,8 +31,8 @@ npm start       # 启动应用
 
 ## 数据存储
 
-- 登录态：`~/Library/Application Support/flomo-local/auth.json`
-- 本地缓存：`~/Library/Application Support/flomo-local/idea-cache.json`（服务端数据的离线缓存）
+- 登录态：`~/Library/Application Support/idea-note-local/auth.json`
+- 本地缓存：`~/Library/Application Support/idea-note-local/idea-cache.json`（服务端数据的离线缓存）
 - 应用内侧栏底部「数据文件 · 打开目录」可直接打开所在目录
 
 ## 常用快捷键
@@ -47,13 +47,13 @@ npm start       # 启动应用
 ## 项目结构
 
 ```
-flomo-local/
+idea-note-desktop/
 ├── main.js            # 主进程：无边框窗口、托盘、全局快捷键、生命周期
 ├── app-core.js        # 应用装配：store + IPC 注册（main 与测试复用）
 ├── preload.js         # contextBridge 安全桥
 ├── qz/                # Q助理接入：API 网关、扫码登录、灵感笔记同步、签名
 ├── renderer/
-│   ├── index.html     # 页面结构（按 flomo 界面模板复刻）
+│   ├── index.html     # 页面结构（极简卡片式界面）
 │   ├── styles.css     # 界面样式
 │   ├── app.js         # 渲染逻辑（登录/同步/列表/搜索/热力图/漫游）
 │   ├── editor.js      # 所见即所得 Markdown 输入框
