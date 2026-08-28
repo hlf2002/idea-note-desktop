@@ -361,8 +361,19 @@ html, body {
 .composer p { margin: 0 0 6px; }
 .composer p:last-child { margin-bottom: 0; }
 .composer a { color: var(--green); }
-.tag-inline { color: var(--green); cursor: pointer; }
-.tag-inline:hover { opacity: .7; }
+/* 标签 chip：长方形、浅底色、小一号字体 */
+.tag-inline {
+  display: inline-block;
+  color: var(--green); cursor: pointer;
+  background: #f3e6cf;
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: 0.85em;
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+.tag-inline:hover { opacity: .75; }
 .composer .md-li { margin: 0 0 2px; color: #6b5942; }
 .composer .md-li:first-child { margin-top: 4px; }
 .composer .md-marker { color: #c2b39a; }
