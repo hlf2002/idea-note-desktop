@@ -754,6 +754,12 @@
       e.stopPropagation();
       el.userMenu.classList.toggle('open');
     });
+    // 用户菜单（头像 + 昵称下拉）：点任意其他位置即收起
+    // mousedown 捕获阶段先于目标元素任何 stopPropagation 触发，覆盖不冒泡的点击场景
+    document.addEventListener('mousedown', (e) => {
+      if (!el.userMenu.contains(e.target)) el.userMenu.classList.remove('open');
+    }, true);
+    // click 兜底：覆盖 mousedown 被系统/拖拽区等拦截但仍产生 click 的路径
     document.addEventListener('click', (e) => {
       if (!el.userMenu.contains(e.target)) el.userMenu.classList.remove('open');
     });
