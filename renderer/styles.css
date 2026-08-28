@@ -126,7 +126,7 @@ html, body {
 .stats {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 32px;
   padding: 6px 0 14px;
 }
 .stat {
