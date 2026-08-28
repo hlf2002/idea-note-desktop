@@ -233,21 +233,22 @@ html, body {
 }
 
 /* 输入卡片 */
+/* 固定输入区（第二栏顶部，不参与滚动）：背景与主区其他部分保持一致 */
+.composer-zone {
+  flex-shrink: 0;
+  background: var(--bg-side);
+  padding: 24px 20px 16px;
+}
+.composer-inner { max-width: 720px; margin: 0 auto; }
+
+/* 输入卡片（白底卡片） */
 .composer-card {
   background: #fff;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   border: 1px solid var(--card-border);
   padding: 16px;
-  /* 滚动时吸顶，输入框不消失 */
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  transition: padding .15s ease;
 }
-/* 滚动收缩态：输入框贴合已有文字高度、工具栏保留显示 */
-.feed.scrolled .composer-card { padding: 10px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.08); }
-.feed.scrolled .composer { min-height: 1.7em; }
 .composer-toolbar { transition: opacity .15s ease, height .15s ease; }
 .composer {
   width: 100%;
@@ -257,6 +258,7 @@ html, body {
   font-family: inherit;
   min-height: 80px;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 .composer:empty::before {
   content: attr(data-placeholder);

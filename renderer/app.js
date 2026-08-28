@@ -766,14 +766,6 @@
         state.composer.focus();
       }
     });
-
-    // 第二屏滚动：输入框吸顶并收缩（不消失）
-    const feedEl = document.querySelector('.feed');
-    if (feedEl) {
-      feedEl.addEventListener('scroll', () => {
-        feedEl.classList.toggle('scrolled', feedEl.scrollTop > 30);
-      }, { passive: true });
-    }
   }
 
   async function saveMemo() {

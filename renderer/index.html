@@ -109,9 +109,9 @@
         </div>
       </header>
 
-      <div class="feed">
-        <div class="feed-inner">
-          <!-- 输入卡片 -->
+      <!-- 固定区：输入卡片及以上（不参与滚动） -->
+      <div class="composer-zone">
+        <div class="composer-inner">
           <div class="composer-card">
             <div class="composer" id="composer" contenteditable="true" spellcheck="false"
                  data-placeholder="现在的想法是…"></div>
@@ -129,7 +129,12 @@
               <button id="composer-send" class="composer-send" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
             </div>
           </div>
+        </div>
+      </div>
 
+      <!-- 滚动区：仅内容卡片参与上下滚动 -->
+      <div class="feed">
+        <div class="feed-inner">
           <div id="legacy-bar" class="legacy-bar hidden">
             <span>检测到本地旧数据，可导入到灵感笔记</span>
             <button id="legacy-import">立即导入</button>

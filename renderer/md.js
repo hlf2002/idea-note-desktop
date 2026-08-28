@@ -141,8 +141,9 @@
         continue;
       }
 
-      // 空行分隔
+      // 空行分隔：保留为空段落（编辑器内回车换行的载体，正文中体现为间距）
       if (line.trim() === '') {
+        out.push('<p><br></p>');
         i++;
         continue;
       }
@@ -272,8 +273,12 @@
         out.push('<blockquote>' + renderWysiwygInline(q.join('\n')) + '</blockquote>');
         continue;
       }
-      // 空行
-      if (line.trim() === '') { i++; continue; }
+      // 空行：保留为空段落（回车换行的 DOM 载体，保证后续输入进入新行）
+      if (line.trim() === '') {
+        out.push('<p><br></p>');
+        i++;
+        continue;
+      }
       // 列表行（保留 - / 1. 前缀，用 div 保持 textContent）
       var li = line.match(/^(\s*(?:[-*+]\s+|\d+[.)]\s+))(.*)$/);
       if (li) {

@@ -32,6 +32,10 @@
       function walk(node) {
         if (node.nodeType === 3) { out += node.nodeValue; return; }
         if (node.nodeType !== 1) return;
+        if (node.nodeName === 'BR') {   // <br> 也视为一次换行
+          if (out && out.charAt(out.length - 1) !== '\n') out += '\n';
+          return;
+        }
         var isBlock = BLOCK_RE.test(node.nodeName);
         if (isBlock && out && out.charAt(out.length - 1) !== '\n') out += '\n';
         var children = node.childNodes;
@@ -60,6 +64,10 @@
         }
         if (node.nodeType === 3) { out += node.nodeValue; return; }
         if (node.nodeType !== 1) return;
+        if (node.nodeName === 'BR') {
+          if (out && out.charAt(out.length - 1) !== '\n') out += '\n';
+          return;
+        }
         var isBlock = BLOCK_RE.test(node.nodeName);
         if (isBlock && out && out.charAt(out.length - 1) !== '\n') out += '\n';
         var children = node.childNodes;
@@ -98,6 +106,22 @@
           return;
         }
         if (node.nodeType !== 1) return;
+        if (node.nodeName === 'BR') {
+          if (remaining <= 0 && !result) {
+            // 偏移已耗尽：停在 <br> 之后（空段内）
+            var r = document.createRange();
+            r.setStart(node, 0);
+            r.collapse(true);
+            result = r;
+            return;
+          }
+          if (lastChar !== null && lastChar !== '\n') {
+            remaining -= 1;
+            if (remaining < 0) remaining = 0;
+            lastChar = '\n';
+          }
+          return;
+        }
         var isBlock = BLOCK_RE.test(node.nodeName);
         if (isBlock && lastChar !== null && lastChar !== '\n') {
           remaining -= 1; // 块边界虚拟 \n
@@ -145,9 +169,13 @@
           if (opts.onCommit) opts.onCommit(cleanText(extract(el)));
         } else {
           // 单独 Enter：换行（不发布，避免误触）
+          // 直接改源文本插入 \n 再重渲染，保证换行一定生效（不依赖 execCommand 生成 <br>）
           e.preventDefault();
-          document.execCommand('insertText', false, '\n');
-          reflow();
+          var off = caretOffset();
+          var txt = extract(el);
+          var newText = txt.slice(0, off) + '\n' + txt.slice(off);
+          el.innerHTML = render(newText);
+          setCaret(off + 1);
         }
       }
     });
