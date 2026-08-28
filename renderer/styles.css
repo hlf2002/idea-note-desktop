@@ -458,53 +458,22 @@ html, body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* 编辑态 */
-.memo-edit {
-  width: 100%; border: 1px solid #e5e7eb; border-radius: 10px;
-  outline: none; resize: vertical; min-height: 90px;
-  font-family: inherit; font-size: 14px; line-height: 1.6;
-  padding: 10px 12px; background: #fff;
+/* 编辑态：完全复用顶部输入框（composer-card / composer / composer-toolbar）*/
+.memo-card.editing { padding: 12px; }
+.memo-card .composer-inner { max-width: none; }
+.memo-edit-card .composer { min-height: 96px; }
+/* 工具栏右侧：取消按钮 + 发送按钮（取消在发送旁）*/
+.toolbar-right { display: flex; align-items: center; gap: 8px; }
+.composer-cancel {
+  border: none; cursor: pointer;
+  background: transparent; color: #9ca3af;
+  border-radius: 6px; padding: 6px 12px;
+  font-size: 13.5px;
+  transition: background .15s, color .15s;
 }
-.memo-edit:focus { border-color: var(--green); }
-/* 编辑态：contenteditable 富文本，与顶部输入框一致的 markdown 渲染 */
-.memo-edit-richtext {
-  resize: none; overflow-y: auto;
-  font-size: 15px; line-height: 1.7; color: #374151;
-  min-height: 96px; white-space: pre-wrap; word-break: break-word;
-}
-.memo-edit-richtext:empty::before {
-  content: attr(data-placeholder); color: #9ca3af; pointer-events: none;
-}
-.memo-edit-richtext p { margin: 0 0 6px; }
-.memo-edit-richtext p:last-child { margin-bottom: 0; }
-.memo-edit-richtext a { color: var(--green); }
-.memo-edit-richtext .md-li { margin: 0 0 2px; color: #374151; }
-.memo-edit-richtext .md-li:first-child { margin-top: 4px; }
-.memo-edit-richtext .md-marker { color: #c6c2bc; }
-.memo-edit-richtext strong { font-weight: 600; }
-.memo-edit-richtext code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.85em; background: #f0eeea; border-radius: 4px; padding: 1px 4px;
-}
-.memo-edit-richtext blockquote {
-  margin: 4px 0; padding-left: 10px; border-left: 3px solid #d9d5cf; color: #9ca3af;
-}
-.memo-edit-richtext pre {
-  background: #f0eeea; border-radius: 6px; padding: 8px 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.9em; overflow-x: auto;
-}
-.memo-edit-richtext pre code { background: transparent; padding: 0; }
-/* 编辑态工具栏：置于编辑器上方，顶部输入框同款 */
-.memo-edit-toolbar { margin-top: 0; padding-top: 0; margin-bottom: 8px; border-top: none; }
-.edit-actions { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
-.edit-actions button {
-  border: none; border-radius: 8px; padding: 5px 14px; font-size: 13px; cursor: pointer;
-}
-.edit-save { background: var(--green); color: #fff; }
-.edit-save:hover { background: var(--green-hover); }
-.edit-cancel { background: #f3f4f6; color: #374151; }
-.edit-cancel:hover { background: #e5e7eb; }
+.composer-cancel:hover { background: #f3f4f6; color: #374151; }
+.composer-card:focus-within .composer-cancel { color: #6b7280; }
+.composer-card:focus-within .composer-cancel:hover { color: #374151; background: #f3f4f6; }
 
 /* ===== 空状态 ===== */
 .empty-state { text-align: center; padding: 80px 0; color: var(--muted); font-size: 15px; }

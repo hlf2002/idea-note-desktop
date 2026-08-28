@@ -345,6 +345,7 @@
 
     // dataset.id 为字符串，memo.id 为数字，统一按字符串比较
     if (state.editingId === String(memo.id)) {
+      card.classList.add('editing');
       card.appendChild(buildEditor(memo));
       return card;
     }
@@ -414,40 +415,46 @@
     const wrap = document.createElement('div');
     wrap.style.width = '100%';
 
-    // 所见即所得编辑器：与顶部输入框同一套 MarkdownComposer（实时 markdown 渲染）
+    // 完全复用顶部输入框结构：composer-inner > composer-card > composer + composer-toolbar
+    const inner = document.createElement('div');
+    inner.className = 'composer-inner';
+    inner.style.width = '100%';
+    inner.style.maxWidth = 'none';
+
+    const card = document.createElement('div');
+    card.className = 'composer-card memo-edit-card';
+
     const editEl = document.createElement('div');
-    editEl.className = 'memo-edit memo-edit-richtext';
+    editEl.className = 'composer';
     editEl.contentEditable = 'true';
     editEl.spellcheck = false;
     editEl.dataset.placeholder = '编辑内容…';
 
-    // 工具栏（与顶部输入框一致：#、Aa、无序/有序列表）
+    // 工具栏与顶部完全一致；右侧在发送按钮旁新增「取消」
     const tb = document.createElement('div');
-    tb.className = 'composer-toolbar memo-edit-toolbar';
+    tb.className = 'composer-toolbar';
     tb.innerHTML =
       '<div class="toolbar-left">' +
         '<button type="button" class="tool-btn" data-edit-tool="tag" title="标签"><i class="fa-solid fa-hashtag"></i></button>' +
+        '<button type="button" class="tool-btn" data-edit-tool="image" title="图片"><i class="fa-regular fa-image"></i></button>' +
         '<div class="tool-divider"></div>' +
         '<button type="button" class="tool-btn font-btn" data-edit-tool="font" title="字体">Aa</button>' +
         '<button type="button" class="tool-btn" data-edit-tool="ul" title="无序列表"><i class="fa-solid fa-list"></i></button>' +
         '<button type="button" class="tool-btn" data-edit-tool="ol" title="有序列表"><i class="fa-solid fa-list-ol"></i></button>' +
+        '<div class="tool-divider"></div>' +
+        '<button type="button" class="tool-btn" data-edit-tool="at" title="@"><i class="fa-solid fa-at"></i></button>' +
+      '</div>' +
+      '<div class="toolbar-right">' +
+        '<button type="button" class="composer-cancel" data-edit-tool="cancel" title="取消">取消</button>' +
+        '<button type="button" class="composer-send" data-edit-tool="save" title="保存"><i class="fa-solid fa-paper-plane"></i></button>' +
       '</div>';
 
-    const act = document.createElement('div');
-    act.className = 'edit-actions';
-    const save = document.createElement('button');
-    save.className = 'edit-save';
-    save.textContent = '保存';
-    const cancel = document.createElement('button');
-    cancel.className = 'edit-cancel';
-    cancel.textContent = '取消';
-    act.appendChild(save); act.appendChild(cancel);
+    card.appendChild(editEl);
+    card.appendChild(tb);
+    inner.appendChild(card);
+    wrap.appendChild(inner);
 
-    wrap.appendChild(tb);
-    wrap.appendChild(editEl);
-    wrap.appendChild(act);
-
-    // 初始化 composer（⌘/⇧+Enter 保存，与顶部一致）
+    // 初始化 composer（与顶部同一套：所见即所得、⌘/⇧+Enter 提交）
     const composer = window.MarkdownComposer(editEl, {
       render: (text) => window.Md.renderWysiwyg(text),
       onCommit: (text) => { saveEdit(text); }
@@ -464,22 +471,24 @@
         handleSyncError(err, '保存失败');
       }
     }
-
-    save.addEventListener('click', () => saveEdit(composer.value()));
-    cancel.addEventListener('click', () => {
+    function cancelEdit() {
       state.editingId = null;
       renderList();
-    });
-    // Escape 取消编辑（composer 只处理 Enter，这里兜底）
-    editEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); cancel.click(); }
-    });
+    }
 
-    // 工具栏插入 markdown 语法
+    // 工具栏：行为与顶部输入框完全一致
     tb.querySelector('[data-edit-tool="tag"]').addEventListener('click', () => composer.insertText(' #'));
+    tb.querySelector('[data-edit-tool="image"]').addEventListener('click', () => showToast('图片上传 · 敬请期待'));
+    tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
     tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
     tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
-    tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
+    tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => showToast('提及 · 敬请期待'));
+    tb.querySelector('[data-edit-tool="save"]').addEventListener('click', () => saveEdit(composer.value()));
+    tb.querySelector('[data-edit-tool="cancel"]').addEventListener('click', cancelEdit);
+    // Esc 取消（composer 只处理 Enter，这里兜底）
+    editEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+    });
 
     return wrap;
   }
