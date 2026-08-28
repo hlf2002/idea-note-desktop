@@ -59,6 +59,14 @@
       return '<a href="' + escapeHtml(href) + '" target="_blank" rel="noreferrer">' + label + '</a>';
     });
 
+    // 2.5) 保护链接标签（避免 href 中的 # 被误判为标签）
+    var linkKeys = [];
+    escaped = escaped.replace(/<a [^>]*>[^<]*<\/a>/g, function (a) {
+      var key = PLACEHOLDER_PREFIX + 'L' + linkKeys.length + '\u0000';
+      linkKeys.push(a);
+      return key;
+    });
+
     // 3) **加粗**（先于斜体，避免 ** 被拆散）
     escaped = escaped.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
 
@@ -68,21 +76,28 @@
     // 5) ~~删除线~~
     escaped = escaped.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
 
-    // 6) 恢复行内代码
+    // 6) 标签高亮：#标签 变绿（宽松识别——# 后跟非空白字符即识别，位置不限；
+    //    排除 HTML 特殊字符与常见标点，避免误伤链接/代码/普通文本符号）
+    if (opts.highlightTags) {
+      escaped = escaped.replace(
+        /#([^\s<>&"'，。、；：！？·]+)/g,
+        function (_, tag) {
+          return '<span class="tag-inline">#' + tag + '</span>';
+        }
+      );
+    }
+
+    // 7) 恢复链接标签
+    escaped = escaped.replace(
+      new RegExp(PLACEHOLDER_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + 'L(\\d+)\\u0000', 'g'),
+      function (_, idx) { return linkKeys[Number(idx)]; }
+    );
+
+    // 8) 恢复行内代码（放在最后，避免代码内容中的 # 被误判为标签）
     escaped = escaped.replace(
       new RegExp(PLACEHOLDER_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)\\u0000', 'g'),
       function (_, idx) { return placeholders[Number(idx)]; }
     );
-
-    // 7) 标签高亮（仅输入框所见即所得用）：#标签 变绿（要求前面是行首/空白/引用符号）
-    if (opts.highlightTags) {
-      escaped = escaped.replace(
-        /(^|[\s>（(])#([\u4e00-\u9fa5A-Za-z0-9_\-]+)/g,
-        function (_, pre, tag) {
-          return pre + '<span class="tag-inline">#' + tag + '</span>';
-        }
-      );
-    }
 
     return escaped;
   }

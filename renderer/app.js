@@ -373,42 +373,16 @@
     head.appendChild(ellipsis);
     card.appendChild(head);
 
-    // 复杂笔记：蓝色标签 chip（含话题的额外标签，如"懒人报销"）
-    if (memo.chipTag) {
-      const chipRow = document.createElement('div');
-      chipRow.className = 'memo-chip-row';
-      const chip = document.createElement('span');
-      chip.className = 'memo-chip';
-      chip.textContent = '#' + memo.chipTag;
-      chipRow.appendChild(chip);
-      card.appendChild(chipRow);
-    }
-
-    // 正文（移除标签 token，标签单独显示，flomo 风格）
+    // 正文：标签保留在内容原位置（#标签 原位渲染为绿色，不单独放置）
     const content = document.createElement('div');
     content.className = 'memo-content';
-    let text = memo.content || '';
-    if (memo.tags && memo.tags.length) {
-      memo.tags.forEach((t) => {
-        text = text.replace(new RegExp('#' + escapeRegExp(t), 'g'), '');
-      });
-    }
-    content.innerHTML = window.Md.render(text);
+    const text = memo.content || '';
+    content.innerHTML = window.Md.render(text, { highlightTags: true });
+    // 给 inline 标签补 dataset，支持点击筛选
+    content.querySelectorAll('.tag-inline').forEach((s) => {
+      s.dataset.tag = s.textContent.replace(/^#/, '');
+    });
     card.appendChild(content);
-
-    // 标签（绿色 #标签）
-    if (memo.tags && memo.tags.length) {
-      const tags = document.createElement('div');
-      tags.className = 'memo-tags';
-      memo.tags.forEach((t) => {
-        const tag = document.createElement('span');
-        tag.className = 'memo-tag';
-        tag.dataset.tag = t;
-        tag.textContent = '#' + t;
-        tags.appendChild(tag);
-      });
-      card.appendChild(tags);
-    }
 
     // 引用块（关联其他 MEMO）
     if (memo.refText) {
@@ -601,7 +575,7 @@
     el.composerSend.addEventListener('click', async () => { await saveMemo(); });
 
     el.memoList.addEventListener('click', async (e) => {
-      const tagBtn = e.target.closest('.memo-tag');
+      const tagBtn = e.target.closest('.tag-inline, .memo-tag');
       if (tagBtn) {
         state.filter = 'tag';
         state.tag = tagBtn.dataset.tag;
@@ -792,6 +766,14 @@
         state.composer.focus();
       }
     });
+
+    // 第二屏滚动：输入框吸顶并收缩（不消失）
+    const feedEl = document.querySelector('.feed');
+    if (feedEl) {
+      feedEl.addEventListener('scroll', () => {
+        feedEl.classList.toggle('scrolled', feedEl.scrollTop > 30);
+      }, { passive: true });
+    }
   }
 
   async function saveMemo() {

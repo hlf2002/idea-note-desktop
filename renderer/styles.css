@@ -50,7 +50,6 @@ html, body {
   width: 288px;
   flex-shrink: 0;
   background: var(--bg-side);
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 0 16px 12px;
@@ -183,7 +182,7 @@ html, body {
 .main {
   flex: 1; min-width: 0;
   display: flex; flex-direction: column;
-  background: var(--bg-main);
+  background: var(--bg-side);
   overflow: hidden;
 }
 
@@ -193,7 +192,7 @@ html, body {
   flex-shrink: 0;
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 24px;
-  background: var(--bg-main);
+  background: var(--bg-side);
   -webkit-app-region: drag;   /* 顶栏可拖动窗口 */
 }
 .main-header .search-box,
@@ -240,7 +239,18 @@ html, body {
   box-shadow: var(--shadow);
   border: 1px solid var(--card-border);
   padding: 16px;
+  /* 滚动时吸顶，输入框不消失 */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  transition: padding .15s ease;
 }
+/* 滚动收缩态：输入框变矮、工具栏收起 */
+.feed.scrolled .composer-card { padding: 10px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.08); }
+.feed.scrolled .composer-card .composer-toolbar {
+  opacity: 0; height: 0; margin: 0; padding-top: 0; border: none; overflow: hidden;
+}
+.composer-toolbar { transition: opacity .15s ease, height .15s ease; }
 .composer {
   width: 100%;
   border: none; outline: none;
@@ -259,7 +269,8 @@ html, body {
 .composer p { margin: 0 0 6px; }
 .composer p:last-child { margin-bottom: 0; }
 .composer a { color: var(--green); }
-.composer .tag-inline { color: var(--green); }
+.tag-inline { color: var(--green); cursor: pointer; }
+.tag-inline:hover { opacity: .7; }
 .composer .md-li { margin: 0 0 2px; color: #374151; }
 .composer .md-li:first-child { margin-top: 4px; }
 .composer .md-marker { color: #c6c2bc; }
