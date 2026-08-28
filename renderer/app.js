@@ -67,7 +67,6 @@
     emptyState: $('#empty-state'),
     legacyBar: $('#legacy-bar'),
     legacyImport: $('#legacy-import'),
-    fab: $('#fab'),
     roamMask: $('#roam-mask'),
     roamDate: $('#roam-date'),
     roamContent: $('#roam-content'),
@@ -728,11 +727,6 @@
         el.searchInput.focus();
         el.searchInput.select();
       }
-    });
-
-    // 右下角新建按钮
-    el.fab.addEventListener('click', () => {
-      state.composer.focus();
     });
 
     // 漫游遮罩

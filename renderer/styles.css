@@ -513,20 +513,6 @@ html, body {
 .empty-state { text-align: center; padding: 80px 0; color: var(--muted); font-size: 15px; }
 
 /* ===== 右下角新建按钮（信封） ===== */
-.fab {
-  position: fixed; right: 32px; bottom: 32px;
-  width: 48px; height: 48px; border-radius: 50%;
-  border: none; cursor: pointer;
-  background: var(--green);
-  color: #fff; font-size: 20px;
-  box-shadow: 0 4px 14px rgba(182,119,76,0.40);
-  transition: transform .15s, box-shadow .15s, background .15s;
-  z-index: 50;
-  display: flex; align-items: center; justify-content: center;
-}
-.fab:hover { transform: scale(1.05); background: var(--green-hover); box-shadow: 0 6px 20px rgba(182,119,76,0.50); }
-.fab:active { transform: scale(.96); }
-
 /* ===== 随机漫游 ===== */
 .roam-mask {
   position: fixed; inset: 0; z-index: 100;
