@@ -184,6 +184,7 @@ html, body {
   display: flex; flex-direction: column;
   background: var(--bg-side);
   overflow: hidden;
+  position: relative;   /* 自绘滚动条的定位上下文 */
 }
 
 /* 顶栏 */
@@ -224,9 +225,28 @@ html, body {
 .feed {
   flex: 1; overflow-y: auto;
   padding: 24px 20px 96px;
+  position: relative;
+  /* 原生滚动条隐藏（不占布局宽度，卡片宽度稳定）；滚动仍可用 */
   scrollbar-width: none;
 }
 .feed::-webkit-scrollbar { display: none; }
+/* 自绘 overlay 滚动条：位于滚动容器外，由 JS 定位到内容区右侧，不随内容滚动 */
+.feed-scrollbar {
+  position: absolute;
+  right: 3px;
+  width: 6px;
+  opacity: 0;
+  transition: opacity .18s ease;
+  z-index: 20;
+}
+.feed.scroll-hover ~ .feed-scrollbar,
+.feed.scroll-hover + .feed-scrollbar { opacity: 1; }
+.feed-scrollbar-thumb {
+  position: absolute; left: 0; right: 0;
+  background: #d1d5db;
+  border-radius: 3px;
+  cursor: pointer;
+}
 .feed-inner {
   max-width: 720px; margin: 0 auto;
   display: flex; flex-direction: column; gap: 16px;

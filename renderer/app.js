@@ -558,6 +558,9 @@
   function renderAll() {
     renderSidebar();
     renderList();
+    // 内容渲染完成后刷新滚动条定位与尺寸
+    positionFeedScrollbar();
+    updateFeedScrollbar();
   }
 
   // ---------- 事件 ----------
@@ -765,6 +768,69 @@
       if (!document.hidden && state.authed) {
         state.composer.focus();
       }
+    });
+
+    // 自绘 overlay 滚动条：hover 显示、随滚动同步位置，不占内容宽度
+    initFeedScrollbar();
+  }
+
+  // ---------- 自绘 overlay 滚动条（模块级，内容渲染后可随时刷新）----------
+  var sbFeed = null, sbBar = null, sbThumb = null;
+  function positionFeedScrollbar() {
+    if (!sbFeed || !sbBar) return;
+    const main = document.querySelector('.main');
+    if (!main) return;
+    const feedRect = sbFeed.getBoundingClientRect();
+    const mainRect = main.getBoundingClientRect();
+    sbBar.style.top = (feedRect.top - mainRect.top + 24) + 'px';
+    sbBar.style.height = (feedRect.height - 48) + 'px';
+  }
+  function updateFeedScrollbar() {
+    if (!sbFeed || !sbBar || !sbThumb) return;
+    const sh = sbFeed.scrollHeight, ch = sbFeed.clientHeight;
+    if (sh <= ch + 1) { sbThumb.style.height = '0'; return; }
+    const trackH = sbBar.clientHeight;
+    const thH = Math.max(24, (ch / sh) * trackH);
+    sbThumb.style.height = thH + 'px';
+    const maxTop = Math.max(0, trackH - thH);
+    const top = (sbFeed.scrollTop / (sh - ch)) * maxTop;
+    sbThumb.style.top = top + 'px';
+  }
+  function initFeedScrollbar() {
+    sbFeed = document.querySelector('.feed');
+    sbBar = document.getElementById('feed-scrollbar');
+    sbThumb = sbBar && sbBar.querySelector('.feed-scrollbar-thumb');
+    if (!sbFeed || !sbBar || !sbThumb) return;
+    sbFeed.addEventListener('mouseenter', function () { sbFeed.classList.add('scroll-hover'); updateFeedScrollbar(); });
+    sbFeed.addEventListener('mouseleave', function () { sbFeed.classList.remove('scroll-hover'); });
+    sbFeed.addEventListener('scroll', updateFeedScrollbar, { passive: true });
+    window.addEventListener('resize', function () { positionFeedScrollbar(); updateFeedScrollbar(); });
+    positionFeedScrollbar();
+    updateFeedScrollbar();
+
+    // 拖拽滚动条滚动内容
+    var dragging = false, dragStartY = 0, dragStartScroll = 0;
+    sbThumb.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      dragging = true;
+      dragStartY = e.clientY;
+      dragStartScroll = sbFeed.scrollTop;
+      document.body.style.userSelect = 'none';
+      sbFeed.classList.add('scroll-hover');
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      const sh = sbFeed.scrollHeight, ch = sbFeed.clientHeight;
+      if (sh <= ch + 1) return;
+      const trackH = sbBar.clientHeight;
+      const thH = parseFloat(sbThumb.style.height) || 24;
+      const maxTop = Math.max(0, trackH - thH);
+      if (maxTop <= 0) return;
+      const dY = e.clientY - dragStartY;
+      sbFeed.scrollTop = dragStartScroll + (dY / maxTop) * (sh - ch);
+    });
+    window.addEventListener('mouseup', function () {
+      if (dragging) { dragging = false; document.body.style.userSelect = ''; }
     });
   }
 

@@ -133,7 +133,7 @@
       </div>
 
       <!-- 滚动区：仅内容卡片参与上下滚动 -->
-      <div class="feed">
+      <div class="feed" id="feed">
         <div class="feed-inner">
           <div id="legacy-bar" class="legacy-bar hidden">
             <span>检测到本地旧数据，可导入到灵感笔记</span>
@@ -147,6 +147,9 @@
           </div>
         </div>
       </div>
+
+      <!-- 自绘滚动条：放在滚动容器外（main 直接子级），不随内容滚动 -->
+      <div class="feed-scrollbar" id="feed-scrollbar"><div class="feed-scrollbar-thumb"></div></div>
 
       <button id="fab" class="fab" title="记录新想法"><i class="fa-regular fa-envelope"></i></button>
     </main>
