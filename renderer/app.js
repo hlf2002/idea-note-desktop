@@ -18,6 +18,7 @@
     memos: [],
     filter: 'all',
     tag: null,
+    day: null,           // 按天筛选：'YYYY-MM-DD'，点击热力图格子设置
     search: '',
     editingId: null,
     pendingDeleteId: null,
@@ -47,6 +48,7 @@
     statDays: $('#stat-days'),
     hmMonths: $('#hm-months'),
     heatmapGrid: $('#heatmap-grid'),
+    heatmapTip: $('#heatmap-tip'),
     navAll: $('#nav-all'),
     navWechat: $('#nav-wechat'),
     navDaily: $('#nav-daily'),
@@ -212,6 +214,9 @@
     if (state.filter === 'tag' && state.tag) {
       list = list.filter((m) => (m.tags || []).includes(state.tag));
     }
+    if (state.day) {
+      list = list.filter((m) => dayKey(m.createdAt) === state.day);
+    }
     if (state.search.trim()) {
       const q = state.search.trim().toLowerCase();
       list = list.filter((m) => (m.content || '').toLowerCase().includes(q));
@@ -232,7 +237,7 @@
     renderHeatmap();
 
     // 导航高亮
-    el.navAll.classList.toggle('active', state.filter === 'all' && !state.tag);
+    el.navAll.classList.toggle('active', state.filter === 'all' && !state.tag && !state.day);
 
     // 标签列表
     el.tagList.innerHTML = '';
@@ -311,9 +316,13 @@
           // 1~4 条逐级加深，≥5 条用 lv5（primary 色）
           const lv = Math.min(5, cell.count);
           cls += ' lv' + lv;
+          cls += ' has-data';
+          cellEl.dataset.key = cell.key;
+          cellEl.dataset.count = String(cell.count);
+          if (state.day === cell.key) cls += ' active';
+          cellEl.title = cell.key + '：' + cell.count + ' 条';
         }
         cellEl.className = cls;
-        cellEl.title = cell.key + '：' + cell.count + ' 条';
         colWrap.appendChild(cellEl);
       });
       el.heatmapGrid.appendChild(colWrap);
@@ -695,12 +704,44 @@
 
     // 导航
     el.navAll.addEventListener('click', () => {
-      state.filter = 'all'; state.tag = null; state.search = '';
+      state.filter = 'all'; state.tag = null; state.day = null; state.search = '';
       el.searchInput.value = '';
       renderAll();
     });
     el.navWechat.addEventListener('click', () => showToast('微信输入 · 敬请期待'));
     el.navDaily.addEventListener('click', openRoam);
+
+    // 热力图：hover 提示（日期 + 条数）+ 点击按天筛选
+    el.heatmapGrid.addEventListener('mouseover', (e) => {
+      const cell = e.target.closest('.heatmap-cell.has-data');
+      if (!cell) return;
+      const tip = el.heatmapTip;
+      tip.innerHTML = '<b>' + cell.dataset.key + '</b><br>' + cell.dataset.count + ' 条笔记';
+      tip.classList.remove('hidden');
+      const r = cell.getBoundingClientRect();
+      const pad = 10;
+      let left = r.right + pad;
+      if (left + tip.offsetWidth > window.innerWidth - 4) {
+        left = r.left - pad - tip.offsetWidth; // 靠右时移到格子左侧
+      }
+      let top = r.top + (r.height - tip.offsetHeight) / 2;
+      top = Math.max(4, Math.min(top, window.innerHeight - tip.offsetHeight - 4));
+      tip.style.left = left + 'px';
+      tip.style.top = top + 'px';
+    });
+    el.heatmapGrid.addEventListener('mouseout', (e) => {
+      if (e.target.closest('.heatmap-cell.has-data')) el.heatmapTip.classList.add('hidden');
+    });
+    el.heatmapGrid.addEventListener('click', (e) => {
+      const cell = e.target.closest('.heatmap-cell.has-data');
+      if (!cell) return;
+      const key = cell.dataset.key;
+      // 再次点击同一天：取消筛选
+      state.day = (state.day === key) ? null : key;
+      const feed = document.querySelector('.feed');
+      if (feed) feed.scrollTop = 0;
+      renderAll();
+    });
 
     // 搜索（顶部，⌘K 聚焦）
     let debounceTimer = null;

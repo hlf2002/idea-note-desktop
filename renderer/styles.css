@@ -152,6 +152,28 @@ html, body {
 .heatmap-cell.lv3 { background: #cfa46c; }
 .heatmap-cell.lv4 { background: #c28e58; }
 .heatmap-cell.lv5 { background: var(--green); }
+/* 非空格子：hover 放大 + 选中态描边 */
+.heatmap-cell.has-data { cursor: pointer; }
+.heatmap-cell.has-data:hover {
+  transform: scale(1.3);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.28);
+}
+.heatmap-cell.active {
+  outline: 2px solid var(--green-hover);
+  outline-offset: 1px;
+}
+/* 热力图 hover 提示卡片（fixed 定位，避免被侧边栏裁剪） */
+.heatmap-tip {
+  position: fixed; z-index: 200;
+  background: #5d4430; color: #fff;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px; line-height: 1.6;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+  pointer-events: none;
+}
+.heatmap-tip b { font-size: 13px; }
 
 /* 导航 */
 .nav { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 10px; }
