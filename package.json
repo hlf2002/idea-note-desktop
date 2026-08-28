@@ -1,6 +1,6 @@
 {
   "name": "idea-note-local",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "本地版 灵感笔记 —— 极简卡片式记录桌面应用",
   "main": "main.js",
   "scripts": {
@@ -14,7 +14,9 @@
   "build": {
     "appId": "com.ideanote.desktop",
     "productName": "灵感笔记",
-    "directories": { "output": "dist" },
+    "directories": {
+      "output": "dist"
+    },
     "files": [
       "main.js",
       "app-core.js",
@@ -26,8 +28,20 @@
     "mac": {
       "icon": "build/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "category": "public.app-category.productivity",
       "identity": null
@@ -35,8 +49,18 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "zip", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -46,7 +70,9 @@
       "shortcutName": "灵感笔记",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
-    "linux": { "icon": "assets/icon-win.png" }
+    "linux": {
+      "icon": "assets/icon-win.png"
+    }
   },
   "devDependencies": {
     "electron": "^33.0.0",

@@ -176,6 +176,12 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
 
+// 任何退出路径（Cmd+Q、Dock 右键退出、托盘退出、系统关机）都先触发 before-quit，
+// 置 isQuitting 后，close 事件放行窗口关闭，避免退出被"隐藏到托盘"逻辑拦截导致无法结束进程
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
 // macOS 下点击窗口关闭即隐藏，避免应用"无窗口但 dock 存在"的困惑
 app.on('window-all-closed', () => {
   // 保留在托盘，不退出（macOS 规范之外的桌面端也保持一致）
