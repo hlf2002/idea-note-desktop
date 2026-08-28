@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://client.qzhuli.com https://test.client.qzhuli.com;" />
+  <title>flomo · Q助理灵感笔记</title>
+  <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 登录视图 -->
+  <div id="login-view" class="login-view hidden">
+    <div class="login-card">
+      <div class="login-brand">
+        <span class="brand-dot"></span>
+        <span class="brand-name">flomo</span>
+      </div>
+      <h1 class="login-title">使用 Q助理 App 扫码登录</h1>
+      <p class="login-sub">连接你的灵感笔记，记录自动同步到手机</p>
+      <div class="qr-box">
+        <img id="qr-image" class="qr-image" alt="登录二维码" />
+        <div id="qr-loading" class="qr-loading">正在生成二维码…</div>
+      </div>
+      <div id="qr-status" class="qr-status">等待扫码…</div>
+      <div id="qr-expire" class="qr-expire"></div>
+      <button id="qr-refresh" class="qr-refresh">刷新二维码</button>
+      <ol class="login-steps">
+        <li>打开 <b>Q助理</b> App</li>
+        <li>点击右上角「扫一扫」</li>
+        <li>扫描二维码并确认登录</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- 主应用视图（flomo 桌面端 · 按模板重做） -->
+  <div id="app-view" class="hidden">
+    <aside class="sidebar">
+      <!-- 无边框窗口拖拽区（macOS 红黄绿交通灯所在） -->
+      <div class="titlebar"></div>
+      <!-- 用户区 -->
+      <div class="user-bar">
+        <div class="avatar-wrap">
+          <img id="user-avatar" class="user-avatar" alt="头像" />
+        </div>
+        <div class="user-info">
+          <div class="user-name-row">
+            <span id="user-name" class="user-name">…</span>
+            <span class="pro-badge">PRO</span>
+          </div>
+        </div>
+        <button id="sync-refresh" class="icon-btn" title="刷新同步"><i class="fa-solid fa-arrows-rotate"></i></button>
+      </div>
+
+      <!-- 统计 -->
+      <div class="stats">
+        <div class="stat"><b id="stat-memos">0</b><span>笔记</span></div>
+        <div class="stat"><b id="stat-tags">0</b><span>标签</span></div>
+        <div class="stat"><b id="stat-days">0</b><span>天</span></div>
+      </div>
+
+      <!-- 打卡热力图 -->
+      <div class="heatmap">
+        <div id="hm-months" class="heatmap-months"></div>
+        <div id="heatmap-grid" class="heatmap-grid"></div>
+      </div>
+
+      <!-- 导航 -->
+      <nav class="nav">
+        <button id="nav-all" class="nav-item active">
+          <i class="fa-solid fa-list-ul nav-ico"></i><span>全部笔记</span>
+        </button>
+        <button id="nav-wechat" class="nav-item">
+          <i class="fa-brands fa-weixin nav-ico"></i><span>微信输入</span>
+        </button>
+        <button id="nav-daily" class="nav-item">
+          <i class="fa-solid fa-rotate-left nav-ico"></i><span>每日回顾</span>
+        </button>
+      </nav>
+
+      <!-- 全部标签 -->
+      <div class="tag-section">
+        <div class="tag-title">全部标签</div>
+        <ul id="tag-list" class="tag-list"></ul>
+        <div class="tag-bottom">
+          <button id="btn-trash" class="tag-bottom-link"><i class="fa-regular fa-trash-can"></i><span>回收站</span></button>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button id="open-data-path" class="footer-link" title="打开数据目录">数据文件 · 打开目录</button>
+        <button id="user-logout" class="footer-link logout-link" title="退出登录">退出登录</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="main-header">
+        <div class="app-title-row">
+          <h1 class="app-title">flomo</h1>
+          <i class="fa-solid fa-chevron-down title-chevron"></i>
+        </div>
+        <div class="header-right">
+          <div class="search-box">
+            <i class="fa-solid fa-magnifying-glass search-ico"></i>
+            <input id="search-input" type="text" placeholder="搜索 MEMO" spellcheck="false" />
+            <span class="search-kbd">⌘K</span>
+          </div>
+          <button id="btn-filter" class="icon-btn filter-btn" title="筛选"><i class="fa-solid fa-filter"></i></button>
+        </div>
+      </header>
+
+      <div class="feed">
+        <div class="feed-inner">
+          <!-- 输入卡片 -->
+          <div class="composer-card">
+            <div class="composer" id="composer" contenteditable="true" spellcheck="false"
+                 data-placeholder="现在的想法是…"></div>
+            <div class="composer-toolbar">
+              <div class="toolbar-left">
+                <button id="tb-tag" class="tool-btn" title="标签"><i class="fa-solid fa-hashtag"></i></button>
+                <button id="tb-image" class="tool-btn" title="图片"><i class="fa-regular fa-image"></i></button>
+                <div class="tool-divider"></div>
+                <button id="tb-font" class="tool-btn font-btn" title="字体">Aa</button>
+                <button id="tb-ul" class="tool-btn" title="无序列表"><i class="fa-solid fa-list"></i></button>
+                <button id="tb-ol" class="tool-btn" title="有序列表"><i class="fa-solid fa-list-ol"></i></button>
+                <div class="tool-divider"></div>
+                <button id="tb-at" class="tool-btn" title="@"><i class="fa-solid fa-at"></i></button>
+              </div>
+              <button id="composer-send" class="composer-send" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
+            </div>
+          </div>
+
+          <div id="legacy-bar" class="legacy-bar hidden">
+            <span>检测到本地旧数据，可导入到灵感笔记</span>
+            <button id="legacy-import">立即导入</button>
+          </div>
+
+          <section id="memo-list" class="memo-list"></section>
+
+          <div id="empty-state" class="empty-state hidden">
+            <p>写下第一条想法吧</p>
+          </div>
+        </div>
+      </div>
+
+      <button id="fab" class="fab" title="记录新想法"><i class="fa-regular fa-envelope"></i></button>
+    </main>
+  </div>
+
+  <!-- 随机漫游遮罩 -->
+  <div id="roam-mask" class="roam-mask hidden">
+    <button class="roam-close" title="关闭">×</button>
+    <div class="roam-card">
+      <div id="roam-date" class="roam-date"></div>
+      <div id="roam-content" class="roam-content"></div>
+      <button id="roam-next" class="roam-next">再走一条 ↻</button>
+    </div>
+  </div>
+
+  <!-- 轻提示 -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="tags.js"></script>
+  <script src="md.js"></script>
+  <script src="editor.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

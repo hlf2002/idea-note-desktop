@@ -1,0 +1,17 @@
+{
+  "name": "flomo-local",
+  "version": "1.0.0",
+  "description": "本地版 flomo 浮墨笔记 —— 极简卡片式记录桌面应用",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
+}
