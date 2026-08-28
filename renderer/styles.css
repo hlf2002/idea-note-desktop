@@ -122,15 +122,14 @@ html, body {
 .icon-btn.spinning i { display: inline-block; animation: spin .6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* 统计区：三块等宽，左右铺满对齐 */
+/* 统计区：左（笔记）/ 中（标签）/ 右（天）分布 */
 .stats {
   display: flex;
   justify-content: space-between;
-  gap: 56px;
+  gap: 8px;
   padding: 6px 0 14px;
 }
 .stat {
-  flex: 1 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
