@@ -314,6 +314,11 @@ html, body {
   word-break: break-word;
   white-space: pre-wrap;
 }
+/* 第二栏顶部输入框：自动增高，最多 15 行（15 × 行高 1.7em），超出显示滚动条 */
+.composer-zone .composer {
+  max-height: calc(15 * 1.7em);
+  overflow-y: auto;
+}
 .composer:empty::before {
   content: attr(data-placeholder);
   color: #a08a70;
