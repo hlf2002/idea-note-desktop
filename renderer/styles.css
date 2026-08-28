@@ -377,7 +377,7 @@ html, body {
 }
 .legacy-bar button:hover { background: #b5651d; }
 
-/* ===== MEMO 列表（模板卡片风格） ===== */
+/* ===== 笔记列表（卡片风格） ===== */
 .memo-list { display: flex; flex-direction: column; gap: 16px; }
 
 .memo-card {
@@ -469,7 +469,7 @@ html, body {
   background: #f3e6cf; color: #b6774c;
   font-size: 12px; padding: 2px 8px; border-radius: 6px;
 }
-/* 引用块（关联 MEMO） */
+/* 引用块（关联笔记） */
 .memo-ref {
   margin-top: 12px;
   display: flex; align-items: center; gap: 8px;
