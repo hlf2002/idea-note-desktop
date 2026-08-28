@@ -31,7 +31,7 @@ html, body {
 .hidden { display: none !important; }
 
 /* ===== 主布局 ===== */
-#app-view { display: flex; height: 100vh; width: 100vw; }
+#app-view { display: flex; height: 100vh; width: 100vw; max-width: 1280px; margin: 0 auto; }
 
 /* ===== 无边框窗口：拖拽区（固定顶部、带底色，遮住滚动内容） ===== */
 .titlebar {
