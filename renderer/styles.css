@@ -230,6 +230,9 @@ html, body {
 .main-header .search-box,
 .main-header button,
 .main-header input { -webkit-app-region: no-drag; }
+/* 用户菜单打开时，临时禁用顶栏拖拽区：否则真实鼠标点击拖拽区会被原生窗口拖拽吞掉，JS 收不到、菜单无法收起 */
+.menu-open .titlebar,
+.menu-open .main-header { -webkit-app-region: no-drag; }
 .app-title-row { display: flex; align-items: center; gap: 6px; }
 .app-title { font-size: 20px; font-weight: 700; color: #5d4430; }
 .title-chevron { font-size: 12px; color: #8a7358; cursor: pointer; }

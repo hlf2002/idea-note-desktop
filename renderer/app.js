@@ -751,25 +751,33 @@
     el.qrRefresh.addEventListener('click', startQr);
 
     // 用户菜单（头像 + 昵称下拉）：点外部关闭，退出项登出
+    // openMenu/closeMenu 同步切换 documentElement.menu-open：
+    // 菜单打开时临时禁用顶栏拖拽区（titlebar/main-header），否则真实鼠标点击拖拽区会被原生窗口逻辑吞掉、JS 收不到
+    function openMenu() {
+      el.userMenu.classList.add('open');
+      document.documentElement.classList.add('menu-open');
+    }
+    function closeMenu() {
+      el.userMenu.classList.remove('open');
+      document.documentElement.classList.remove('menu-open');
+    }
     el.userMenuBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      el.userMenu.classList.toggle('open');
+      if (el.userMenu.classList.contains('open')) closeMenu();
+      else openMenu();
     });
-    // 用户菜单（头像 + 昵称下拉）：点任意其他位置即收起
     // 全屏遮罩：打开时铺满窗口，点击任何位置（含拖拽区/不冒泡元素）先命中遮罩收起
-    el.userMenuBackdrop.addEventListener('click', () => {
-      el.userMenu.classList.remove('open');
-    });
+    el.userMenuBackdrop.addEventListener('click', closeMenu);
     // mousedown 捕获阶段兜底：先于目标元素任何 stopPropagation 触发
     document.addEventListener('mousedown', (e) => {
-      if (!el.userMenu.contains(e.target)) el.userMenu.classList.remove('open');
+      if (!el.userMenu.contains(e.target)) closeMenu();
     }, true);
     // click 兜底：覆盖 mousedown 被系统/拖拽区等拦截但仍产生 click 的路径
     document.addEventListener('click', (e) => {
-      if (!el.userMenu.contains(e.target)) el.userMenu.classList.remove('open');
+      if (!el.userMenu.contains(e.target)) closeMenu();
     });
     el.userDropdownLogout.addEventListener('click', async () => {
-      el.userMenu.classList.remove('open');
+      closeMenu();
       try { await window.ideaNote.auth.logout(); } catch (e) { /* noop */ }
       state.memos = [];
       renderAll();
