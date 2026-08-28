@@ -8,8 +8,8 @@
   --text: #111827;          /* gray-900 主文字 */
   --text-2: #4b5563;        /* gray-600 */
   --muted: #9ca3af;         /* gray-400 次级灰 */
-  --green: #10b981;         /* emerald-500 flomo 绿 */
-  --green-hover: #059669;   /* emerald-600 */
+  --green: #007BFF;         /* primary 蓝 */
+  --green-hover: #0069d9;   /* primary 深蓝 hover */
   --red: #ef4444;
   --red-soft: #fef2f2;
   --radius: 12px;           /* rounded-xl */
@@ -115,10 +115,10 @@ html, body {
   border-radius: 3px;
   background: #e5e7eb;
 }
-.heatmap-cell.lv1 { background: #d1fae5; }
-.heatmap-cell.lv2 { background: #a7f3d0; }
-.heatmap-cell.lv3 { background: #34d399; }
-.heatmap-cell.lv4 { background: #10b981; }
+.heatmap-cell.lv1 { background: #cce5ff; }
+.heatmap-cell.lv2 { background: #99caff; }
+.heatmap-cell.lv3 { background: #3399ff; }
+.heatmap-cell.lv4 { background: #007BFF; }
 
 /* 导航 */
 .nav { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 10px; }
@@ -316,8 +316,8 @@ html, body {
 /* 聚焦：工具条亮起 */
 .composer-card:focus-within .tool-btn { color: #6b7280; }
 .composer-card:focus-within .tool-btn:hover { color: #111827; background: #f3f4f6; }
-.composer-card:focus-within .composer-send { background: #dcfce7; color: #059669; }
-.composer-card:focus-within .composer-send:hover { background: #a7f3d0; color: #047857; }
+.composer-card:focus-within .composer-send { background: #e7f1ff; color: #007BFF; }
+.composer-card:focus-within .composer-send:hover { background: #cce5ff; color: #0069d9; }
 .composer-send:active { transform: scale(.96); }
 
 /* 旧数据导入提示条 */
@@ -463,12 +463,12 @@ html, body {
   border: none; cursor: pointer;
   background: var(--green);
   color: #fff; font-size: 20px;
-  box-shadow: 0 4px 14px rgba(16,185,129,0.40);
+  box-shadow: 0 4px 14px rgba(0,123,255,0.40);
   transition: transform .15s, box-shadow .15s, background .15s;
   z-index: 50;
   display: flex; align-items: center; justify-content: center;
 }
-.fab:hover { transform: scale(1.05); background: var(--green-hover); box-shadow: 0 6px 20px rgba(16,185,129,0.50); }
+.fab:hover { transform: scale(1.05); background: var(--green-hover); box-shadow: 0 6px 20px rgba(0,123,255,0.50); }
 .fab:active { transform: scale(.96); }
 
 /* ===== 随机漫游 ===== */
@@ -526,8 +526,8 @@ html, body {
 .login-brand { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 20px; }
 .brand-dot {
   width: 16px; height: 16px; border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #7fbf6a, var(--green));
-  box-shadow: 0 1px 3px rgba(16,185,129,0.4);
+  background: radial-gradient(circle at 35% 30%, #66aaff, var(--green));
+  box-shadow: 0 1px 3px rgba(0,123,255,0.4);
 }
 .brand-name { font-size: 22px; font-weight: 700; letter-spacing: 0.2px; }
 .login-title { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
