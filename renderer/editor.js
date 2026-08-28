@@ -138,9 +138,17 @@
       setTimeout(reflow, 0);
     });
     el.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && !e.shiftKey && !composing) {
-        e.preventDefault();
-        if (opts.onCommit) opts.onCommit(cleanText(extract(el)));
+      if (e.key === 'Enter' && !composing) {
+        if (e.metaKey || e.shiftKey) {
+          // ⌘/⇧ + Enter：发布笔记
+          e.preventDefault();
+          if (opts.onCommit) opts.onCommit(cleanText(extract(el)));
+        } else {
+          // 单独 Enter：换行（不发布，避免误触）
+          e.preventDefault();
+          document.execCommand('insertText', false, '\n');
+          reflow();
+        }
       }
     });
 

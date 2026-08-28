@@ -447,7 +447,7 @@
       renderList();
     });
     ta.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      if (e.key === 'Enter' && (e.metaKey || e.shiftKey) && !e.isComposing) {
         e.preventDefault();
         save.click();
       } else if (e.key === 'Escape') {

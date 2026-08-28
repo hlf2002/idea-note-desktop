@@ -31,7 +31,7 @@ html, body {
 .hidden { display: none !important; }
 
 /* ===== 主布局 ===== */
-#app-view { display: flex; height: 100vh; width: 100vw; max-width: 1280px; margin: 0 auto; }
+#app-view { display: flex; height: 100vh; width: 100vw; max-width: 1040px; margin: 0 auto; }
 
 /* ===== 无边框窗口：拖拽区（固定顶部、带底色，遮住滚动内容） ===== */
 .titlebar {
@@ -245,11 +245,9 @@ html, body {
   z-index: 10;
   transition: padding .15s ease;
 }
-/* 滚动收缩态：输入框变矮、工具栏收起 */
+/* 滚动收缩态：输入框贴合已有文字高度、工具栏保留显示 */
 .feed.scrolled .composer-card { padding: 10px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.08); }
-.feed.scrolled .composer-card .composer-toolbar {
-  opacity: 0; height: 0; margin: 0; padding-top: 0; border: none; overflow: hidden;
-}
+.feed.scrolled .composer { min-height: 1.7em; }
 .composer-toolbar { transition: opacity .15s ease, height .15s ease; }
 .composer {
   width: 100%;
