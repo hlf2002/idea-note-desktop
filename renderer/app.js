@@ -343,7 +343,8 @@
     card.className = 'memo-card';
     card.dataset.id = memo.id;
 
-    if (state.editingId === memo.id) {
+    // dataset.id 为字符串，memo.id 为数字，统一按字符串比较
+    if (state.editingId === String(memo.id)) {
       card.appendChild(buildEditor(memo));
       return card;
     }
@@ -400,7 +401,7 @@
     editBtn.textContent = '编辑';
     editBtn.dataset.action = 'edit';
     const delBtn = document.createElement('button');
-    delBtn.textContent = state.pendingDeleteId === memo.id ? '确认删除？' : '删除';
+    delBtn.textContent = state.pendingDeleteId === String(memo.id) ? '确认删除？' : '删除';
     delBtn.dataset.action = 'delete';
     delBtn.classList.add('danger');
     menu.appendChild(editBtn); menu.appendChild(delBtn);
@@ -514,7 +515,8 @@
   }
 
   function removeLocal(id) {
-    state.memos = state.memos.filter((m) => m.id !== id);
+    // id 可能为字符串（来自 dataset.id），与数字 memo.id 统一比较
+    state.memos = state.memos.filter((m) => String(m.id) !== id);
     renderAll();
   }
 
