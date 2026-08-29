@@ -24,7 +24,7 @@ function makeMockApi() {
   const now = Math.floor(Date.now() / 1000);
   const store = [
     { id: 2, plain_text: '今天第一条 **重点** #生活', tags: ['生活'], create_time: now - 3600, update_time: now - 3600, image_url: '' },
-    { id: 1, plain_text: '昨天旧笔记 #灵感', tags: ['灵感'], create_time: now - 86400 - 3600, update_time: now - 86400 - 3600, image_url: 'https://example.com/note-1.png' }
+    { id: 1, plain_text: '昨天旧笔记 #灵感', tags: ['灵感'], create_time: now - 86400 - 3600, update_time: now - 86400 - 3600, image_url: 'https://res.qzhuli.com/test/note-1.jpg' }
   ];
   let nextId = 100;
   return {
@@ -103,11 +103,13 @@ app.whenReady().then(async () => {
       out.sidebarTagCount = document.querySelectorAll('.tag-item').length;
       out.memoCount = document.getElementById('stat-memos').textContent;
 
-      // 图片渲染：带 image_url 的笔记卡片应渲染出 <img>
-      out.imgCount = document.querySelectorAll('.memo-image').length;
-      const firstImg = document.querySelector('.memo-image');
+      // 图片渲染：七牛 image_url 的笔记卡片应渲染缩略图 <img>，并带大图 data-full
+      out.imgCount = document.querySelectorAll('.memo-image-thumb').length;
+      const firstImg = document.querySelector('.memo-image-thumb');
       out.firstImgSrc = firstImg ? firstImg.getAttribute('src') : null;
-      out.imgAlt = firstImg ? firstImg.getAttribute('alt') : null;
+      out.firstImgFull = firstImg ? firstImg.getAttribute('data-full') : null;
+      out.imgHasThumbParam = !!(firstImg && firstImg.getAttribute('src').indexOf('imageView2/2/w/180') >= 0);
+      out.imgHasLargeParam = !!(firstImg && firstImg.getAttribute('data-full').indexOf('imageView2/2/w/1200') >= 0);
 
       // 登录态 API
       const auth = await window.ideaNote.auth.get();
@@ -172,7 +174,7 @@ app.whenReady().then(async () => {
       result.pullCount === 2 &&
       result.filteredCardCount === 1 &&
       result.imgCount === 1 &&
-      result.firstImgSrc === 'https://example.com/note-1.png' &&
+      result.imgHasThumbParam && result.imgHasLargeParam &&
       result.mdOk && result.tagsOk &&
       result.listEnterOk && result.listExitOk && result.beginListOk &&
       authOnDisk && authOnDisk.uid === 'u10001' &&

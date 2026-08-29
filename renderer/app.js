@@ -350,6 +350,33 @@
     if (state.search.trim()) highlightSearch(el.memoList, state.search.trim());
   }
 
+  // ===== 图片大图查看（lightbox） =====
+  let lightboxEl = null;
+  function ensureLightbox() {
+    if (lightboxEl) return lightboxEl;
+    lightboxEl = document.createElement('div');
+    lightboxEl.id = 'image-lightbox';
+    lightboxEl.innerHTML =
+      '<div class="lightbox-backdrop"></div>' +
+      '<img class="lightbox-img" alt="" />' +
+      '<button type="button" class="lightbox-close" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>';
+    document.body.appendChild(lightboxEl);
+    lightboxEl.querySelector('.lightbox-backdrop').addEventListener('click', closeLightbox);
+    lightboxEl.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeLightbox();
+    });
+    return lightboxEl;
+  }
+  function openLightbox(src) {
+    const box = ensureLightbox();
+    box.querySelector('.lightbox-img').src = src || '';
+    box.classList.add('open');
+  }
+  function closeLightbox() {
+    if (lightboxEl) lightboxEl.classList.remove('open');
+  }
+
   function buildCard(memo) {
     const card = document.createElement('article');
     card.className = 'memo-card';
@@ -398,23 +425,28 @@
     });
     card.appendChild(content);
 
-    // 图片：优先用数据层归一化的 images（多图），老缓存 fallback 到 imageUrl（单图）
-    // 协议白名单 http(s)/data:image，防注入非图片协议
-    const imgs = Array.isArray(memo.images) && memo.images.length
-      ? memo.images
+    // 图片：卡片内只展示七牛小缩略图，点击打开 lightbox 看大图
+    // 兼容三种数据形态：新格式对象数组 / 旧格式字符串数组 / 更老的 imageUrl 单图
+    const rawImgs = Array.isArray(memo.images) && memo.images.length ? memo.images : [];
+    const imgs = rawImgs.length
+      ? rawImgs.map((img) => (typeof img === 'string'
+        ? { original: img, thumbnail: img, large: img }
+        : img))
       : (typeof memo.imageUrl === 'string' && /^(https?:|data:image\/)/i.test(memo.imageUrl.trim())
-        ? [memo.imageUrl.trim()]
+        ? [{ original: memo.imageUrl.trim(), thumbnail: memo.imageUrl.trim(), large: memo.imageUrl.trim() }]
         : []);
     if (imgs.length) {
       const imagesWrap = document.createElement('div');
       imagesWrap.className = 'memo-images';
-      imgs.forEach((src) => {
-        const img = document.createElement('img');
-        img.className = 'memo-image';
-        img.loading = 'lazy';
-        img.alt = '';
-        img.src = src;
-        imagesWrap.appendChild(img);
+      imgs.forEach((img) => {
+        const el = document.createElement('img');
+        el.className = 'memo-image-thumb';
+        el.loading = 'lazy';
+        el.alt = '';
+        el.src = img.thumbnail || img.original;
+        el.dataset.full = img.large || img.original;
+        el.addEventListener('click', () => openLightbox(el.dataset.full));
+        imagesWrap.appendChild(el);
       });
       card.appendChild(imagesWrap);
     }

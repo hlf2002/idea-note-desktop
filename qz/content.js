@@ -17,6 +17,49 @@ const { TAG_MAX_LEN } = require('./config');
 // 允许的图片协议：http(s) 与 data:image（防注入 javascript: 等）
 const IMG_URL_RE = /^(https?:|data:image\/)/i;
 
+// 七牛 CDN 自定义域名（可扩展）。七牛图片处理参数仅对这些域名生效。
+const QINIU_DOMAINS = ['res.qzhuli.com'];
+
+/** 判断 URL 是否托管在七牛 CDN 上 */
+function isQiniuUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  try {
+    const u = new URL(url);
+    return QINIU_DOMAINS.includes(u.hostname);
+  } catch (e) {
+    return false;
+  }
+}
+
+/** 给 URL 追加 query，已有 query 时用 & 连接 */
+function appendQuery(url, query) {
+  return url + (url.includes('?') ? '&' : '?') + query;
+}
+
+/**
+ * 七牛缩略图 URL：等比缩放到不超过 maxEdge×maxEdge（不裁剪）。
+ * 非七牛域名返回原 URL。
+ * @param {string} url
+ * @param {number} [maxEdge=180]
+ * @returns {string}
+ */
+function thumbnailUrl(url, maxEdge = 180) {
+  if (!isQiniuUrl(url)) return url;
+  return appendQuery(url, `imageView2/2/w/${maxEdge}/h/${maxEdge}/format/jpeg`);
+}
+
+/**
+ * 七牛大图 URL：等比缩放到宽度不超过 maxWidth（lightbox 用，避免加载超大原图）。
+ * 非七牛域名返回原 URL。
+ * @param {string} url
+ * @param {number} [maxWidth=1200]
+ * @returns {string}
+ */
+function largeImageUrl(url, maxWidth = 1200) {
+  if (!isQiniuUrl(url)) return url;
+  return appendQuery(url, `imageView2/2/w/${maxWidth}/format/jpeg`);
+}
+
 // 服务端标签：以 # 开头，后跟 1~TAG_MAX_LEN 个非空白字符（遇空白/行尾即止）
 function serverTagRe() {
   return new RegExp('#([^\\s#]{1,' + TAG_MAX_LEN + '})', 'g');
@@ -171,5 +214,8 @@ module.exports = {
   textToContentJson,
   contentJsonToText,
   splitTextAndTags,
-  extractImageUrls
+  extractImageUrls,
+  isQiniuUrl,
+  thumbnailUrl,
+  largeImageUrl
 };

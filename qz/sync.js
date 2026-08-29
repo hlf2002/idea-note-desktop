@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { PAGE_SIZE } = require('./config');
-const { extractServerTags, textToContentJson, extractImageUrls } = require('./content');
+const { extractServerTags, textToContentJson, extractImageUrls, thumbnailUrl, largeImageUrl } = require('./content');
 
 /** 服务端条目 -> 本地 memo 结构 */
 function mapServerMemo(item) {
@@ -21,7 +21,11 @@ function mapServerMemo(item) {
     content: item.plain_text || '',
     tags: Array.isArray(item.tags) ? item.tags : [],
     imageUrl: item.image_url || '',
-    images: extractImageUrls(item.image_url),
+    images: extractImageUrls(item.image_url).map((url) => ({
+      original: url,
+      thumbnail: thumbnailUrl(url),
+      large: largeImageUrl(url)
+    })),
     createdAt: (item.create_time || 0) * 1000,
     updatedAt: (item.update_time || item.create_time || 0) * 1000
   };
