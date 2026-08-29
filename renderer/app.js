@@ -355,6 +355,7 @@
   const lbState = {
     scale: 1, tx: 0, ty: 0,
     fitScale: 1,
+    needReset: true, // 打开后首次图片就绪时重置视图；用户手动操作后变为 false，避免加载事件覆盖用户缩放
     dragging: false,
     startX: 0, startY: 0, startTx: 0, startTy: 0
   };
@@ -382,16 +383,23 @@
     return clamp(Math.min(availW / nw, availH / nh), LB_MIN_SCALE, 1);
   }
 
-  function lbResetView() {
+  function lbResetView(force) {
     lbState.fitScale = lbComputeFit();
-    lbState.scale = lbState.fitScale;
-    lbState.tx = 0; lbState.ty = 0;
+    // 图片加载事件触发时只在用户尚未手动操作过时重置视图；
+    // 用户点击"适应"按钮时 force=true 强制重置
+    if (force || lbState.needReset) {
+      lbState.scale = lbState.fitScale;
+      lbState.tx = 0;
+      lbState.ty = 0;
+      lbState.needReset = false;
+    }
     lbApplyTransform();
   }
 
   // 以鼠标位置为中心缩放：保持鼠标指向的图片点不动
   function lbZoomAt(clientX, clientY, factor) {
     if (!lightboxEl) return;
+    lbState.needReset = false;
     const stage = lightboxEl.querySelector('.lightbox-stage');
     const rect = stage.getBoundingClientRect();
     const mx = clientX - rect.left - rect.width / 2;
@@ -406,10 +414,12 @@
   }
 
   function lbZoomIn() {
+    lbState.needReset = false;
     lbState.scale = clamp(lbState.scale * 1.25, LB_MIN_SCALE, LB_MAX_SCALE);
     lbApplyTransform();
   }
   function lbZoomOut() {
+    lbState.needReset = false;
     lbState.scale = clamp(lbState.scale / 1.25, LB_MIN_SCALE, LB_MAX_SCALE);
     lbApplyTransform();
   }
@@ -449,7 +459,7 @@
     };
     bindLbBtn('zoom-in', lbZoomIn);
     bindLbBtn('zoom-out', lbZoomOut);
-    bindLbBtn('reset', lbResetView);
+    bindLbBtn('reset', () => lbResetView(true));
     bindLbBtn('close', closeLightbox);
 
     // 鼠标滚轮缩放（以鼠标位置为中心）
@@ -470,6 +480,7 @@
     });
     document.addEventListener('mousemove', (e) => {
       if (!lbState.dragging) return;
+      lbState.needReset = false;
       lbState.tx = lbState.startTx + (e.clientX - lbState.startX);
       lbState.ty = lbState.startTy + (e.clientY - lbState.startY);
       lbApplyTransform();
@@ -481,9 +492,7 @@
       }
     });
 
-    // 图片加载完成 / 失败后计算适应比例
-    img.addEventListener('load', lbResetView);
-    img.addEventListener('error', lbResetView);
+    // 图片加载完成 / 失败后计算适应比例（在 openLightbox 里按 once 绑定，避免后续加载重置用户缩放）
 
     // ESC 关闭
     document.addEventListener('keydown', (e) => {
@@ -498,7 +507,12 @@
     const img = box.querySelector('.lightbox-img');
     // 重置状态
     lbState.scale = 1; lbState.tx = 0; lbState.ty = 0; lbState.fitScale = 1;
+    lbState.needReset = true;
     lbApplyTransform();
+    // 每次打开时绑定一次 load/error：图片就绪后计算适应比例，触发后自动移除，
+    // 避免后续加载事件把用户的手动缩放/平移重置掉
+    img.addEventListener('load', lbResetView, { once: true });
+    img.addEventListener('error', lbResetView, { once: true });
     img.src = src || '';
     box.classList.add('open');
     // 图片已缓存时立即计算适应比例
