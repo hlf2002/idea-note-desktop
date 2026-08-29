@@ -558,7 +558,7 @@ html, body {
 .lightbox-toolbar {
   position: absolute; top: 18px; left: 50%;
   transform: translateX(-50%);
-  z-index: 2;
+  z-index: 10;
   display: flex; align-items: center; gap: 6px;
   background: rgba(20,20,20,.55);
   backdrop-filter: blur(8px);
@@ -566,6 +566,7 @@ html, body {
   padding: 6px 10px;
   border-radius: 12px;
   border: 1px solid rgba(255,255,255,.1);
+  pointer-events: auto;
 }
 .lb-btn {
   width: 32px; height: 32px;
@@ -575,6 +576,7 @@ html, body {
   font-size: 14px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: background .15s;
+  pointer-events: auto;
 }
 .lb-btn:hover { background: rgba(255,255,255,.22); }
 .lb-btn.lb-close { margin-left: 4px; }

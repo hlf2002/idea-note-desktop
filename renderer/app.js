@@ -438,16 +438,19 @@
     // 点击遮罩关闭（点击图片/舞台不关闭）
     lightboxEl.querySelector('.lightbox-backdrop').addEventListener('click', closeLightbox);
 
-    // 工具栏按钮（事件委托）
-    lightboxEl.querySelector('.lightbox-toolbar').addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-action]');
-      if (!btn) return;
-      const action = btn.dataset.action;
-      if (action === 'zoom-in') lbZoomIn();
-      else if (action === 'zoom-out') lbZoomOut();
-      else if (action === 'reset') lbResetView();
-      else if (action === 'close') closeLightbox();
-    });
+    // 工具栏按钮：逐个直接绑定（不用事件委托，避免 e.target 边界问题）
+    const bindLbBtn = (action, handler) => {
+      const btn = lightboxEl.querySelector('.lightbox-toolbar [data-action="' + action + '"]');
+      if (btn) btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        handler();
+      });
+    };
+    bindLbBtn('zoom-in', lbZoomIn);
+    bindLbBtn('zoom-out', lbZoomOut);
+    bindLbBtn('reset', lbResetView);
+    bindLbBtn('close', closeLightbox);
 
     // 鼠标滚轮缩放（以鼠标位置为中心）
     stage.addEventListener('wheel', (e) => {
