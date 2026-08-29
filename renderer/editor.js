@@ -20,6 +20,63 @@
 
   var BLOCK_RE = /^(DIV|P|LI|UL|OL|BLOCKQUOTE|PRE|H[1-6]|HR)$/;
 
+  /**
+   * 解析行首列表标记；非列表行返回 null。
+   * 无序：- / * / + 后跟空白；有序：数字 + . 或 ) 后跟空白。
+   * 返回 { marker, nextMarker, content }：marker=本行标记，nextMarker=回车后下一行标记（有序 +1），content=标记后的文本。
+   */
+  function listMarker(line) {
+    var ul = /^(\s*[-*+]\s+)(.*)$/.exec(line);
+    if (ul) return { marker: ul[1], nextMarker: ul[1], content: ul[2] };
+    var ol = /^(\s*)(\d+)([.)])(\s+)(.*)$/.exec(line);
+    if (ol) {
+      var next = parseInt(ol[2], 10) + 1;
+      return {
+        marker: ol[1] + ol[2] + ol[3] + ol[4],
+        nextMarker: ol[1] + next + ol[3] + ol[4],
+        content: ol[5]
+      };
+    }
+    return null;
+  }
+
+  /** 逻辑文本中，光标 offset 所在行的行首偏移 */
+  function lineStartAt(text, offset) {
+    return text.lastIndexOf('\n', offset - 1) + 1;
+  }
+
+  /**
+   * 回车处理：返回 { text, caret }（纯函数，便于单测）。
+   *  - 列表行有内容：插入换行并续下一标记（无序同标记，有序数字 +1）
+   *  - 列表行仅标记（整行无内容）：删除标记退出列表，光标到新空行行首
+   *  - 普通行：插入换行
+   */
+  function enterAt(text, offset) {
+    var ls = lineStartAt(text, offset);
+    var nl = text.indexOf('\n', offset);
+    var le = nl === -1 ? text.length : nl;
+    var line = text.slice(ls, le);
+    var info = listMarker(line);
+    if (info) {
+      if (info.content.trim() === '') {
+        // 空列表项回车：删除整行标记退出列表（该行变为空行），光标停在空行行首
+        // 注意：ls 前一个字符已是上一行的换行符，删除本行内容即可，不能额外插 \n
+        return { text: text.slice(0, ls) + text.slice(le), caret: ls };
+      }
+      var insert = '\n' + info.nextMarker;
+      return { text: text.slice(0, offset) + insert + text.slice(offset), caret: offset + insert.length };
+    }
+    return { text: text.slice(0, offset) + '\n' + text.slice(offset), caret: offset + 1 };
+  }
+
+  /** 列表按钮：光标行首无内容则本行插入标记，否则另起一行插入标记。返回 { text, caret } */
+  function beginListAt(text, offset, marker) {
+    var ls = lineStartAt(text, offset);
+    var head = text.slice(ls, offset);
+    var insert = head.trim() === '' ? marker : '\n' + marker;
+    return { text: text.slice(0, offset) + insert + text.slice(offset), caret: offset + insert.length };
+  }
+
   function makeComposer(el, opts) {
     opts = opts || {};
     var render = opts.render || function (t) { return t; };
@@ -168,14 +225,13 @@
           e.preventDefault();
           if (opts.onCommit) opts.onCommit(cleanText(extract(el)));
         } else {
-          // 单独 Enter：换行（不发布，避免误触）
-          // 直接改源文本插入 \n 再重渲染，保证换行一定生效（不依赖 execCommand 生成 <br>）
+          // 单独 Enter：换行（不发布）；当前行为列表行时自动续列表，空列表项回车退出列表
           e.preventDefault();
           var off = caretOffset();
           var txt = extract(el);
-          var newText = txt.slice(0, off) + '\n' + txt.slice(off);
-          el.innerHTML = render(newText);
-          setCaret(off + 1);
+          var r = enterAt(txt, off);
+          el.innerHTML = render(r.text);
+          setCaret(r.caret);
         }
       }
     });
@@ -204,9 +260,23 @@
         document.execCommand('insertText', false, text);
         reflow();
       },
+      /** 开始/继续列表项：光标行首无内容则本行插入标记，否则另起一行（工具条列表按钮用） */
+      beginList: function (marker) {
+        el.focus();
+        var off = caretOffset();
+        var txt = extract(el);
+        var r = beginListAt(txt, off, marker);
+        el.innerHTML = render(r.text);
+        setCaret(r.caret);
+      },
       reflow: reflow
     };
   }
+
+  // 导出纯函数供单元测试（Node 环境 require 使用）
+  makeComposer.listMarker = listMarker;
+  makeComposer.enterAt = enterAt;
+  makeComposer.beginListAt = beginListAt;
 
   return makeComposer;
 });

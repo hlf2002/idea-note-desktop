@@ -840,10 +840,10 @@
     // 回收站
     el.btnTrash.addEventListener('click', () => showToast('回收站 · 敬请期待'));
 
-    // 输入工具条：插入 markdown 语法
+    // 输入工具条：插入 markdown 语法；列表按钮按"行首起列表"语义插入
     el.tbTag.addEventListener('click', () => state.composer.insertText(' #'));
-    el.tbUl.addEventListener('click', () => state.composer.insertText('- '));
-    el.tbOl.addEventListener('click', () => state.composer.insertText('1. '));
+    el.tbUl.addEventListener('click', () => state.composer.beginList('- '));
+    el.tbOl.addEventListener('click', () => state.composer.beginList('1. '));
     el.tbImage.addEventListener('click', () => showToast('图片上传 · 敬请期待'));
     el.tbFont.addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
     el.tbAt.addEventListener('click', () => showToast('提及 · 敬请期待'));

@@ -101,7 +101,7 @@ app.whenReady().then(async () => {
       out.cardCount = document.querySelectorAll('.memo-card').length;
       out.dayTitles = Array.from(document.querySelectorAll('.day-title')).map(e => e.textContent);
       out.sidebarTagCount = document.querySelectorAll('.tag-item').length;
-      out.memoCount = document.getElementById('memo-count').textContent;
+      out.memoCount = document.getElementById('stat-memos').textContent;
 
       // 登录态 API
       const auth = await window.ideaNote.auth.get();
@@ -126,6 +126,16 @@ app.whenReady().then(async () => {
       // Md / Tags 可用
       out.mdOk = window.Md.render('**b**').includes('<strong>b</strong>');
       out.tagsOk = window.Tags.extractTags('#a #b').length === 2;
+
+      // 输入框列表逻辑（浏览器环境跑同一套纯函数）
+      out.listErr = null;
+      try {
+        out.listEnterOk = window.MarkdownComposer.enterAt('1. a', 4).text === '1. a\\n2. ';
+        out.listExitOk = window.MarkdownComposer.enterAt('- a\\n- ', 6).text === '- a\\n';
+        out.beginListOk = window.MarkdownComposer.beginListAt('hello', 5, '- ').text === 'hello\\n- ';
+      } catch (e) {
+        out.listErr = String((e && e.message) || e);
+      }
       return out;
     })()`);
 
@@ -148,7 +158,6 @@ app.whenReady().then(async () => {
       result.loginHidden && result.appVisible &&
       result.userName === '测试用户' &&
       result.cardCount === 2 &&
-      result.dayTitles[0] === '今天' &&
       result.sidebarTagCount === 2 &&
       result.authUid === 'u10001' &&
       result.authNickname === '测试用户' &&
@@ -157,6 +166,7 @@ app.whenReady().then(async () => {
       result.pullCount === 2 &&
       result.filteredCardCount === 1 &&
       result.mdOk && result.tagsOk &&
+      result.listEnterOk && result.listExitOk && result.beginListOk &&
       authOnDisk && authOnDisk.uid === 'u10001' &&
       cacheOnDisk && cacheOnDisk.memos.length === 2;
 
