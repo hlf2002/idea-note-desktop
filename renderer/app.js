@@ -398,6 +398,27 @@
     });
     card.appendChild(content);
 
+    // 图片：优先用数据层归一化的 images（多图），老缓存 fallback 到 imageUrl（单图）
+    // 协议白名单 http(s)/data:image，防注入非图片协议
+    const imgs = Array.isArray(memo.images) && memo.images.length
+      ? memo.images
+      : (typeof memo.imageUrl === 'string' && /^(https?:|data:image\/)/i.test(memo.imageUrl.trim())
+        ? [memo.imageUrl.trim()]
+        : []);
+    if (imgs.length) {
+      const imagesWrap = document.createElement('div');
+      imagesWrap.className = 'memo-images';
+      imgs.forEach((src) => {
+        const img = document.createElement('img');
+        img.className = 'memo-image';
+        img.loading = 'lazy';
+        img.alt = '';
+        img.src = src;
+        imagesWrap.appendChild(img);
+      });
+      card.appendChild(imagesWrap);
+    }
+
     // 引用块（关联其他笔记）
     if (memo.refText) {
       const ref = document.createElement('div');

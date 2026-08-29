@@ -24,7 +24,7 @@ function makeMockApi() {
   const now = Math.floor(Date.now() / 1000);
   const store = [
     { id: 2, plain_text: '今天第一条 **重点** #生活', tags: ['生活'], create_time: now - 3600, update_time: now - 3600, image_url: '' },
-    { id: 1, plain_text: '昨天旧笔记 #灵感', tags: ['灵感'], create_time: now - 86400 - 3600, update_time: now - 86400 - 3600, image_url: '' }
+    { id: 1, plain_text: '昨天旧笔记 #灵感', tags: ['灵感'], create_time: now - 86400 - 3600, update_time: now - 86400 - 3600, image_url: 'https://example.com/note-1.png' }
   ];
   let nextId = 100;
   return {
@@ -103,6 +103,12 @@ app.whenReady().then(async () => {
       out.sidebarTagCount = document.querySelectorAll('.tag-item').length;
       out.memoCount = document.getElementById('stat-memos').textContent;
 
+      // 图片渲染：带 image_url 的笔记卡片应渲染出 <img>
+      out.imgCount = document.querySelectorAll('.memo-image').length;
+      const firstImg = document.querySelector('.memo-image');
+      out.firstImgSrc = firstImg ? firstImg.getAttribute('src') : null;
+      out.imgAlt = firstImg ? firstImg.getAttribute('alt') : null;
+
       // 登录态 API
       const auth = await window.ideaNote.auth.get();
       out.authUid = auth ? auth.uid : null;
@@ -165,6 +171,8 @@ app.whenReady().then(async () => {
       result.updatedContent === '已改 #改过' &&
       result.pullCount === 2 &&
       result.filteredCardCount === 1 &&
+      result.imgCount === 1 &&
+      result.firstImgSrc === 'https://example.com/note-1.png' &&
       result.mdOk && result.tagsOk &&
       result.listEnterOk && result.listExitOk && result.beginListOk &&
       authOnDisk && authOnDisk.uid === 'u10001' &&

@@ -6,12 +6,16 @@
  *  2. textToContentJson：把本地纯文本转换为服务端 TipTap 风格的 content_json
  *     （doc > paragraph > text；#标签 以 ideaTag mark 标记）
  *  3. contentJsonToText：逆向还原（用于本地展示/编辑）
+ *  4. extractImageUrls：把服务端 image_url 字段归一化为图片 URL 数组（支持单图 / JSON 数组串 / 分隔多图）
  *
  * 可用性：CommonJS（主进程与单测共用）
  */
 'use strict';
 
 const { TAG_MAX_LEN } = require('./config');
+
+// 允许的图片协议：http(s) 与 data:image（防注入 javascript: 等）
+const IMG_URL_RE = /^(https?:|data:image\/)/i;
 
 // 服务端标签：以 # 开头，后跟 1~TAG_MAX_LEN 个非空白字符（遇空白/行尾即止）
 function serverTagRe() {
@@ -117,9 +121,55 @@ function inlineToText(nodes) {
   return nodes.map((n) => (n && n.type === 'text' ? n.text : '')).join('');
 }
 
+/**
+ * 把服务端 image_url 字段归一化为图片 URL 数组。
+ * 支持形态：单条 URL、JSON 数组串（["u1","u2"]）、逗号/分号/空白分隔的多条 URL。
+ * 非法协议（如 javascript:）与空值一律剔除；返回保序去空。
+ * @param {*} raw 服务端 image_url 字段
+ * @returns {string[]}
+ */
+function extractImageUrls(raw) {
+  if (raw == null) return [];
+  let tokens;
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return [];
+    // data URI 整串作为单图，不按分隔符切分（; 与 , 是 data URI 的合法字符）
+    if (s.startsWith('data:')) {
+      tokens = [s];
+    } else if (s[0] === '[') {
+      // JSON 数组串
+      try {
+        const arr = JSON.parse(s);
+        tokens = Array.isArray(arr) ? arr : [s];
+      } catch (e) {
+        tokens = [s];
+      }
+    } else {
+      tokens = s.split(/[,;\s]+/);
+    }
+  } else if (Array.isArray(raw)) {
+    tokens = raw;
+  } else {
+    return [];
+  }
+  const seen = {};
+  const out = [];
+  for (const t of tokens) {
+    if (typeof t !== 'string') continue;
+    const url = t.trim();
+    if (!url || !IMG_URL_RE.test(url)) continue;
+    if (seen[url]) continue;
+    seen[url] = true;
+    out.push(url);
+  }
+  return out;
+}
+
 module.exports = {
   extractServerTags,
   textToContentJson,
   contentJsonToText,
-  splitTextAndTags
+  splitTextAndTags,
+  extractImageUrls
 };
