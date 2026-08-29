@@ -350,29 +350,158 @@
     if (state.search.trim()) highlightSearch(el.memoList, state.search.trim());
   }
 
-  // ===== 图片大图查看（lightbox） =====
+  // ===== 图片大图查看（lightbox：按钮缩放 / 鼠标拖拽平移 / 滚轮缩放） =====
   let lightboxEl = null;
+  const lbState = {
+    scale: 1, tx: 0, ty: 0,
+    fitScale: 1,
+    dragging: false,
+    startX: 0, startY: 0, startTx: 0, startTy: 0
+  };
+  const LB_MIN_SCALE = 0.1;
+  const LB_MAX_SCALE = 8;
+
+  function clamp(v, min, max) { return Math.min(Math.max(v, min), max); }
+
+  function lbApplyTransform() {
+    if (!lightboxEl) return;
+    const img = lightboxEl.querySelector('.lightbox-img');
+    img.style.transform = 'translate(' + lbState.tx + 'px, ' + lbState.ty + 'px) scale(' + lbState.scale + ')';
+    const scaleLabel = lightboxEl.querySelector('.lb-scale');
+    if (scaleLabel) scaleLabel.textContent = Math.round(lbState.scale * 100) + '%';
+  }
+
+  function lbComputeFit() {
+    if (!lightboxEl) return 1;
+    const img = lightboxEl.querySelector('.lightbox-img');
+    const stage = lightboxEl.querySelector('.lightbox-stage');
+    const nw = img.naturalWidth || 800;
+    const nh = img.naturalHeight || 600;
+    const availW = stage.clientWidth * 0.92;
+    const availH = stage.clientHeight * 0.88;
+    return clamp(Math.min(availW / nw, availH / nh), LB_MIN_SCALE, 1);
+  }
+
+  function lbResetView() {
+    lbState.fitScale = lbComputeFit();
+    lbState.scale = lbState.fitScale;
+    lbState.tx = 0; lbState.ty = 0;
+    lbApplyTransform();
+  }
+
+  // 以鼠标位置为中心缩放：保持鼠标指向的图片点不动
+  function lbZoomAt(clientX, clientY, factor) {
+    if (!lightboxEl) return;
+    const stage = lightboxEl.querySelector('.lightbox-stage');
+    const rect = stage.getBoundingClientRect();
+    const mx = clientX - rect.left - rect.width / 2;
+    const my = clientY - rect.top - rect.height / 2;
+    const newScale = clamp(lbState.scale * factor, LB_MIN_SCALE, LB_MAX_SCALE);
+    if (newScale === lbState.scale) return;
+    const ratio = newScale / lbState.scale;
+    lbState.tx = mx - (mx - lbState.tx) * ratio;
+    lbState.ty = my - (my - lbState.ty) * ratio;
+    lbState.scale = newScale;
+    lbApplyTransform();
+  }
+
+  function lbZoomIn() {
+    lbState.scale = clamp(lbState.scale * 1.25, LB_MIN_SCALE, LB_MAX_SCALE);
+    lbApplyTransform();
+  }
+  function lbZoomOut() {
+    lbState.scale = clamp(lbState.scale / 1.25, LB_MIN_SCALE, LB_MAX_SCALE);
+    lbApplyTransform();
+  }
+
   function ensureLightbox() {
     if (lightboxEl) return lightboxEl;
     lightboxEl = document.createElement('div');
     lightboxEl.id = 'image-lightbox';
     lightboxEl.innerHTML =
       '<div class="lightbox-backdrop"></div>' +
-      '<img class="lightbox-img" alt="" />' +
-      '<button type="button" class="lightbox-close" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>';
+      '<div class="lightbox-stage">' +
+        '<img class="lightbox-img" alt="" draggable="false" />' +
+      '</div>' +
+      '<div class="lightbox-toolbar">' +
+        '<button type="button" class="lb-btn" data-action="zoom-out" title="缩小"><i class="fa-solid fa-magnifying-glass-minus"></i></button>' +
+        '<span class="lb-scale">100%</span>' +
+        '<button type="button" class="lb-btn" data-action="zoom-in" title="放大"><i class="fa-solid fa-magnifying-glass-plus"></i></button>' +
+        '<button type="button" class="lb-btn" data-action="reset" title="适应窗口">适应</button>' +
+        '<button type="button" class="lb-btn lb-close" data-action="close" title="关闭"><i class="fa-solid fa-xmark"></i></button>' +
+      '</div>';
     document.body.appendChild(lightboxEl);
+
+    const stage = lightboxEl.querySelector('.lightbox-stage');
+    const img = lightboxEl.querySelector('.lightbox-img');
+
+    // 点击遮罩关闭（点击图片/舞台不关闭）
     lightboxEl.querySelector('.lightbox-backdrop').addEventListener('click', closeLightbox);
-    lightboxEl.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeLightbox();
+
+    // 工具栏按钮（事件委托）
+    lightboxEl.querySelector('.lightbox-toolbar').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === 'zoom-in') lbZoomIn();
+      else if (action === 'zoom-out') lbZoomOut();
+      else if (action === 'reset') lbResetView();
+      else if (action === 'close') closeLightbox();
     });
+
+    // 鼠标滚轮缩放（以鼠标位置为中心）
+    stage.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 1 / 1.12 : 1.12;
+      lbZoomAt(e.clientX, e.clientY, factor);
+    }, { passive: false });
+
+    // 鼠标拖拽平移
+    stage.addEventListener('mousedown', (e) => {
+      lbState.dragging = true;
+      lbState.startX = e.clientX;
+      lbState.startY = e.clientY;
+      lbState.startTx = lbState.tx;
+      lbState.startTy = lbState.ty;
+      stage.classList.add('dragging');
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!lbState.dragging) return;
+      lbState.tx = lbState.startTx + (e.clientX - lbState.startX);
+      lbState.ty = lbState.startTy + (e.clientY - lbState.startY);
+      lbApplyTransform();
+    });
+    document.addEventListener('mouseup', () => {
+      if (lbState.dragging) {
+        lbState.dragging = false;
+        stage.classList.remove('dragging');
+      }
+    });
+
+    // 图片加载完成 / 失败后计算适应比例
+    img.addEventListener('load', lbResetView);
+    img.addEventListener('error', lbResetView);
+
+    // ESC 关闭
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && lightboxEl && lightboxEl.classList.contains('open')) closeLightbox();
+    });
+
     return lightboxEl;
   }
+
   function openLightbox(src) {
     const box = ensureLightbox();
-    box.querySelector('.lightbox-img').src = src || '';
+    const img = box.querySelector('.lightbox-img');
+    // 重置状态
+    lbState.scale = 1; lbState.tx = 0; lbState.ty = 0; lbState.fitScale = 1;
+    lbApplyTransform();
+    img.src = src || '';
     box.classList.add('open');
+    // 图片已缓存时立即计算适应比例
+    if (img.complete && img.naturalWidth > 0) lbResetView();
   }
+
   function closeLightbox() {
     if (lightboxEl) lightboxEl.classList.remove('open');
   }

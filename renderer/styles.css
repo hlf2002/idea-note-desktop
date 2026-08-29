@@ -531,29 +531,61 @@ html, body {
 }
 .memo-image-thumb:hover { opacity: .82; }
 
-/* 图片大图 lightbox */
+/* 图片大图 lightbox（支持按钮缩放 / 鼠标拖拽平移 / 滚轮缩放） */
 #image-lightbox {
   position: fixed; inset: 0; z-index: 1000;
-  display: none; align-items: center; justify-content: center;
+  display: none; flex-direction: column;
 }
 #image-lightbox.open { display: flex; }
-.lightbox-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.78); }
-.lightbox-img {
+.lightbox-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.88); }
+.lightbox-stage {
   position: relative; z-index: 1;
-  max-width: 92vw; max-height: 88vh;
-  width: auto; height: auto;
-  border-radius: 8px;
-  box-shadow: 0 8px 40px rgba(0,0,0,.45);
+  flex: 1; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  cursor: grab;
 }
-.lightbox-close {
-  position: absolute; top: 20px; right: 24px; z-index: 2;
-  width: 40px; height: 40px; border-radius: 50%;
-  border: none; background: rgba(255,255,255,.15); color: #fff;
-  font-size: 17px; cursor: pointer;
+.lightbox-stage.dragging { cursor: grabbing; }
+.lightbox-img {
+  max-width: none; max-height: none;
+  width: auto; height: auto;
+  transform-origin: center center;
+  user-select: none;
+  -webkit-user-drag: none;
+  border-radius: 6px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.5);
+  pointer-events: none;
+}
+.lightbox-toolbar {
+  position: absolute; top: 18px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(20,20,20,.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.1);
+}
+.lb-btn {
+  width: 32px; height: 32px;
+  border: none; border-radius: 8px;
+  background: rgba(255,255,255,.1);
+  color: #fff;
+  font-size: 14px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: background .15s;
 }
-.lightbox-close:hover { background: rgba(255,255,255,.28); }
+.lb-btn:hover { background: rgba(255,255,255,.22); }
+.lb-btn.lb-close { margin-left: 4px; }
+.lb-scale {
+  color: rgba(255,255,255,.85);
+  font-size: 12.5px;
+  min-width: 46px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
 
 .memo-tags { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .memo-tag {

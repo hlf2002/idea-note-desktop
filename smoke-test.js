@@ -111,6 +111,22 @@ app.whenReady().then(async () => {
       out.imgHasThumbParam = !!(firstImg && firstImg.getAttribute('src').indexOf('imageView2/2/w/180') >= 0);
       out.imgHasLargeParam = !!(firstImg && firstImg.getAttribute('data-full').indexOf('imageView2/2/w/1200') >= 0);
 
+      // lightbox 交互：点击缩略图打开 -> 工具栏按钮 -> 放大 -> 重置 -> 关闭
+      if (firstImg) firstImg.click();
+      await wait(150);
+      out.lightboxOpen = document.getElementById('image-lightbox').classList.contains('open');
+      out.lbBtnCount = document.querySelectorAll('#image-lightbox .lb-btn').length;
+      const lbImg = document.querySelector('#image-lightbox .lightbox-img');
+      const zoomInBtn = document.querySelector('#image-lightbox [data-action="zoom-in"]');
+      if (zoomInBtn) zoomInBtn.click();
+      out.afterZoomInTransform = lbImg ? lbImg.style.transform : '';
+      const resetBtn = document.querySelector('#image-lightbox [data-action="reset"]');
+      if (resetBtn) resetBtn.click();
+      out.afterResetTransform = lbImg ? lbImg.style.transform : '';
+      const closeBtn = document.querySelector('#image-lightbox [data-action="close"]');
+      if (closeBtn) closeBtn.click();
+      out.lightboxClosed = !document.getElementById('image-lightbox').classList.contains('open');
+
       // 登录态 API
       const auth = await window.ideaNote.auth.get();
       out.authUid = auth ? auth.uid : null;
@@ -175,6 +191,10 @@ app.whenReady().then(async () => {
       result.filteredCardCount === 1 &&
       result.imgCount === 1 &&
       result.imgHasThumbParam && result.imgHasLargeParam &&
+      result.lightboxOpen && result.lbBtnCount === 4 &&
+      result.afterZoomInTransform.indexOf('scale(') >= 0 &&
+      result.afterResetTransform.indexOf('translate(0px, 0px)') >= 0 &&
+      result.lightboxClosed &&
       result.mdOk && result.tagsOk &&
       result.listEnterOk && result.listExitOk && result.beginListOk &&
       authOnDisk && authOnDisk.uid === 'u10001' &&
