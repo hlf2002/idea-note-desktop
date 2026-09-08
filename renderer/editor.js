@@ -147,9 +147,15 @@
     /** 按逻辑文本偏移定位光标 */
     function setCaret(offset) {
       var r = locate(offset);
-      var sel = window.getSelection();
-      sel.removeAllRanges();
-      if (r) sel.addRange(r);
+      if (!r) return;
+      // 防御：range 可能指向已被移除的节点（如编辑态 composer 被销毁后异步回调），
+      // addRange 会抛 "The given range isn't in document"，需捕获避免中断执行
+      if (!document.body.contains(r.startContainer)) return;
+      try {
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+      } catch (e) { /* noop */ }
     }
 
     function locate(offset) {
