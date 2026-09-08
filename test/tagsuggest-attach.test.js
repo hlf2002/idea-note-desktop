@@ -296,3 +296,51 @@ test('attach: detach 移除浮层与监听', () => {
   fire(composer.el, 'input');
   assert.strictEqual(bodyEl.childNodes.length, 0);
 });
+
+// ---- 自动补空格：abc# → abc # ----
+test('attach: 输入 abc# 自动在 # 前补空格并弹出下拉', () => {
+  resetBody();
+  const composer = makeComposer('abc#');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  fire(composer.el, 'input');
+  // replaceText 被调用：把 # 替换为 " #"
+  assert.strictEqual(composer._calls.length, 1);
+  assert.strictEqual(composer._calls[0].replacement, ' #');
+  // 文本变为 "abc #"，光标在 # 后
+  assert.strictEqual(composer.rawValue(), 'abc #');
+  assert.strictEqual(composer.caretOffset(), 5);
+  // 下拉弹出
+  assert.strictEqual(bodyEl.childNodes.length, 1);
+  const box = bodyEl.childNodes[0];
+  assert.ok(!box.classList.contains('hidden'));
+});
+
+test('attach: 输入 abc #（# 前已有空格）不重复补空格', () => {
+  resetBody();
+  const composer = makeComposer('abc #');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  fire(composer.el, 'input');
+  assert.strictEqual(composer._calls.length, 0, '不调用 replaceText');
+  assert.strictEqual(composer.rawValue(), 'abc #');
+  assert.strictEqual(bodyEl.childNodes.length, 1, '下拉弹出');
+});
+
+test('attach: 行首输入 # 不补空格', () => {
+  resetBody();
+  const composer = makeComposer('#');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  fire(composer.el, 'input');
+  assert.strictEqual(composer._calls.length, 0, '不调用 replaceText');
+  assert.strictEqual(composer.rawValue(), '#');
+  assert.strictEqual(bodyEl.childNodes.length, 1, '下拉弹出');
+});
+
+test('attach: 光标前不是 #（如 abc#工）不触发补空格', () => {
+  resetBody();
+  const composer = makeComposer('abc#工');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  fire(composer.el, 'input');
+  // # 前是标签字符 c，detectTagQuery 返回 null；光标前是"工"不是 #，不补空格
+  assert.strictEqual(composer._calls.length, 0);
+  assert.strictEqual(bodyEl.childNodes.length, 0, '不下拉');
+});

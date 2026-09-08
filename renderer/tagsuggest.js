@@ -190,6 +190,18 @@
       var text = composer.rawValue();
       var off = composer.caretOffset();
       var st = detectTagQuery(text, off);
+      // 自动补空格：光标前刚输入 #，且 # 前紧贴标签字符（如 abc#），
+      // 则把 # 替换为 " #"（# 前补空格），光标落到 # 后，随后即可正常弹出下拉。
+      // 工具栏 # 按钮本身插入的是 " #"，不会走到这里。
+      if (!st && off > 0 && text.charAt(off - 1) === '#') {
+        var hashPos = off - 1;
+        if (hashPos > 0 && TAG_CHAR_RE.test(text.charAt(hashPos - 1))) {
+          composer.replaceText(hashPos, hashPos + 1, ' #');
+          text = composer.rawValue();
+          off = composer.caretOffset();
+          st = detectTagQuery(text, off);
+        }
+      }
       if (!st) { close(); return; }
       var all = getTags();
       if (!all.length) { open([], st, '暂无标签'); return; }
