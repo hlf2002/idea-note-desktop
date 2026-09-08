@@ -115,7 +115,17 @@
       function walk(node) {
         if (done) return;
         if (node === stopNode) {
-          if (node.nodeType === 3) out += node.nodeValue.slice(0, stopOffset);
+          if (node.nodeType === 3) {
+            out += node.nodeValue.slice(0, stopOffset);
+          } else {
+            // 光标落在元素节点上（如 <p> 末尾，startContainer=<p>）：
+            // 前 stopOffset 个子节点需完整计入，否则偏移被误算为 0
+            var children = node.childNodes;
+            for (var i = 0; i < stopOffset && i < children.length; i++) {
+              walk(children[i]);
+              if (done) return;
+            }
+          }
           done = true;
           return;
         }
