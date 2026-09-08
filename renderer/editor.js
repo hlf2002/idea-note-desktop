@@ -241,6 +241,26 @@
       focus: function () { el.focus(); },
       blur: function () { el.blur(); },
       value: function () { return cleanText(extract(el)); },
+      /** 原始逻辑文本（不做 cleanText），供联想/替换等按精确偏移操作的场景使用 */
+      rawValue: function () { return extract(el); },
+      /** 光标前的逻辑文本长度（与 rawValue 同一坐标系） */
+      caretOffset: caretOffset,
+      /**
+       * 按逻辑文本区间替换 [start, end) 为 text，光标落到插入文本之后。
+       * 联想下拉确认标签时用：替换掉已输入的 #query 部分。
+       */
+      replaceText: function (start, end, text) {
+        el.focus();
+        var cur = extract(el);
+        if (start < 0) start = 0;
+        if (end > cur.length) end = cur.length;
+        if (start > end) { var t = start; start = end; end = t; }
+        var next = cur.slice(0, start) + text + cur.slice(end);
+        suppress = true;
+        el.innerHTML = render(next);
+        suppress = false;
+        setCaret(start + text.length);
+      },
       clear: function () {
         suppress = true;
         el.innerHTML = '';

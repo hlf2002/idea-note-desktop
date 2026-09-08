@@ -374,6 +374,44 @@ html, body {
   vertical-align: baseline;
 }
 .tag-inline:hover { opacity: .75; }
+
+/* 标签联想下拉（fixed 浮层，独立于编辑器 DOM，reflow 不破坏） */
+.tag-suggest {
+  position: fixed;
+  z-index: 9999;
+  min-width: 220px;
+  max-width: 420px;
+  background: #fffdf7;
+  border: 1px solid #e5d9c2;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(120, 90, 40, .16);
+  padding: 6px;
+  overflow-y: auto;
+}
+.tag-suggest.hidden { display: none; }
+.tag-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13.5px;
+  color: #6b5942;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tag-suggest-item .tag-hash { color: var(--green); flex-shrink: 0; }
+.tag-suggest-item.active { background: #f3e6cf; }
+.tag-suggest-item:hover { background: #f7eeda; }
+.tag-suggest-empty {
+  padding: 10px;
+  font-size: 12.5px;
+  color: #a08a70;
+  text-align: center;
+}
+
 .composer .md-li { margin: 0 0 2px; color: #6b5942; }
 .composer .md-li:first-child { margin-top: 4px; }
 .composer .md-marker { color: #c2b39a; }

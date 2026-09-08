@@ -671,11 +671,16 @@
       onCommit: (text) => { saveEdit(text); }
     });
     composer.setValue(memo.content);
+    // 标签联想：与顶部输入框同一套交互
+    const detachSuggester = window.TagSuggester.attach(composer, {
+      getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
+    });
 
     async function saveEdit(val) {
       if (!val || !val.trim()) return;
       try {
         const updated = await window.ideaNote.sync.update(memo.id, val);
+        detachSuggester();
         state.editingId = null;
         upsertLocal(updated);
       } catch (err) {
@@ -683,6 +688,7 @@
       }
     }
     function cancelEdit() {
+      detachSuggester();
       state.editingId = null;
       renderList();
     }
@@ -817,6 +823,10 @@
     state.composer = window.MarkdownComposer(el.composer, {
       render: (text) => window.Md.renderWysiwyg(text),
       onCommit: async () => { await saveMemo(); }
+    });
+    // 标签联想：输入 # 或点击工具栏 # 后弹出待选标签，输入字符实时筛选
+    window.TagSuggester.attach(state.composer, {
+      getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
     });
     el.composer.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !e.isComposing) {
