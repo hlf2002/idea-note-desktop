@@ -1218,4 +1218,48 @@
   }
 
   document.addEventListener('DOMContentLoaded', init);
+
+  // ---------- 即时 tooltip（替代原生 title，hover 立即显示，无系统延迟） ----------
+  (function () {
+    var tipEl = document.createElement('div');
+    tipEl.className = 'ui-tooltip';
+    document.body.appendChild(tipEl);
+    var cur = null;
+
+    function showTip(el) {
+      var text = el.getAttribute('data-tip') || '';
+      if (!text) return;
+      tipEl.textContent = text;
+      tipEl.classList.add('show');
+      var r = el.getBoundingClientRect();
+      var tr = tipEl.getBoundingClientRect();
+      var left = r.left + r.width / 2 - tr.width / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tr.width - 8));
+      var top = r.top - tr.height - 8;
+      if (top < 8) top = r.bottom + 8; // 上方放不下时移到下方
+      tipEl.style.left = left + 'px';
+      tipEl.style.top = top + 'px';
+    }
+
+    function hideTip() {
+      tipEl.classList.remove('show');
+      cur = null;
+    }
+
+    // 事件委托：进入/切换 data-tip 元素立即显示；进入普通区域隐藏
+    document.addEventListener('mouseover', function (e) {
+      var t = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+      if (t) {
+        if (t !== cur) { cur = t; showTip(t); }
+      } else if (cur) {
+        hideTip();
+      }
+    });
+    // 移出窗口隐藏（mouseover 已覆盖元素间切换，这里兜底 relatedTarget 为 null）
+    document.addEventListener('mouseout', function (e) {
+      if (!e.relatedTarget && cur) hideTip();
+    });
+    window.addEventListener('resize', hideTip);
+    window.addEventListener('scroll', hideTip, true);
+  })();
 })();
