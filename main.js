@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, globalShortcut, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, globalShortcut, shell, nativeImage, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { initApp } = require('./app-core');
@@ -21,6 +21,33 @@ const DATA_DIR = () => app.getPath('userData');
 const AUTH_FILE = () => path.join(DATA_DIR(), 'auth.json');
 const CACHE_FILE = () => path.join(DATA_DIR(), 'idea-cache.json');
 const LEGACY_FILE = () => path.join(DATA_DIR(), 'flomo-local.json');
+const WIN_STATE_FILE = () => path.join(DATA_DIR(), 'window-state.json');
+
+// 窗口宽高持久化：关闭时保存，下次启动恢复（夹在 min 与屏幕 workArea 之间，防外接屏断开后窗口超出可视区）
+const MIN_W = 760;
+const MIN_H = 520;
+
+function loadWindowState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(WIN_STATE_FILE(), 'utf8'));
+    const w = Number(s.width);
+    const h = Number(s.height);
+    if (!Number.isFinite(w) || !Number.isFinite(h)) return null;
+    const wa = screen.getPrimaryDisplay().workArea;
+    return {
+      width: Math.round(Math.min(Math.max(wa.width, MIN_W), Math.max(MIN_W, w))),
+      height: Math.round(Math.min(Math.max(wa.height, MIN_H), Math.max(MIN_H, h)))
+    };
+  } catch (e) { return null; }
+}
+
+function saveWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const [width, height] = mainWindow.getSize();
+    fs.writeFileSync(WIN_STATE_FILE(), JSON.stringify({ width, height }));
+  } catch (e) { /* 忽略：保存失败不影响运行 */ }
+}
 
 // 应用图标（平台相关）：mac 用 macOS 版，Windows/Linux 用 Windows 版
 const APP_ICON = () => process.platform === 'darwin'
@@ -90,11 +117,12 @@ function migrateLegacyDataDir() {
 }
 
 function createWindow() {
+  const state = loadWindowState() || {};
   mainWindow = new BrowserWindow({
-    width: 1040,
-    height: 720,
-    minWidth: 760,
-    minHeight: 520,
+    width: state.width || 1040,
+    height: state.height || 720,
+    minWidth: MIN_W,
+    minHeight: MIN_H,
     title: '灵感笔记 · Q助理',
     backgroundColor: '#f4e9d3',
     show: false,
@@ -114,12 +142,20 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
 
-  // 点击关闭按钮 -> 隐藏到托盘（保持后台快速记录能力）
+  // 点击关闭按钮 -> 隐藏到托盘（保持后台快速记录能力）；隐藏/退出时保存窗口宽高
   mainWindow.on('close', (e) => {
+    saveWindowState();
     if (!isQuitting) {
       e.preventDefault();
       mainWindow.hide();
     }
+  });
+
+  // 调整大小时防抖保存窗口宽高（300ms）
+  let resizeTimer = null;
+  mainWindow.on('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(saveWindowState, 300);
   });
 
   // 外链统一交给系统浏览器打开
