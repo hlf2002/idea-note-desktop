@@ -14,6 +14,7 @@ function makeEl() {
     className: '',
     style: {},
     dataset: {},
+    offsetWidth: 0,
     _html: '',
     childNodes: [],
     parentNode: null,
@@ -61,17 +62,29 @@ const docEl = makeEl();
 const bodyEl = makeEl();
 bodyEl.appendChild = function (c) { c.parentNode = bodyEl; bodyEl.childNodes.push(c); return c; };
 bodyEl.removeChild = function (c) { const i = bodyEl.childNodes.indexOf(c); if (i >= 0) bodyEl.childNodes.splice(i, 1); return c; };
+const docListeners = {};
 globalThis.document = {
   createElement: () => makeEl(),
   body: bodyEl,
-  activeElement: null
+  activeElement: null,
+  addEventListener(t, fn) { (docListeners[t] = docListeners[t] || []).push(fn); },
+  removeEventListener(t, fn) { const arr = docListeners[t] || []; const i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1); }
 };
+// 可变的"光标矩形"：测试通过 setCaretRect 模拟光标位置（container 须在输入框内）
+let mockCaretRect = null;
 globalThis.window = {
   innerWidth: 1200,
   innerHeight: 800,
   addEventListener() {},
-  removeEventListener() {}
+  removeEventListener() {},
+  getSelection: () => (mockCaretRect
+    ? { rangeCount: 1, getRangeAt: () => ({ startContainer: mockCaretRect.container, getBoundingClientRect: () => mockCaretRect.rect }) }
+    : null),
+  requestAnimationFrame: (fn) => { setTimeout(fn, 0); return 1; }, // 异步执行，贴近真实 rAF 语义
+  cancelAnimationFrame() {}
 };
+function setCaretRect(rect, container) { mockCaretRect = { rect, container }; }
+function fireDoc(type, ev) { (docListeners[type] || []).forEach((fn) => fn(ev || {})); }
 
 const { attach } = require('../renderer/tagsuggest.js');
 
@@ -101,8 +114,8 @@ function fire(el, type, ev) {
 
 const ALL_TAGS = ['工作', '灵感', '读书计划'];
 
-// 每个测试前清空全局 body，避免浮层泄漏到下一个用例
-function resetBody() { bodyEl.childNodes.length = 0; }
+// 每个测试前清空全局 body 与光标模拟，避免状态泄漏到下一个用例
+function resetBody() { bodyEl.childNodes.length = 0; mockCaretRect = null; }
 
 test('attach: 无 # 输入不打开下拉', () => {
   resetBody();
@@ -220,6 +233,53 @@ test('attach: blur 后焦点移出（点击别处）关闭下拉', async () => {
   fire(composer.el, 'blur');
   await new Promise((r) => setTimeout(r, 150));
   assert.ok(box.classList.contains('hidden'), '焦点移出则关闭');
+});
+
+test('attach: 浮层定位在输入光标正下方', () => {
+  resetBody();
+  const composer = makeComposer('你好 #');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  // 模拟光标矩形：left=150 top=300 bottom=330
+  setCaretRect({ left: 150, top: 300, bottom: 330, width: 0, height: 0 }, composer.el);
+  fire(composer.el, 'input');
+  const box = bodyEl.childNodes[0];
+  assert.strictEqual(box.style.left, '150px', 'left 对齐光标');
+  assert.strictEqual(box.style.top, '334px', 'top 在光标下方 4px');
+});
+
+test('attach: 光标移动时浮层跟随（selectionchange）', async () => {
+  resetBody();
+  const composer = makeComposer('你好 #');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  setCaretRect({ left: 150, top: 300, bottom: 330, width: 0, height: 0 }, composer.el);
+  fire(composer.el, 'input');
+  const box = bodyEl.childNodes[0];
+  assert.strictEqual(box.style.left, '150px');
+  // 光标右移 → selectionchange → rAF 异步重定位
+  setCaretRect({ left: 260, top: 300, bottom: 330, width: 0, height: 0 }, composer.el);
+  fireDoc('selectionchange');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(box.style.left, '260px', '跟随光标移动');
+  setCaretRect({ left: 320, top: 340, bottom: 370, width: 0, height: 0 }, composer.el);
+  fireDoc('selectionchange');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(box.style.left, '320px');
+  assert.strictEqual(box.style.top, '374px', '光标换行后 top 跟随');
+});
+
+test('attach: 下拉关闭后 selectionchange 不重定位', async () => {
+  resetBody();
+  const composer = makeComposer('你好 #');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  setCaretRect({ left: 150, top: 300, bottom: 330, width: 0, height: 0 }, composer.el);
+  fire(composer.el, 'input');
+  const box = bodyEl.childNodes[0];
+  fire(composer.el, 'keydown', { key: 'Escape', preventDefault() {}, stopPropagation() {} });
+  assert.ok(box.classList.contains('hidden'));
+  setCaretRect({ left: 500, top: 100, bottom: 130, width: 0, height: 0 }, composer.el);
+  fireDoc('selectionchange');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(box.style.left, '150px', '关闭后位置不再更新');
 });
 
 test('attach: detach 移除浮层与监听', () => {

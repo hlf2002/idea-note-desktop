@@ -99,13 +99,31 @@
       return box;
     }
 
+    /** 光标（插入符）的视口矩形；无选区或选区不在输入框内时返回 null */
+    function caretRect() {
+      var sel = window.getSelection && window.getSelection();
+      if (!sel || !sel.rangeCount) return null;
+      var range = sel.getRangeAt(0);
+      if (!composer.el.contains(range.startContainer)) return null;
+      var r = range.getBoundingClientRect();
+      // 折叠光标时 width/height 可能为 0，但 left/top 有效；全 0 视为无效
+      if (!r || (r.left === 0 && r.top === 0 && r.width === 0 && r.height === 0)) return null;
+      return r;
+    }
+
+    /** 浮层定位：显示在输入光标正下方；光标矩形不可用时回退到输入框底部 */
     function position() {
       if (!box) return;
-      var r = composer.el.getBoundingClientRect();
-      if (!r || (!r.width && !r.height)) return;
-      box.style.left = Math.max(8, Math.min(r.left, window.innerWidth - box.offsetWidth - 8)) + 'px';
-      box.style.top = (r.bottom + 4) + 'px';
-      box.style.maxHeight = Math.max(120, window.innerHeight - (r.bottom + 4) - 12) + 'px';
+      var r = caretRect(); // 折叠光标宽高为 0 但 left/top 有效，caretRect 已过滤全 0 无效矩形
+      if (!r) {
+        r = composer.el.getBoundingClientRect();
+        if (!r || (!r.width && !r.height)) return;
+      }
+      var left = Math.max(8, Math.min(r.left, window.innerWidth - box.offsetWidth - 8));
+      var top = (r.bottom || r.top) + 4;
+      box.style.left = left + 'px';
+      box.style.top = top + 'px';
+      box.style.maxHeight = Math.max(120, window.innerHeight - top - 12) + 'px';
     }
 
     function render(list, emptyText) {
@@ -192,7 +210,16 @@
       }
     }
 
-    function onReposition() { if (box && !box.classList.contains('hidden')) position(); }
+    var rafId = null;
+    function onReposition() {
+      if (!box || box.classList.contains('hidden')) return;
+      if (rafId) return;
+      // selectionchange 高频触发，rAF 合并到每帧一次
+      rafId = window.requestAnimationFrame(function () {
+        rafId = null;
+        position();
+      });
+    }
 
     function onBlur() {
       // 延迟关闭：真实鼠标点击工具栏按钮时，输入框先失焦（blur 触发），
@@ -211,6 +238,8 @@
     composer.el.addEventListener('compositionend', refresh);
     composer.el.addEventListener('keydown', onKeydown, true); // 捕获阶段先于 composer 自身处理
     composer.el.addEventListener('blur', onBlur);
+    // 光标/选区变化（输入、方向键、鼠标点击）时跟随光标移动
+    document.addEventListener('selectionchange', onReposition);
     // 滚动（捕获，覆盖编辑器在滚动容器内的场景）与窗口缩放时重定位
     window.addEventListener('scroll', onReposition, true);
     window.addEventListener('resize', onReposition);
@@ -225,8 +254,10 @@
       composer.el.removeEventListener('compositionend', refresh);
       composer.el.removeEventListener('keydown', onKeydown, true);
       composer.el.removeEventListener('blur', onBlur);
+      document.removeEventListener('selectionchange', onReposition);
       window.removeEventListener('scroll', onReposition, true);
       window.removeEventListener('resize', onReposition);
+      if (rafId) { window.cancelAnimationFrame(rafId); rafId = null; }
       if (box && box.parentNode) box.parentNode.removeChild(box);
       box = null;
     };
