@@ -195,11 +195,14 @@
     function onReposition() { if (box && !box.classList.contains('hidden')) position(); }
 
     function onBlur() {
-      // 延迟关闭：给浮层 mousedown preventDefault 之后的 click 留出时间
+      // 延迟关闭：真实鼠标点击工具栏按钮时，输入框先失焦（blur 触发），
+      // 随后 click 才插入 # 并弹出下拉；延迟到 click 完成后检查——
+      // 焦点若已回到输入框（或浮层内）则保持打开，否则才关闭。
       setTimeout(function () {
         if (detached) return;
         if (!box || box.classList.contains('hidden')) return;
-        if (box.contains(document.activeElement)) return;
+        var ae = document.activeElement;
+        if (ae && (composer.el.contains(ae) || box.contains(ae))) return;
         close();
       }, 120);
     }

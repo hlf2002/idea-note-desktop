@@ -39,7 +39,10 @@ function makeEl() {
       }
       return [];
     },
-    contains() { return false; },
+    contains(node) {
+      if (node === el) return true; // 真实 DOM：element.contains(element) === true
+      return el.childNodes.some((c) => c === node || (c.contains && c.contains(node)));
+    },
     getBoundingClientRect() { return { left: 100, bottom: 200, width: 400, height: 80 }; }
   };
   // innerHTML 赋值模拟真实 DOM：清空子节点（render 依赖此行为重置内容）
@@ -189,6 +192,34 @@ test('attach: 标签数据为空时显示「暂无标签」空态', () => {
   fire(composer.el, 'input');
   const box = bodyEl.childNodes[0];
   assert.ok(box.childNodes.some((c) => c.className.indexOf('tag-suggest-empty') !== -1), '显示暂无标签');
+});
+
+test('attach: blur 后焦点回到输入框（工具栏按钮场景）不关闭下拉', async () => {
+  resetBody();
+  const composer = makeComposer('你好 ');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  composer._set('你好 #', 4);
+  fire(composer.el, 'input');
+  const box = bodyEl.childNodes[0];
+  assert.ok(!box.classList.contains('hidden'));
+  // 模拟点击工具栏按钮：blur 时 activeElement 暂为按钮，click 后回到输入框
+  globalThis.document.activeElement = composer.el;
+  fire(composer.el, 'blur');
+  await new Promise((r) => setTimeout(r, 150)); // 等待延迟关闭回调
+  assert.ok(!box.classList.contains('hidden'), '焦点回到输入框则保持打开');
+});
+
+test('attach: blur 后焦点移出（点击别处）关闭下拉', async () => {
+  resetBody();
+  const composer = makeComposer('你好 #');
+  attach(composer, { getTags: () => ALL_TAGS.slice() });
+  fire(composer.el, 'input');
+  const box = bodyEl.childNodes[0];
+  assert.ok(!box.classList.contains('hidden'));
+  globalThis.document.activeElement = bodyEl; // 焦点移到输入框外
+  fire(composer.el, 'blur');
+  await new Promise((r) => setTimeout(r, 150));
+  assert.ok(box.classList.contains('hidden'), '焦点移出则关闭');
 });
 
 test('attach: detach 移除浮层与监听', () => {
