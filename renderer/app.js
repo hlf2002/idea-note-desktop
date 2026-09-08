@@ -50,7 +50,6 @@
     heatmapGrid: $('#heatmap-grid'),
     heatmapTip: $('#heatmap-tip'),
     navAll: $('#nav-all'),
-    navWechat: $('#nav-wechat'),
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
@@ -955,7 +954,6 @@
       el.searchInput.value = '';
       renderAll();
     });
-    el.navWechat.addEventListener('click', () => showToast('微信输入 · 敬请期待'));
     el.navDaily.addEventListener('click', openRoam);
 
     // 热力图：hover 提示（日期 + 条数）+ 点击按天筛选
