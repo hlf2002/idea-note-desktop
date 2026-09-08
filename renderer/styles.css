@@ -552,6 +552,15 @@ html, body {
 .memo-content mark {
   background: #f2dfae; color: inherit; border-radius: 3px; padding: 0 1px;
 }
+/* 列表：全局 reset 清掉了 ol/ul 默认 padding，需恢复，否则数字/圆点贴到卡片边缘 */
+.memo-content ol,
+.memo-content ul {
+  margin: 6px 0;
+  padding-left: 24px;
+}
+.memo-content li {
+  margin: 2px 0;
+}
 
 /* 笔记图片缩略图（手机端上传，桌面只读展示；点击看大图） */
 .memo-images {
