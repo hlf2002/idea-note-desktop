@@ -90,15 +90,89 @@ class QzApi {
     const vTk = params.get('tk') || '';
     const expire = parseInt(params.get('expire') || '0', 10);
     if (!vToken || !vTk) {
-      throw new QzApiError('换取 H5 访问凭证失败（服务端未返回 Vue token，请重新登录）', res.status, { location });
+      // 换取失败 = 扩展端凭证已被服务端判死（跳回登录页）。统一抛 401 并打 authExpired 标记，
+      // 上层据此进入「自动重试 + 优雅降级」，不再让用户看到「请重新登录」的吓人文案。
+      const err = new QzApiError('登录凭证已失效', 401, { location, reason: 'h5_exchange_rejected' });
+      err.authExpired = true;
+      throw err;
     }
+    const ttlMs = expire > 0 ? expire * 1000 : 24 * 3600 * 1000;
     this._h5 = {
       uid: this.auth.uid,
       token: vToken,
       tk: vTk,
-      expiresAt: Date.now() + (expire > 0 ? expire * 1000 : 24 * 3600 * 1000)
+      ttlMs,
+      expiresAt: Date.now() + ttlMs
     };
     return this._h5;
+  }
+
+  /** 丢弃缓存的 Vue token，强制下次请求重新换取（鉴权失败自愈用） */
+  invalidateH5() {
+    this._h5 = null;
+  }
+
+  /**
+   * 主动保鲜：Vue token 剩余有效期不足 30% 时强制重换一次，
+   * 保证应用长时间运行时手里始终有新鲜 token，避免过期瞬间才被动刷新。
+   */
+  async ensureH5Fresh() {
+    if (!this.isAuthed) throw new QzApiError('未登录', 401);
+    if (!this._h5) return this.getH5Access();
+    const ttl = this._h5.ttlMs || 24 * 3600 * 1000;
+    const age = Date.now() - (this._h5.expiresAt - ttl);
+    if (age < ttl * 0.7) return this._h5;
+    this._h5 = null; // 已用掉 70% 以上寿命，主动重换
+    return this.getH5Access();
+  }
+
+  /** 后台保鲜定时器：应用运行期间每 intervalMs 主动刷新一次 Vue token */
+  startH5KeepAlive(intervalMs = 12 * 3600 * 1000) {
+    this.stopH5KeepAlive();
+    this._keepAliveTimer = setInterval(() => {
+      if (this.isAuthed) {
+        this.ensureH5Fresh().catch(() => { /* 单次保鲜失败不致命，下个周期再试 */ });
+      }
+    }, intervalMs);
+    if (this._keepAliveTimer.unref) this._keepAliveTimer.unref();
+  }
+
+  stopH5KeepAlive() {
+    if (this._keepAliveTimer) {
+      clearInterval(this._keepAliveTimer);
+      this._keepAliveTimer = null;
+    }
+  }
+
+  /**
+   * 鉴权探测：强制重换一次 Vue token，判断当前登录态是否还能通过服务端校验。
+   * @returns {Promise<{ok:boolean, reason?:string, code?:number}>}
+   */
+  async probeAuth() {
+    if (!this.isAuthed) return { ok: false, reason: 'no_auth' };
+    this._h5 = null;
+    try {
+      await this.getH5Access();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, reason: err && err.authExpired ? 'token_invalid' : 'network', code: err && err.code };
+    }
+  }
+
+  /**
+   * 鉴权失败自愈包装：业务接口返回 401（Vue token 被拒）时，
+   * 丢弃缓存 → 强制重换 → 重试一次；扩展端凭证被判死（authExpired）则不重试直接抛。
+   */
+  async _authRetryOnce(fn) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof QzApiError && err.code === 401 && !err.authExpired) {
+        this._h5 = null;
+        return fn();
+      }
+      throw err;
+    }
   }
 
   /** 灵感笔记 H5 接口所需的鉴权头（Vue token） */
@@ -159,26 +233,34 @@ class QzApi {
   // ---------- 灵感笔记（需登录，走 H5 Vue token） ----------
   /** 分页拉取灵感笔记列表 */
   async getIdeaList({ page = 1, pageSize = PAGE_SIZE, keyword } = {}) {
-    return this._request('GET', '/h5/idea_note/get_list', {
+    return this._authRetryOnce(async () => this._request('GET', '/h5/idea_note/get_list', {
       query: { page, page_size: pageSize, keyword: keyword || undefined },
       headers: await this._ideaHeaders()
-    });
+    }));
   }
 
   /** 新建/编辑灵感笔记；id 不传=新建，传=编辑 */
   async saveIdea({ id, content_json, plain_text, tags }) {
-    return this._request('POST', '/h5/idea_note/save', {
+    return this._authRetryOnce(async () => this._request('POST', '/h5/idea_note/save', {
       json: { id, content_json, plain_text, tags },
       headers: await this._ideaHeaders()
-    });
+    }));
   }
 
   /** 删除灵感笔记（软删除） */
   async deleteIdea(id) {
-    return this._request('POST', '/h5/idea_note/delete', {
+    return this._authRetryOnce(async () => this._request('POST', '/h5/idea_note/delete', {
       json: { id },
       headers: await this._ideaHeaders()
-    });
+    }));
+  }
+
+  /** 获取七牛上传凭证（H5 公共接口，返回 { token, domain, expired }） */
+  async getQiniuUploadToken(bucket = '') {
+    return this._authRetryOnce(async () => this._request('GET', '/h5/sys/get_qiniu_token', {
+      query: bucket ? { bucket } : undefined,
+      headers: await this._ideaHeaders()
+    }));
   }
 }
 

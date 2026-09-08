@@ -29,20 +29,53 @@ const APP_ICON = () => process.platform === 'darwin'
 
 // 旧版数据目录：应用改名/打包后 userData 路径可能变化（flomo-local → idea-note-local → 灵感笔记），
 // 首次启动把旧登录态/缓存/待导入数据迁移到当前目录，避免登录态丢失。
-// 仅复制「当前目录中不存在」的文件，绝不覆盖已有数据。
+// auth.json 取所有已知目录中「最新」的一份（当前缺失或较旧则补齐）；
+// 其余文件仅复制「当前目录中不存在」的，绝不覆盖已有数据。
 const OLD_DATA_DIRS = () => [
   path.join(app.getPath('appData'), 'flomo-local'),
-  path.join(app.getPath('appData'), 'idea-note-local')
+  path.join(app.getPath('appData'), 'idea-note-local'),
+  path.join(app.getPath('appData'), '灵感笔记')
 ];
 
 function migrateLegacyDataDir() {
   const nd = DATA_DIR();
+  try {
+    if (!fs.existsSync(nd)) fs.mkdirSync(nd, { recursive: true });
+  } catch (e) { /* 忽略 */ }
+
+  // auth.json：最新优先恢复（解决打包版/开发版登录态分裂导致的周期性要求重新登录）
+  const authDst = path.join(nd, 'auth.json');
+  let best = null;
+  for (const od of OLD_DATA_DIRS()) {
+    if (od === nd) continue;
+    const src = path.join(od, 'auth.json');
+    if (!fs.existsSync(src)) continue;
+    try {
+      const st = fs.statSync(src);
+      if (!best || st.mtimeMs > best.mtimeMs) best = { src, mtimeMs: st.mtimeMs };
+    } catch (e) { /* 忽略 */ }
+  }
+  if (best) {
+    let need = !fs.existsSync(authDst);
+    if (!need) {
+      try { need = fs.statSync(authDst).mtimeMs < best.mtimeMs; } catch (e) { need = true; }
+    }
+    if (need) {
+      try {
+        fs.copyFileSync(best.src, authDst);
+        console.log('[idea-note-local] 已恢复登录态: ' + best.src);
+      } catch (e) {
+        console.warn('[idea-note-local] 登录态恢复跳过: ' + e.message);
+      }
+    }
+  }
+
+  // 缓存/待导入数据：仅复制当前缺失的文件
   for (const od of OLD_DATA_DIRS()) {
     if (od === nd || !fs.existsSync(od)) continue;
     try {
-      if (!fs.existsSync(nd)) fs.mkdirSync(nd, { recursive: true });
       for (const f of fs.readdirSync(od)) {
-        if (!/^(auth|idea-cache|flomo-local)\.json(\.imported-.*)?$/.test(f)) continue;
+        if (!/^(idea-cache|flomo-local)\.json(\.imported-.*)?$/.test(f)) continue;
         const src = path.join(od, f);
         const dst = path.join(nd, f);
         if (fs.existsSync(src) && !fs.existsSync(dst)) {

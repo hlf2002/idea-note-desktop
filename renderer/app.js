@@ -772,10 +772,47 @@
     renderAll();
   }
 
+  // ---------- 同步失败处理：只提示 + 自动重试，绝不自动登出 ----------
+  // Electron IPC 序列化错误时自定义属性会丢失，鉴权类错误统一带 [AUTH] 前缀标记
+  function isAuthError(err) {
+    if (!err) return false;
+    if (err.code === 401) return true;
+    const msg = err.message || '';
+    return msg.indexOf('[AUTH]') >= 0 || msg.indexOf('登录凭证已失效') >= 0;
+  }
+
+  let authRetryTimer = null;
+  let authRetryAttempt = 0;
+  const AUTH_RETRY_DELAYS_MS = [30000, 120000, 300000]; // 30s / 2min / 5min
+
+  function cancelAuthRetry() {
+    if (authRetryTimer) {
+      clearTimeout(authRetryTimer);
+      authRetryTimer = null;
+    }
+    authRetryAttempt = 0;
+  }
+
+  /** 鉴权类失败：静默排队自动重试，恢复后自动回到在线状态 */
+  function scheduleAuthRetry() {
+    if (!state.authed) return;
+    const delay = AUTH_RETRY_DELAYS_MS[Math.min(authRetryAttempt, AUTH_RETRY_DELAYS_MS.length - 1)];
+    authRetryAttempt += 1;
+    clearTimeout(authRetryTimer);
+    authRetryTimer = setTimeout(async () => {
+      authRetryTimer = null;
+      authRetryAttempt = 0;
+      try {
+        await loadData(false);
+      } catch (e) { /* loadData 内部已处理 */ }
+    }, delay);
+  }
+
   function handleSyncError(err, fallback) {
-    if (err && err.code === 401) {
-      showToast('登录已失效，请重新登录');
-      setTimeout(() => { window.ideaNote.auth.logout().then(() => { showLogin(); startQr(); }); }, 800);
+    if (isAuthError(err)) {
+      // 只在首次失败时提示一次；后续自动重试保持静默
+      if (authRetryAttempt === 0) showToast('同步暂时中断，正在自动恢复…');
+      scheduleAuthRetry();
     } else {
       showToast((err && err.message) || fallback);
     }
@@ -795,6 +832,7 @@
       const memos = await window.ideaNote.sync.pull();
       state.memos = memos;
       renderAll();
+      cancelAuthRetry(); // 同步成功：清除自动重试
     } catch (err) {
       handleSyncError(err, '同步失败，正在展示本地缓存');
     }
