@@ -34,5 +34,16 @@ contextBridge.exposeInMainWorld('ideaNote', {
     onFocusInput: (cb) => {
       ipcRenderer.on('app:focus-input', () => cb());
     }
+  },
+  // 自动化升级
+  updater: {
+    getInfo: () => ipcRenderer.invoke('updater:getInfo'),
+    check: () => ipcRenderer.invoke('updater:check'),
+    download: () => ipcRenderer.invoke('updater:download'),
+    install: () => ipcRenderer.invoke('updater:install'),
+    // 订阅升级事件：{ event, ...payload }，event ∈ checking/available/not-available/downloading/downloaded/error
+    onStatus: (cb) => {
+      ipcRenderer.on('updater:event', (_e, payload) => cb(payload));
+    }
   }
 });

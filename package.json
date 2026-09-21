@@ -1,6 +1,6 @@
 {
   "name": "idea-note-local",
-  "version": "1.0.2",
+  "version": "1.1.1",
   "description": "本地版 灵感笔记 —— 极简卡片式记录桌面应用",
   "main": "main.js",
   "scripts": {
@@ -8,7 +8,10 @@
     "test": "node --test test/*.test.js",
     "build": "electron-builder",
     "build:mac": "electron-builder --mac",
-    "build:win": "electron-builder --win"
+    "build:win": "electron-builder --win",
+    "package": "bash scripts/release.sh --package",
+    "release": "bash scripts/release.sh",
+    "release:dry": "bash scripts/release.sh --dry-run"
   },
   "license": "MIT",
   "build": {
@@ -20,11 +23,16 @@
     "files": [
       "main.js",
       "app-core.js",
+      "updater.js",
       "preload.js",
       "renderer/**/*",
       "assets/**/*",
       "qz/**/*"
     ],
+    "publish": {
+      "provider": "generic",
+      "url": "https://ideanote.7373.com.cn/autoupdates/"
+    },
     "mac": {
       "icon": "build/icon.icns",
       "target": [
@@ -76,9 +84,11 @@
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "js-yaml": "^4.3.2"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "qrcode": "^1.5.4"
   }
 }

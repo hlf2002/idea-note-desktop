@@ -172,6 +172,19 @@
     </div>
   </div>
 
+  <!-- 自动更新提示条（登录/主视图通用，置顶悬浮） -->
+  <div id="update-bar" class="update-bar hidden">
+    <div class="update-bar-info">
+      <i class="fa-solid fa-circle-down update-bar-ico"></i>
+      <span id="update-text" class="update-text">…</span>
+      <span id="update-progress" class="update-progress hidden">0%</span>
+    </div>
+    <div class="update-bar-actions">
+      <button id="update-action" class="update-action hidden">下载更新</button>
+      <button id="update-close" class="update-close" title="忽略本次"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
   <!-- 轻提示 -->
   <div id="toast" class="toast hidden"></div>
 

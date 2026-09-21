@@ -1,0 +1,10 @@
+{
+  "repo": "hlf2002/idea-note-desktop",
+  "ssh": {
+    "host": "服务器公网 IP（ideanote.7373.com.cn 若被本地代理劫持需填 IP）",
+    "user": "root",
+    "port": 22,
+    "identity": "~/.ssh/id_ed25519",
+    "dir": "/var/www/ideanote/autoupdates/"
+  }
+}
