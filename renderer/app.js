@@ -258,6 +258,7 @@
         const btn = document.createElement('button');
         btn.className = 'tag-item' + (state.filter === 'tag' && state.tag === t.name ? ' active' : '');
         btn.dataset.tag = t.name;
+        btn.setAttribute('data-tip', t.count + ' 条笔记');
         const hash = document.createElement('span');
         hash.className = 'tag-hash';
         hash.textContent = '#';
