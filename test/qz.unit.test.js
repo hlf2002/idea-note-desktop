@@ -323,3 +323,167 @@ test('mapServerMemo: 字段映射', () => {
   assert.strictEqual(m.createdAt, 1000000);
   assert.strictEqual(m.updatedAt, 2000000);
 });
+
+// ---------- 令牌自愈 / 保鲜（api.js 新能力） ----------
+/** 换取失败：服务端直接跳登录页 */
+const LOGIN_LOCATION = 'https://www.qzhuli.cn/client_h5/?_h5=1788531617#/login';
+
+test('api: 业务接口 401 -> 强制重换 Vue token 并重试一次', async () => {
+  let ideaCalls = 0;
+  let jumpCount = 0;
+  const api = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url) => {
+      if (url.includes('/h5/jump/')) {
+        jumpCount += 1;
+        return { headers: { get: (k) => (k === 'location' ? VUE_LOCATION : null) }, status: 302 };
+      }
+      ideaCalls += 1;
+      if (ideaCalls === 1) {
+        return { json: async () => ({ code: 401, msg: 'token 失效', data: null }) };
+      }
+      return { json: async () => ({ code: 200, msg: 'ok', data: { list: [], has_more: false } }) };
+    }
+  });
+  api.setAuth({ uid: 'u1', token: 'tok1', tk: 'p_x' });
+  const r = await api.getIdeaList({});
+  assert.strictEqual(ideaCalls, 2, '第一次 401 后应自动重试');
+  assert.strictEqual(jumpCount, 2, '重试前应重新换取 Vue token');
+  assert.deepStrictEqual(r, { list: [], has_more: false });
+});
+
+test('api: 业务接口连续 401 -> 重试一次后仍抛 401', async () => {
+  let ideaCalls = 0;
+  const api = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url) => {
+      if (url.includes('/h5/jump/')) {
+        return { headers: { get: (k) => (k === 'location' ? VUE_LOCATION : null) }, status: 302 };
+      }
+      ideaCalls += 1;
+      return { json: async () => ({ code: 401, msg: 'token 失效', data: null }) };
+    }
+  });
+  api.setAuth({ uid: 'u1', token: 'tok1', tk: 'p_x' });
+  await assert.rejects(() => api.getIdeaList({}), (err) => {
+    assert.strictEqual(err.code, 401);
+    return true;
+  });
+  assert.strictEqual(ideaCalls, 2, '最多重试一次，不应无限重试');
+});
+
+test('api: 换取 Vue token 失败（跳登录页）-> 抛 401 + authExpired，且不重试', async () => {
+  let jumpCount = 0;
+  const api = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url) => {
+      if (url.includes('/h5/jump/')) {
+        jumpCount += 1;
+        return { headers: { get: (k) => (k === 'location' ? LOGIN_LOCATION : null) }, status: 302 };
+      }
+      throw new Error('不应调用业务接口');
+    }
+  });
+  api.setAuth({ uid: 'u1', token: 'dead', tk: 'p_x' });
+  await assert.rejects(() => api.getIdeaList({}), (err) => {
+    assert.strictEqual(err.code, 401);
+    assert.strictEqual(err.authExpired, true);
+    return true;
+  });
+  assert.strictEqual(jumpCount, 1, '凭证已判死，不应重复换取');
+});
+
+test('api: ensureH5Fresh 寿命<70% 不重换，>=70% 强制重换', async () => {
+  let jumpCount = 0;
+  const api = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url) => {
+      if (url.includes('/h5/jump/')) {
+        jumpCount += 1;
+        return { headers: { get: (k) => (k === 'location' ? VUE_LOCATION : null) }, status: 302 };
+      }
+      return { json: async () => ({ code: 200, msg: 'ok', data: {} }) };
+    }
+  });
+  api.setAuth({ uid: 'u1', token: 't', tk: 'p' });
+  await api.getH5Access();
+  assert.strictEqual(jumpCount, 1);
+  // 把剩余寿命压到 10%：应强制重换
+  const ttl = api._h5.ttlMs;
+  api._h5.expiresAt = Date.now() + ttl * 0.1;
+  await api.ensureH5Fresh();
+  assert.strictEqual(jumpCount, 2, '剩余寿命<30% 应强制重换');
+  // 刚换完，寿命充足：不应重换
+  await api.ensureH5Fresh();
+  assert.strictEqual(jumpCount, 2, '寿命充足不应重换');
+});
+
+test('api: invalidateH5 丢弃缓存后强制重换', async () => {
+  let jumpCount = 0;
+  const api = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url) => {
+      if (url.includes('/h5/jump/')) {
+        jumpCount += 1;
+        return { headers: { get: (k) => (k === 'location' ? VUE_LOCATION : null) }, status: 302 };
+      }
+      return { json: async () => ({ code: 200, msg: 'ok', data: { list: [], has_more: false } }) };
+    }
+  });
+  api.setAuth({ uid: 'u1', token: 't', tk: 'p' });
+  await api.getH5Access();
+  assert.ok(api._h5);
+  api.invalidateH5();
+  assert.strictEqual(api._h5, null);
+  await api.getIdeaList({});
+  assert.strictEqual(jumpCount, 2, '缓存失效后应重新换取');
+});
+
+test('api: probeAuth 区分有效 / 判死 / 未登录', async () => {
+  const valid = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url) => ({ headers: { get: (k) => (k === 'location' ? VUE_LOCATION : null) }, status: 302 })
+  });
+  valid.setAuth({ uid: 'u1', token: 't', tk: 'p' });
+  assert.deepStrictEqual(await valid.probeAuth(), { ok: true });
+
+  const invalid = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async () => ({ headers: { get: () => LOGIN_LOCATION }, status: 302 })
+  });
+  invalid.setAuth({ uid: 'u1', token: 'dead', tk: 'p' });
+  const r = await invalid.probeAuth();
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'token_invalid');
+
+  const noAuth = new QzApi({ baseUrl: 'https://mock.qzhuli.com' });
+  const r2 = await noAuth.probeAuth();
+  assert.strictEqual(r2.ok, false);
+  assert.strictEqual(r2.reason, 'no_auth');
+});
+
+test('api: startH5KeepAlive 周期保鲜，stop 后停止', async () => {
+  let jumpCount = 0;
+  // expire=1 秒：token 寿命短，保鲜阈值（70%）很快触发
+  const SHORT_LOCATION = 'https://www.qzhuli.cn/client_h5/#/app_auth/idea_note?uid=u1&token=v1&expire=1&tk=t1';
+  const api = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url) => {
+      if (url.includes('/h5/jump/')) {
+        jumpCount += 1;
+        return { headers: { get: (k) => (k === 'location' ? SHORT_LOCATION : null) }, status: 302 };
+      }
+      return { json: async () => ({ code: 200, msg: 'ok', data: {} }) };
+    }
+  });
+  api.setAuth({ uid: 'u1', token: 't', tk: 'p' });
+  await api.getH5Access();
+  assert.strictEqual(jumpCount, 1);
+  api.startH5KeepAlive(20); // 20ms 检查一次保鲜
+  await new Promise((r) => setTimeout(r, 2100)); // 覆盖 2 个 1s 生命周期
+  api.stopH5KeepAlive();
+  const after = jumpCount;
+  assert.ok(after >= 3, '保鲜应多次触发重换（实际 ' + after + ' 次）');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.strictEqual(jumpCount, after, 'stop 后不应再重换');
+});

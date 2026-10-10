@@ -235,9 +235,10 @@ html, body {
 /* 侧边栏底部 */
 .sidebar-footer { padding-top: 8px; }
 .footer-link {
-  width: 100%; padding: 6px 16px; border: none; background: transparent;
+  display: block; width: 100%; padding: 6px 16px; border: none; background: transparent;
   font-size: 12px; color: var(--muted); cursor: pointer; text-align: left;
   border-radius: 6px; transition: background .12s, color .12s;
+  text-decoration: none;
 }
 .footer-link:hover { background: #ecdfc4; color: #6b5942; }
 .logout-link:hover { color: var(--red); background: var(--red-soft); }
@@ -825,4 +826,27 @@ html, body {
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, -8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* 即时 tooltip（替代原生 title，hover 立即显示） */
+.ui-tooltip {
+  position: fixed;
+  left: 0; top: 0;
+  background: rgba(40,28,18,0.95);
+  color: #f7ecdc;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 500;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.18);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.ui-tooltip.show {
+  opacity: 1;
+  transform: translateY(0);
 }

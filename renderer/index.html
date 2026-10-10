@@ -42,7 +42,7 @@
       <div class="user-bar">
         <div class="user-menu" id="user-menu">
           <div class="user-menu-backdrop" id="user-menu-backdrop"></div>
-          <button class="user-menu-btn" id="user-menu-btn" title="账户菜单">
+          <button class="user-menu-btn" id="user-menu-btn" data-tip="账户菜单">
             <span class="avatar-wrap">
               <img id="user-avatar" class="user-avatar" alt="头像" />
             </span>
@@ -59,7 +59,7 @@
             </button>
           </div>
         </div>
-        <button id="sync-refresh" class="icon-btn" title="刷新同步"><i class="fa-solid fa-arrows-rotate"></i></button>
+        <button id="sync-refresh" class="icon-btn" data-tip="刷新同步"><i class="fa-solid fa-arrows-rotate"></i></button>
       </div>
 
       <!-- 统计 -->
@@ -80,9 +80,6 @@
         <button id="nav-all" class="nav-item active">
           <i class="fa-solid fa-list-ul nav-ico"></i><span>全部笔记</span>
         </button>
-        <button id="nav-wechat" class="nav-item">
-          <i class="fa-brands fa-weixin nav-ico"></i><span>微信输入</span>
-        </button>
         <button id="nav-daily" class="nav-item">
           <i class="fa-solid fa-rotate-left nav-ico"></i><span>每日回顾</span>
         </button>
@@ -101,6 +98,7 @@
         <button id="open-data-path" class="footer-link" title="打开数据目录">数据文件 · 打开目录</button>
         <button id="check-update" class="footer-link" title="检查更新">检查更新</button>
         <span id="footer-version" class="footer-version"></span>
+        <a id="open-website" class="footer-link" href="https://ideanote.7373.com.cn/" target="_blank" data-tip="灵感笔记官网">笔记数据存在Q助理，AI可调用</a>
       </div>
     </aside>
 
@@ -116,7 +114,7 @@
             <input id="search-input" type="text" placeholder="搜索笔记" spellcheck="false" />
             <span class="search-kbd">⌘K</span>
           </div>
-          <button id="btn-filter" class="icon-btn filter-btn" title="筛选"><i class="fa-solid fa-filter"></i></button>
+          <button id="btn-filter" class="icon-btn filter-btn" data-tip="筛选"><i class="fa-solid fa-filter"></i></button>
         </div>
       </header>
 
@@ -128,16 +126,16 @@
                  data-placeholder="现在的想法是…"></div>
             <div class="composer-toolbar">
               <div class="toolbar-left">
-                <button id="tb-tag" class="tool-btn" title="标签"><i class="fa-solid fa-hashtag"></i></button>
-                <button id="tb-image" class="tool-btn" title="图片"><i class="fa-regular fa-image"></i></button>
+                <button id="tb-tag" class="tool-btn" data-tip="标签"><i class="fa-solid fa-hashtag"></i></button>
+                <button id="tb-image" class="tool-btn" data-tip="图片"><i class="fa-regular fa-image"></i></button>
                 <div class="tool-divider"></div>
-                <button id="tb-font" class="tool-btn font-btn" title="字体">Aa</button>
-                <button id="tb-ul" class="tool-btn" title="无序列表"><i class="fa-solid fa-list"></i></button>
-                <button id="tb-ol" class="tool-btn" title="有序列表"><i class="fa-solid fa-list-ol"></i></button>
+                <button id="tb-font" class="tool-btn font-btn" data-tip="字体">Aa</button>
+                <button id="tb-ul" class="tool-btn" data-tip="无序列表"><i class="fa-solid fa-list"></i></button>
+                <button id="tb-ol" class="tool-btn" data-tip="有序列表"><i class="fa-solid fa-list-ol"></i></button>
                 <div class="tool-divider"></div>
-                <button id="tb-at" class="tool-btn" title="@"><i class="fa-solid fa-at"></i></button>
+                <button id="tb-at" class="tool-btn" data-tip="@"><i class="fa-solid fa-at"></i></button>
               </div>
-              <button id="composer-send" class="composer-send" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
+              <button id="composer-send" class="composer-send" data-tip="发送 · ⌘/⇧+Enter"><i class="fa-solid fa-paper-plane"></i></button>
             </div>
           </div>
         </div>
@@ -169,7 +167,7 @@
 
   <!-- 随机漫游遮罩 -->
   <div id="roam-mask" class="roam-mask hidden">
-    <button class="roam-close" title="关闭">×</button>
+    <button class="roam-close" data-tip="关闭">×</button>
     <div class="roam-card">
       <div id="roam-date" class="roam-date"></div>
       <div id="roam-content" class="roam-content"></div>

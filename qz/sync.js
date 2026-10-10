@@ -63,11 +63,12 @@ class IdeaSync {
   }
 
   /** 新建：文本 -> 灵感笔记，返回本地 memo 结构 */
-  async createFromText(text) {
+  async createFromText(text, imageUrl = '') {
     const saved = await this.api.saveIdea({
       content_json: textToContentJson(text),
       plain_text: text,
-      tags: extractServerTags(text)
+      tags: extractServerTags(text),
+      image_url: imageUrl
     });
     const memo = mapServerMemo(saved);
     this._upsertCache(memo);
@@ -75,12 +76,13 @@ class IdeaSync {
   }
 
   /** 编辑：按服务端 id 更新，返回更新后的 memo */
-  async update(id, text) {
+  async update(id, text, imageUrl = '') {
     const saved = await this.api.saveIdea({
       id,
       content_json: textToContentJson(text),
       plain_text: text,
-      tags: extractServerTags(text)
+      tags: extractServerTags(text),
+      image_url: imageUrl
     });
     const memo = mapServerMemo(saved);
     this._upsertCache(memo);

@@ -50,11 +50,9 @@
     heatmapGrid: $('#heatmap-grid'),
     heatmapTip: $('#heatmap-tip'),
     navAll: $('#nav-all'),
-    navWechat: $('#nav-wechat'),
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
-    openDataPath: $('#open-data-path'),
     searchInput: $('#search-input'),
     btnFilter: $('#btn-filter'),
     composer: $('#composer'),
@@ -847,10 +845,47 @@
     renderAll();
   }
 
+  // ---------- 同步失败处理：只提示 + 自动重试，绝不自动登出 ----------
+  // Electron IPC 序列化错误时自定义属性会丢失，鉴权类错误统一带 [AUTH] 前缀标记
+  function isAuthError(err) {
+    if (!err) return false;
+    if (err.code === 401) return true;
+    const msg = err.message || '';
+    return msg.indexOf('[AUTH]') >= 0 || msg.indexOf('登录凭证已失效') >= 0;
+  }
+
+  let authRetryTimer = null;
+  let authRetryAttempt = 0;
+  const AUTH_RETRY_DELAYS_MS = [30000, 120000, 300000]; // 30s / 2min / 5min
+
+  function cancelAuthRetry() {
+    if (authRetryTimer) {
+      clearTimeout(authRetryTimer);
+      authRetryTimer = null;
+    }
+    authRetryAttempt = 0;
+  }
+
+  /** 鉴权类失败：静默排队自动重试，恢复后自动回到在线状态 */
+  function scheduleAuthRetry() {
+    if (!state.authed) return;
+    const delay = AUTH_RETRY_DELAYS_MS[Math.min(authRetryAttempt, AUTH_RETRY_DELAYS_MS.length - 1)];
+    authRetryAttempt += 1;
+    clearTimeout(authRetryTimer);
+    authRetryTimer = setTimeout(async () => {
+      authRetryTimer = null;
+      authRetryAttempt = 0;
+      try {
+        await loadData(false);
+      } catch (e) { /* loadData 内部已处理 */ }
+    }, delay);
+  }
+
   function handleSyncError(err, fallback) {
-    if (err && err.code === 401) {
-      showToast('登录已失效，请重新登录');
-      setTimeout(() => { window.ideaNote.auth.logout().then(() => { showLogin(); startQr(); }); }, 800);
+    if (isAuthError(err)) {
+      // 只在首次失败时提示一次；后续自动重试保持静默
+      if (authRetryAttempt === 0) showToast('同步暂时中断，正在自动恢复…');
+      scheduleAuthRetry();
     } else {
       showToast((err && err.message) || fallback);
     }
@@ -870,6 +905,7 @@
       const memos = await window.ideaNote.sync.pull();
       state.memos = memos;
       renderAll();
+      cancelAuthRetry(); // 同步成功：清除自动重试
     } catch (err) {
       handleSyncError(err, '同步失败，正在展示本地缓存');
     }
@@ -992,7 +1028,6 @@
       el.searchInput.value = '';
       renderAll();
     });
-    el.navWechat.addEventListener('click', () => showToast('微信输入 · 敬请期待'));
     el.navDaily.addEventListener('click', openRoam);
 
     // 热力图：hover 提示（日期 + 条数）+ 点击按天筛选
@@ -1283,4 +1318,48 @@
   }
 
   document.addEventListener('DOMContentLoaded', init);
+
+  // ---------- 即时 tooltip（替代原生 title，hover 立即显示，无系统延迟） ----------
+  (function () {
+    var tipEl = document.createElement('div');
+    tipEl.className = 'ui-tooltip';
+    document.body.appendChild(tipEl);
+    var cur = null;
+
+    function showTip(el) {
+      var text = el.getAttribute('data-tip') || '';
+      if (!text) return;
+      tipEl.textContent = text;
+      tipEl.classList.add('show');
+      var r = el.getBoundingClientRect();
+      var tr = tipEl.getBoundingClientRect();
+      var left = r.left + r.width / 2 - tr.width / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tr.width - 8));
+      var top = r.top - tr.height - 8;
+      if (top < 8) top = r.bottom + 8; // 上方放不下时移到下方
+      tipEl.style.left = left + 'px';
+      tipEl.style.top = top + 'px';
+    }
+
+    function hideTip() {
+      tipEl.classList.remove('show');
+      cur = null;
+    }
+
+    // 事件委托：进入/切换 data-tip 元素立即显示；进入普通区域隐藏
+    document.addEventListener('mouseover', function (e) {
+      var t = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+      if (t) {
+        if (t !== cur) { cur = t; showTip(t); }
+      } else if (cur) {
+        hideTip();
+      }
+    });
+    // 移出窗口隐藏（mouseover 已覆盖元素间切换，这里兜底 relatedTarget 为 null）
+    document.addEventListener('mouseout', function (e) {
+      if (!e.relatedTarget && cur) hideTip();
+    });
+    window.addEventListener('resize', hideTip);
+    window.addEventListener('scroll', hideTip, true);
+  })();
 })();
