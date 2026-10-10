@@ -53,6 +53,7 @@
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
+    openDataPath: $('#open-data-path'),
     searchInput: $('#search-input'),
     btnFilter: $('#btn-filter'),
     composer: $('#composer'),
@@ -1183,6 +1184,9 @@
         el.legacyImport.textContent = '立即导入';
       }
     });
+
+    // 数据目录
+    el.openDataPath.addEventListener('click', () => window.ideaNote.app.openDataPath());
 
     // 检查更新（手动）
     el.checkUpdate.addEventListener('click', async () => {

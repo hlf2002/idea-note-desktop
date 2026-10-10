@@ -88,22 +88,31 @@ idea-note-desktop/
 - 大文件（dmg / zip / blockmap）→ GitHub Release（https://github.com/hlf2002/idea-note-desktop/releases）
 - 更新清单 `latest-mac.yml` → 阿里云服务器 `https://ideanote.7373.com.cn/autoupdates/`（服务器路径 `/var/www/ideanote/autoupdates/`）
 
-发布（一条命令，脚本 `scripts/release.sh`）：
+发布步骤（以 v1.1.1 为例）：
 
-```bash
-cp .release.config.example.json .release.config.json   # 首次：填服务器 IP/用户/密钥
-npm run release:dry                                    # 预检 + 生成清单，不做任何改动
-npm run release -- patch                               # 或 minor / major / 1.2.3
-```
+1. 修改 `package.json` 的 `version`（必须递增，semver）
+2. 执行 `npm run build`（mac）或 `npm run build:win`（Windows），产物在 `dist/`
+3. 上传安装包到 GitHub Release（**用 ASCII 文件名**，避免 URL 编码问题）：
+   ```bash
+   gh release create v1.1.1 --title "灵感笔记 v1.1.1"
+   gh release upload v1.1.1 \
+     dist/灵感笔记-1.1.1-arm64-mac.zip#idea-note-1.1.1-arm64-mac.zip \
+     dist/灵感笔记-1.1.1-arm64-mac.zip.blockmap#idea-note-1.1.1-arm64-mac.zip.blockmap \
+     dist/灵感笔记-1.1.1-mac.zip#idea-note-1.1.1-mac.zip \
+     dist/灵感笔记-1.1.1-mac.zip.blockmap#idea-note-1.1.1-mac.zip.blockmap \
+     dist/灵感笔记-1.1.1-arm64.dmg#idea-note-1.1.1-arm64.dmg \
+     dist/灵感笔记-1.1.1.dmg#idea-note-1.1.1.dmg
+   ```
+   > 注意：`gh release upload` 的 `#` 重命名语法对含中文路径可能失效，如遇资产名异常（如少了前缀），改用 ASCII 临时文件名上传。
+4. 修改 `dist/latest-mac.yml`：把 `files[].url` 改为 GitHub Release 的完整 URL，例如：
+   ```yaml
+   - url: https://github.com/hlf2002/idea-note-desktop/releases/download/v1.1.1/idea-note-1.1.1-arm64-mac.zip
+   ```
+   （`path`、`sha512`、`size` 保持构建产物原样）
+5. 把修改后的 `latest-mac.yml` 上传到服务器 `/var/www/ideanote/autoupdates/`（本机无 SSH 时可用阿里云云助手 `SendFile` / `RunCommand` + base64 写入）
+6. 验证：`curl https://ideanote.7373.com.cn/autoupdates/latest-mac.yml` 返回新版本清单，且其中 URL 可下载（HTTP 200）
 
-脚本依次完成：预检（gh 登录与仓库 push 权限、工作区干净、Node 20+）→ `npm version` 递增版本号并提交打 tag → `npm test` → `electron-builder --mac`（arm64 + x64）→ 产物收齐并改名为 ASCII → push 分支与 tag → `gh release create/upload` → 用 YAML 解析重写 `latest-mac.yml`（`files[].url` 指向 GitHub Release 绝对地址）→ 逐条 curl 验证资产可下载 → scp 清单到服务器（先传 `.tmp` 再原子 `mv`）→ 校验远端 sha256 与线上清单版本号。
-
-- 版本号必须递增（semver），否则不触发升级；`SKIP_TESTS=1 npm run release` 可跳过单测
-- 各步骤可重入：Release 已存在会补传资产，清单整体覆盖
-- 同一版本号重复打包的产物 sha512 会变（构建不确定），所以**清单必须和当次构建的产物成对发布**，不要混用旧资产
-- **不要手工编辑 `dist/latest-mac.yml`**：逐行改缩进很容易把 `sha512` / `size` 并进 url 字符串，产生 electron-updater 解析不了的清单。只重生成部署清单时跑 `npm run release:dry`（产物在 `dist/release/latest-mac.yml`）；只本地打包跑 `npm run package`（产物在 `dist/package/`）
-- 无法直连服务器时（例如只能走阿里云云助手）：让脚本跑完后，手动把 `dist/deploy/latest-mac.yml` 写到 `/var/www/ideanote/autoupdates/`，再 `curl https://ideanote.7373.com.cn/autoupdates/latest-mac.yml` 确认版本号
-- Windows 包在 macOS 上打需要 Wine，通常仍单独执行 `npm run build:win` 后手工上传
+> 版本号必须递增（semver），否则不会触发升级。
 
 ### 配置更新服务器地址
 
