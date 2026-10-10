@@ -538,7 +538,7 @@ html, body {
 .memo-menu button.danger { color: var(--red); }
 .memo-menu button.danger:hover { background: var(--red-soft); }
 
-.memo-content { color: #5d4430; font-size: 15px; line-height: 1.7; }
+.memo-content { color: #5d4430; font-size: 15px; line-height: 1.7; white-space: pre-wrap; }
 .memo-content p { margin: 0 0 6px; }
 .memo-content p:last-child { margin-bottom: 0; }
 .memo-content a { color: var(--green); text-decoration: none; }
@@ -711,7 +711,7 @@ html, body {
   to { opacity: 1; transform: none; }
 }
 .roam-date { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
-.roam-content { font-size: 19px; line-height: 1.85; color: #5d4430; }
+.roam-content { font-size: 19px; line-height: 1.85; color: #5d4430; white-space: pre-wrap; }
 .roam-content p { margin: 0 0 10px; }
 .roam-content a { color: var(--green); }
 .roam-content code { background: #efe3c9; padding: 1px 5px; border-radius: 5px; font-size: 15px; }
