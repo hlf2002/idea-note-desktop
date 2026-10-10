@@ -258,13 +258,15 @@
         const btn = document.createElement('button');
         btn.className = 'tag-item' + (state.filter === 'tag' && state.tag === t.name ? ' active' : '');
         btn.dataset.tag = t.name;
-        btn.setAttribute('data-tip', t.count + ' 条笔记');
         const hash = document.createElement('span');
         hash.className = 'tag-hash';
         hash.textContent = '#';
         const name = document.createElement('span');
         name.textContent = t.name;
-        btn.appendChild(hash); btn.appendChild(name);
+        const count = document.createElement('span');
+        count.className = 'tag-count';
+        count.textContent = t.count;
+        btn.appendChild(hash); btn.appendChild(name); btn.appendChild(count);
         li.appendChild(btn);
         el.tagList.appendChild(li);
       });

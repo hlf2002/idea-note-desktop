@@ -217,6 +217,23 @@ html, body {
 .tag-item:hover { background: #ecdfc4; }
 .tag-item.active { color: var(--green); font-weight: 600; background: transparent; }
 .tag-hash { color: var(--muted); }
+/* 标签数量徽标：右对齐，行内小圆角标签 */
+.tag-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-width: 20px;
+  text-align: center;
+  background: #efe3c9;
+  color: #8a7358;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  font-variant-numeric: tabular-nums;
+}
+.tag-item:hover .tag-count { background: #e3d2af; }
+.tag-item.active .tag-count { background: #f3e6cf; color: var(--green); }
 
 .tag-bottom {
   margin-top: 10px; padding-top: 10px;
