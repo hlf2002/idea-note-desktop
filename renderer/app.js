@@ -263,7 +263,10 @@
         hash.textContent = '#';
         const name = document.createElement('span');
         name.textContent = t.name;
-        btn.appendChild(hash); btn.appendChild(name);
+        const count = document.createElement('span');
+        count.className = 'tag-count';
+        count.textContent = t.count;
+        btn.appendChild(hash); btn.appendChild(name); btn.appendChild(count);
         li.appendChild(btn);
         el.tagList.appendChild(li);
       });
