@@ -73,7 +73,14 @@
     roamDate: $('#roam-date'),
     roamContent: $('#roam-content'),
     roamNext: $('#roam-next'),
-    toast: $('#toast')
+    toast: $('#toast'),
+    checkUpdate: $('#check-update'),
+    footerVersion: $('#footer-version'),
+    updateBar: $('#update-bar'),
+    updateText: $('#update-text'),
+    updateProgress: $('#update-progress'),
+    updateAction: $('#update-action'),
+    updateClose: $('#update-close')
   };
 
   // ---------- 工具 ----------
@@ -757,6 +764,74 @@
     el.roamMask.classList.add('hidden');
   }
 
+  // ---------- 自动更新 ----------
+  // 更新状态：getInfo 快照 + 实时事件（updater:event）
+  const updaterInfo = { enabled: false, currentVersion: '', autoDownload: true };
+  let updateDismissedVersion = null;  // 用户忽略的版本号（不再重复提示）
+  let updateShownVersion = null;      // 更新条当前展示的版本
+  let updateActionMode = null;        // 'download' | 'restart'
+
+  function showUpdateBar(text, mode) {
+    el.updateBar.classList.remove('hidden');
+    el.updateText.textContent = text;
+    if (mode) {
+      updateActionMode = mode;
+      el.updateAction.classList.remove('hidden');
+      el.updateAction.textContent = (mode === 'restart') ? '重启并安装' : '下载更新';
+    } else {
+      updateActionMode = null;
+      el.updateAction.classList.add('hidden');
+    }
+  }
+
+  function hideUpdateBar() {
+    el.updateBar.classList.add('hidden');
+    el.updateProgress.classList.add('hidden');
+    el.updateAction.classList.add('hidden');
+    updateActionMode = null;
+  }
+
+  function handleUpdateEvent(payload) {
+    const ev = payload && payload.event;
+    if (ev === 'checking') {
+      if (payload.manual) showToast('正在检查更新…');
+    } else if (ev === 'available') {
+      if (payload.version && payload.version === updateDismissedVersion) return;
+      if (payload.version && payload.version === updaterInfo.currentVersion) return; // 防御：版本未变
+      updateShownVersion = payload.version;
+      showUpdateBar('发现新版本 v' + payload.version,
+        updaterInfo.autoDownload ? null : 'download');
+    } else if (ev === 'downloading') {
+      el.updateBar.classList.remove('hidden');
+      el.updateText.textContent = '正在下载更新…';
+      el.updateAction.classList.add('hidden');
+      el.updateProgress.classList.remove('hidden');
+      el.updateProgress.textContent = (payload.percent || 0) + '%';
+    } else if (ev === 'downloaded') {
+      updateShownVersion = payload.version;
+      el.updateBar.classList.remove('hidden');
+      el.updateText.textContent = '新版本 v' + (payload.version || '') + ' 已就绪';
+      el.updateProgress.classList.add('hidden');
+      showUpdateBar('新版本已就绪，重启后生效', 'restart');
+    } else if (ev === 'not-available') {
+      if (payload.manual) showToast('已是最新版本');
+    } else if (ev === 'error') {
+      hideUpdateBar();
+      showToast('更新失败：' + (payload.message || '网络异常，请稍后再试'));
+    }
+  }
+
+  async function initUpdaterUi() {
+    try {
+      const info = await window.ideaNote.updater.getInfo();
+      updaterInfo.enabled = !!info.enabled;
+      updaterInfo.currentVersion = info.currentVersion || '';
+      updaterInfo.autoDownload = info.autoDownload !== false;
+      el.footerVersion.textContent = 'v' + updaterInfo.currentVersion;
+    } catch (e) { /* 老版本 preload 无 updater 接口时静默降级 */ }
+    window.ideaNote.updater.onStatus(handleUpdateEvent);
+  }
+
   // ---------- 同步操作 ----------
   function upsertLocal(memo) {
     const idx = state.memos.findIndex((m) => m.id === memo.id);
@@ -1077,6 +1152,33 @@
     // 数据目录
     el.openDataPath.addEventListener('click', () => window.ideaNote.app.openDataPath());
 
+    // 检查更新（手动）
+    el.checkUpdate.addEventListener('click', async () => {
+      try {
+        const r = await window.ideaNote.updater.check();
+        if (!r || !r.ok) showToast((r && r.message) || '检查更新失败');
+        else if (r.message) showToast(r.message);
+      } catch (e) {
+        showToast('检查更新失败');
+      }
+    });
+    // 更新条操作：下载更新 / 重启并安装
+    el.updateAction.addEventListener('click', async () => {
+      try {
+        const r = updateActionMode === 'restart'
+          ? await window.ideaNote.updater.install()
+          : await window.ideaNote.updater.download();
+        if (!r || !r.ok) showToast((r && r.message) || '操作失败，请重试');
+      } catch (e) {
+        showToast('操作失败，请重试');
+      }
+    });
+    // 忽略本次更新
+    el.updateClose.addEventListener('click', () => {
+      if (updateShownVersion) updateDismissedVersion = updateShownVersion;
+      hideUpdateBar();
+    });
+
     // 全局快捷键/托盘唤起
     window.ideaNote.app.onFocusInput(() => {
       if (!document.hidden && state.authed) {
@@ -1164,6 +1266,7 @@
   // ---------- 启动 ----------
   async function init() {
     bindEvents();
+    initUpdaterUi();
     let user = null;
     try {
       user = await window.ideaNote.auth.get();

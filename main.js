@@ -11,6 +11,7 @@ const { app, BrowserWindow, Tray, Menu, globalShortcut, shell, nativeImage } = r
 const path = require('path');
 const fs = require('fs');
 const { initApp } = require('./app-core');
+const { initUpdater } = require('./updater');
 
 let mainWindow = null;
 let tray = null;
@@ -164,6 +165,13 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   registerGlobalShortcut();
+
+  // 自动化升级：启动后自动检查、后台下载、就绪后提示重启安装（打包版生效）
+  initUpdater({
+    dataDir: DATA_DIR(),
+    getWindow: () => mainWindow,
+    onBeforeInstall: () => { isQuitting = true; } // 放行关闭到托盘逻辑，确保能正常退出安装
+  });
 
   app.on('activate', () => {
     // macOS dock 图标点击恢复

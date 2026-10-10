@@ -241,6 +241,12 @@ html, body {
 }
 .footer-link:hover { background: #ecdfc4; color: #6b5942; }
 .logout-link:hover { color: var(--red); background: var(--red-soft); }
+.footer-version {
+  display: block;
+  padding: 6px 16px 2px;
+  font-size: 11px; color: #b3a08a;
+  user-select: text;
+}
 
 /* ===== 主区域 ===== */
 .main {
@@ -769,6 +775,44 @@ html, body {
   width: 240px; font-size: 13px; color: var(--muted); line-height: 2;
 }
 .login-steps b { color: #5d4430; }
+
+/* ===== 自动更新提示条 ===== */
+.update-bar {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 250;
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  min-width: 320px; max-width: 520px;
+  padding: 9px 12px 9px 16px;
+  background: #fbf7ee;
+  border: 1px solid #e0d2b6;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(93, 68, 48, 0.18);
+  font-size: 13px; color: #5d4430;
+  -webkit-app-region: no-drag;   /* 悬浮条不参与窗口拖拽 */
+  animation: update-in .25s ease;
+}
+@keyframes update-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.update-bar-info { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.update-bar-ico { color: var(--green); font-size: 15px; }
+.update-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.update-progress { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.update-bar-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.update-action {
+  border: none; cursor: pointer;
+  background: var(--green); color: #fff;
+  border-radius: 8px; padding: 5px 14px;
+  font-size: 12.5px; transition: background .15s;
+}
+.update-action:hover { background: var(--green-hover); }
+.update-close {
+  border: none; cursor: pointer; background: transparent;
+  color: var(--muted); font-size: 13px; padding: 4px 6px; border-radius: 6px;
+  transition: background .12s, color .12s;
+}
+.update-close:hover { background: #efe3c9; color: #5d4430; }
 
 /* 轻提示 */
 .toast {

@@ -99,6 +99,8 @@
 
       <div class="sidebar-footer">
         <button id="open-data-path" class="footer-link" title="打开数据目录">数据文件 · 打开目录</button>
+        <button id="check-update" class="footer-link" title="检查更新">检查更新</button>
+        <span id="footer-version" class="footer-version"></span>
       </div>
     </aside>
 
@@ -172,6 +174,19 @@
       <div id="roam-date" class="roam-date"></div>
       <div id="roam-content" class="roam-content"></div>
       <button id="roam-next" class="roam-next">再走一条 ↻</button>
+    </div>
+  </div>
+
+  <!-- 自动更新提示条（登录/主视图通用，置顶悬浮） -->
+  <div id="update-bar" class="update-bar hidden">
+    <div class="update-bar-info">
+      <i class="fa-solid fa-circle-down update-bar-ico"></i>
+      <span id="update-text" class="update-text">…</span>
+      <span id="update-progress" class="update-progress hidden">0%</span>
+    </div>
+    <div class="update-bar-actions">
+      <button id="update-action" class="update-action hidden">下载更新</button>
+      <button id="update-close" class="update-close" title="忽略本次"><i class="fa-solid fa-xmark"></i></button>
     </div>
   </div>
 
