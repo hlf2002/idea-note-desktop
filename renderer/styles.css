@@ -215,8 +215,11 @@ html, body {
   transition: background .12s, color .12s;
 }
 .tag-item:hover { background: #ecdfc4; }
-.tag-item.active { color: var(--green); font-weight: 600; background: transparent; }
+/* 选中态与「全部笔记」一致：绿色底、白字 */
+.tag-item.active { background: var(--green); color: #fff; font-weight: 600; }
+.tag-item.active:hover { background: var(--green-hover); }
 .tag-hash { color: var(--muted); }
+.tag-item.active .tag-hash { color: rgba(255,255,255,.9); }
 /* 标签数量徽标：右对齐，行内小圆角标签 */
 .tag-count {
   margin-left: auto;
@@ -233,7 +236,7 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 .tag-item:hover .tag-count { background: #e3d2af; }
-.tag-item.active .tag-count { background: #f3e6cf; color: var(--green); }
+.tag-item.active .tag-count { background: rgba(255,255,255,.22); color: #fff; }
 
 .tag-bottom {
   margin-top: 10px; padding-top: 10px;
