@@ -53,6 +53,7 @@
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
+    openDataPath: $('#open-data-path'),
     searchInput: $('#search-input'),
     btnFilter: $('#btn-filter'),
     composer: $('#composer'),
