@@ -39,7 +39,7 @@ html, body {
   flex-shrink: 0;
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 40;   /* 高于侧边栏内全部内容（用户按钮 26、遮罩 25、下拉菜单 30），滚动时始终遮住经过的内容 */
   background: var(--bg-side);   /* 底色与侧边栏一致，滚动内容从下方经过时被遮住 */
   -webkit-app-region: drag;     /* 红黄绿交通灯区域，可拖动窗口 */
 }
