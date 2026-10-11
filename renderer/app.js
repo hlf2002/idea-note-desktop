@@ -958,6 +958,7 @@
       if (tagBtn) {
         state.filter = 'tag';
         state.tag = tagBtn.dataset.tag;
+        resetFeedTop();
         renderAll();
         return;
       }
@@ -1026,6 +1027,7 @@
         state.filter = 'tag';
         state.tag = btn.dataset.tag;
       }
+      resetFeedTop();
       renderAll();
     });
 
@@ -1033,6 +1035,7 @@
     el.navAll.addEventListener('click', () => {
       state.filter = 'all'; state.tag = null; state.day = null; state.search = '';
       el.searchInput.value = '';
+      resetFeedTop();
       renderAll();
     });
     el.navDaily.addEventListener('click', openRoam);
@@ -1079,6 +1082,7 @@
           state.filter = 'all';
           state.tag = null;
         }
+        resetFeedTop();
         renderAll();
       }, 200);
     });
@@ -1086,6 +1090,7 @@
       if (e.key === 'Escape') {
         el.searchInput.value = '';
         state.search = '';
+        resetFeedTop();
         renderAll();
       }
     });
@@ -1304,6 +1309,14 @@
     window.addEventListener('mouseup', function () {
       if (dragging) { dragging = false; document.body.style.userSelect = ''; }
     });
+  }
+
+  // ---------- 导航/筛选切换时右侧列表回到顶部 ----------
+  // 点击「全部笔记」、标签、inline 标签或搜索时，内容重排前先把滚动位置归零；
+  // scroll 事件会自动同步输入框压缩态（恢复原样）与回到顶部按钮（隐藏）
+  function resetFeedTop() {
+    const feed = document.querySelector('.feed');
+    if (feed) feed.scrollTop = 0;
   }
 
   // ---------- 回到顶部浮动按钮显隐 ----------
