@@ -930,6 +930,8 @@
     // 内容渲染完成后刷新滚动条定位与尺寸
     positionFeedScrollbar();
     updateFeedScrollbar();
+    // 渲染可能导致 scrollTop 重置（筛选/搜索等），同步输入区压缩态
+    updateComposerCollapsed();
   }
 
   // ---------- 事件 ----------
@@ -1258,10 +1260,14 @@
     if (!sbFeed || !sbBar || !sbThumb) return;
     sbFeed.addEventListener('mouseenter', function () { sbFeed.classList.add('scroll-hover'); updateFeedScrollbar(); });
     sbFeed.addEventListener('mouseleave', function () { sbFeed.classList.remove('scroll-hover'); });
-    sbFeed.addEventListener('scroll', updateFeedScrollbar, { passive: true });
+    sbFeed.addEventListener('scroll', function () {
+      updateFeedScrollbar();
+      updateComposerCollapsed();
+    }, { passive: true });
     window.addEventListener('resize', function () { positionFeedScrollbar(); updateFeedScrollbar(); });
     positionFeedScrollbar();
     updateFeedScrollbar();
+    lastFeedTop = sbFeed.getBoundingClientRect().top;
 
     // 拖拽滚动条滚动内容
     var dragging = false, dragStartY = 0, dragStartScroll = 0;
@@ -1287,6 +1293,47 @@
     window.addEventListener('mouseup', function () {
       if (dragging) { dragging = false; document.body.style.userSelect = ''; }
     });
+  }
+
+  // ---------- 顶部输入区滚动联动压缩（第二屏离开顶部压缩、回到顶部恢复） ----------
+  // 输入区高度变化会移动 feed 视口位置（flex 布局联动）；ResizeObserver 感知尺寸变化后
+  // 反向补偿 scrollTop，让视口内内容保持在屏幕原位（配合 CSS overflow-anchor:none），
+  // 滚动时页面不抖动。压缩态下：输入框空 → 一行 + 工具栏；非空 → 内容行数 + 工具栏。
+  var composerZone = document.querySelector('.composer-zone');
+  var lastFeedTop = null;
+
+  function updateComposerCollapsed() {
+    if (!sbFeed || !composerZone) return;
+    if (composerZone.classList.contains('collapsed')) {
+      // 已压缩：只有真正滚回顶部（scrollTop <= 0）才恢复。
+      // 阈值带滞后（压缩 2px / 恢复 0px），避免向上微滚时输入框反复回弹。
+      if (sbFeed.scrollTop <= 0) {
+        composerZone.classList.remove('collapsed');
+        // 输入区高度变化后 feed 尺寸变化，刷新自绘滚动条定位与尺寸
+        positionFeedScrollbar();
+        updateFeedScrollbar();
+      }
+    } else if (sbFeed.scrollTop > 2) {
+      // 未压缩：离开顶部 2px 即压缩（顶部小幅晃动不压缩）
+      composerZone.classList.add('collapsed');
+      positionFeedScrollbar();
+      updateFeedScrollbar();
+    }
+  }
+
+  if (composerZone && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(function () {
+      if (!sbFeed) return;
+      var top = sbFeed.getBoundingClientRect().top;
+      if (lastFeedTop !== null && composerZone.classList.contains('collapsed')) {
+        var d = top - lastFeedTop;   // 视口移动量（压缩上移为负，输入增高下移为正）
+        if (d !== 0 && sbFeed.scrollTop > 0) {
+          // 反向补偿：视口移动 d 时 scrollTop 同步移动 d，内容保持在屏幕原位
+          sbFeed.scrollTop = Math.max(0, sbFeed.scrollTop + d);
+        }
+      }
+      lastFeedTop = top;
+    }).observe(composerZone);
   }
 
   async function saveMemo() {
