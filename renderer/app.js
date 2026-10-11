@@ -1343,6 +1343,17 @@
       const memo = await window.ideaNote.sync.create(val);
       state.composer.clear();
       upsertLocal(memo);
+      // 标签视图下发无标签（或不含当前标签）的笔记：该笔记在当前视图被过滤不可见，
+      // 自动跳回「全部笔记」并定位到新笔记（新笔记按时间排序恒为列表第一条 → 回到顶部即可）
+      if (state.filter === 'tag' && state.tag && !(memo.tags || []).includes(state.tag)) {
+        state.filter = 'all';
+        state.tag = null;
+        state.day = null;
+        renderAll();
+        sbFeed.scrollTop = 0;
+        positionFeedScrollbar();
+        updateFeedScrollbar();
+      }
       state.composer.focus();
     } catch (err) {
       handleSyncError(err, '保存失败');
