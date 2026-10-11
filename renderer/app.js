@@ -53,6 +53,7 @@
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
+    btnFeedTop: $('#feed-top'),
     openDataPath: $('#open-data-path'),
     searchInput: $('#search-input'),
     btnFilter: $('#btn-filter'),
@@ -1263,11 +1264,21 @@
     sbFeed.addEventListener('scroll', function () {
       updateFeedScrollbar();
       updateComposerCollapsed();
+      updateFeedTopBtn();
     }, { passive: true });
     window.addEventListener('resize', function () { positionFeedScrollbar(); updateFeedScrollbar(); });
     positionFeedScrollbar();
     updateFeedScrollbar();
     lastFeedTop = sbFeed.getBoundingClientRect().top;
+
+    // 回到顶部：向下滚动超过阈值显示按钮，点击平滑回顶
+    var btnFeedTop = el.btnFeedTop;
+    if (btnFeedTop) {
+      btnFeedTop.addEventListener('click', function () {
+        if (sbFeed) sbFeed.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+      updateFeedTopBtn();
+    }
 
     // 拖拽滚动条滚动内容
     var dragging = false, dragStartY = 0, dragStartScroll = 0;
@@ -1293,6 +1304,14 @@
     window.addEventListener('mouseup', function () {
       if (dragging) { dragging = false; document.body.style.userSelect = ''; }
     });
+  }
+
+  // ---------- 回到顶部浮动按钮显隐 ----------
+  // 向下滚动超过 280px 显示（避开输入区压缩阈值 100px，避免刚压缩就闪现）；回到顶部附近隐藏
+  function updateFeedTopBtn() {
+    var btn = el.btnFeedTop;
+    if (!btn || !sbFeed) return;
+    btn.classList.toggle('show', sbFeed.scrollTop > 280);
   }
 
   // ---------- 顶部输入区滚动联动压缩（第二屏离开顶部压缩、回到顶部恢复） ----------

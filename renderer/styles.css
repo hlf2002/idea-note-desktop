@@ -348,6 +348,29 @@ html, body {
   display: flex; flex-direction: column; gap: 16px;
 }
 
+/* 回到顶部按钮（第二屏右下角浮动） */
+.feed-top {
+  position: absolute;
+  right: 26px;          /* 避开右侧自绘滚动条（right 3px + 宽 6px） */
+  bottom: 30px;
+  width: 44px; height: 44px;
+  border: none; border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.28);
+  z-index: 19;
+  opacity: 0; visibility: hidden;
+  transform: translateY(10px);
+  transition: opacity .18s ease, transform .18s ease, visibility .18s;
+  -webkit-app-region: no-drag;
+}
+.feed-top.show { opacity: 1; visibility: visible; transform: translateY(0); }
+.feed-top:hover { background: var(--green-hover); }
+.feed-top:active { transform: translateY(0) scale(0.94); }
+
 /* 输入卡片 */
 /* 固定输入区（第二栏顶部，不参与滚动）：背景与主区其他部分保持一致 */
 .composer-zone {
