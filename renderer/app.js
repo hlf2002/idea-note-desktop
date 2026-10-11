@@ -622,11 +622,15 @@
     const editBtn = document.createElement('button');
     editBtn.textContent = '编辑';
     editBtn.dataset.action = 'edit';
+    const widgetBtn = document.createElement('button');
+    widgetBtn.textContent = '展示到桌面';
+    widgetBtn.dataset.action = 'widget';
+    widgetBtn.title = '推送到桌面小组件展示';
     const delBtn = document.createElement('button');
     delBtn.textContent = state.pendingDeleteId === String(memo.id) ? '确认删除？' : '删除';
     delBtn.dataset.action = 'delete';
     delBtn.classList.add('danger');
-    menu.appendChild(editBtn); menu.appendChild(delBtn);
+    menu.appendChild(editBtn); menu.appendChild(widgetBtn); menu.appendChild(delBtn);
     card.appendChild(menu);
 
     return card;
@@ -983,6 +987,19 @@
         closeMenus();
         state.editingId = id;
         renderList();
+      } else if (action === 'widget') {
+        // 展示到桌面：把这条笔记推送到桌面小组件
+        const memo = state.memos.find((m) => String(m.id) === String(id));
+        if (memo) {
+          closeMenus();
+          try {
+            await window.ideaNote.widget.push(memo);
+            showToast('已推送到桌面小组件');
+          } catch (err) {
+            console.error('widget push failed', err);
+            showToast('推送失败');
+          }
+        }
       } else if (action === 'delete') {
         if (state.pendingDeleteId === id) {
           // 二次确认：真正删除
