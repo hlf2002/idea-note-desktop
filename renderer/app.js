@@ -1313,8 +1313,11 @@
         positionFeedScrollbar();
         updateFeedScrollbar();
       }
-    } else if (sbFeed.scrollTop > 2) {
-      // 未压缩：离开顶部 2px 即压缩（顶部小幅晃动不压缩）
+    } else if (sbFeed.scrollTop > 100) {
+      // 未压缩：离开顶部足够远才压缩。阈值（100px）大于输入区压缩高度差（约 94px），
+      // 保证压缩动画期间 ResizeObserver 补偿不会把 scrollTop 拉回 0（否则立即触发恢复，
+      // 造成「压缩→补偿归零→恢复」的抖动循环）；同时顶部附近微滚不触发压缩，
+      // 上滑一点点（未真正回顶）输入框保持压缩不回弹。
       composerZone.classList.add('collapsed');
       positionFeedScrollbar();
       updateFeedScrollbar();
@@ -1328,8 +1331,10 @@
       if (lastFeedTop !== null && composerZone.classList.contains('collapsed')) {
         var d = top - lastFeedTop;   // 视口移动量（压缩上移为负，输入增高下移为正）
         if (d !== 0 && sbFeed.scrollTop > 0) {
-          // 反向补偿：视口移动 d 时 scrollTop 同步移动 d，内容保持在屏幕原位
-          sbFeed.scrollTop = Math.max(0, sbFeed.scrollTop + d);
+          // 反向补偿：视口移动 d 时 scrollTop 同步移动 d，内容保持在屏幕原位。
+          // 补偿后若 <= 0（滚动位置不足时压缩），放弃本次补偿，避免触发恢复误判造成抖动
+          var ns = sbFeed.scrollTop + d;
+          if (ns > 0) sbFeed.scrollTop = ns;
         }
       }
       lastFeedTop = top;
