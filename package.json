@@ -52,7 +52,14 @@
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
-      "notarize": true
+      "notarize": true,
+      "dmg": {
+        "contents": [
+          { "x": 130, "y": 220 },
+          { "x": 410, "y": 220, "type": "link", "path": "/Applications" },
+          { "x": 270, "y": 330, "type": "file", "path": "build/卸载灵感笔记.command", "name": "卸载灵感笔记.command" }
+        ]
+      }
     },
     "win": {
       "icon": "build/icon.ico",
@@ -76,7 +83,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "灵感笔记",
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "deleteAppDataOnUninstall": true,
+      "include": "build/uninstall-win.nsh"
     },
     "linux": {
       "icon": "assets/icon-win.png"
