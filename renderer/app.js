@@ -53,6 +53,7 @@
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
+    btnFeedTop: $('#feed-top'),
     openDataPath: $('#open-data-path'),
     searchInput: $('#search-input'),
     btnFilter: $('#btn-filter'),
@@ -621,11 +622,15 @@
     const editBtn = document.createElement('button');
     editBtn.textContent = '编辑';
     editBtn.dataset.action = 'edit';
+    const widgetBtn = document.createElement('button');
+    widgetBtn.textContent = '展示到桌面';
+    widgetBtn.dataset.action = 'widget';
+    widgetBtn.title = '推送到桌面小组件展示';
     const delBtn = document.createElement('button');
     delBtn.textContent = state.pendingDeleteId === String(memo.id) ? '确认删除？' : '删除';
     delBtn.dataset.action = 'delete';
     delBtn.classList.add('danger');
-    menu.appendChild(editBtn); menu.appendChild(delBtn);
+    menu.appendChild(editBtn); menu.appendChild(widgetBtn); menu.appendChild(delBtn);
     card.appendChild(menu);
 
     return card;
@@ -957,6 +962,8 @@
     // 内容渲染完成后刷新滚动条定位与尺寸
     positionFeedScrollbar();
     updateFeedScrollbar();
+    // 渲染可能导致 scrollTop 重置（筛选/搜索等），同步输入区压缩态
+    updateComposerCollapsed();
   }
 
   // ---------- 事件 ----------
@@ -982,6 +989,7 @@
       if (tagBtn) {
         state.filter = 'tag';
         state.tag = tagBtn.dataset.tag;
+        resetFeedTop();
         renderAll();
         return;
       }
@@ -1006,6 +1014,19 @@
         closeMenus();
         state.editingId = id;
         renderList();
+      } else if (action === 'widget') {
+        // 展示到桌面：把这条笔记推送到桌面小组件
+        const memo = state.memos.find((m) => String(m.id) === String(id));
+        if (memo) {
+          closeMenus();
+          try {
+            await window.ideaNote.widget.push(memo);
+            showToast('已推送到桌面小组件');
+          } catch (err) {
+            console.error('widget push failed', err);
+            showToast('推送失败');
+          }
+        }
       } else if (action === 'delete') {
         if (state.pendingDeleteId === id) {
           // 二次确认：真正删除
@@ -1050,6 +1071,7 @@
         state.filter = 'tag';
         state.tag = btn.dataset.tag;
       }
+      resetFeedTop();
       renderAll();
     });
 
@@ -1057,6 +1079,7 @@
     el.navAll.addEventListener('click', () => {
       state.filter = 'all'; state.tag = null; state.day = null; state.search = '';
       el.searchInput.value = '';
+      resetFeedTop();
       renderAll();
     });
     el.navDaily.addEventListener('click', openRoam);
@@ -1103,6 +1126,7 @@
           state.filter = 'all';
           state.tag = null;
         }
+        resetFeedTop();
         renderAll();
       }, 200);
     });
@@ -1110,6 +1134,7 @@
       if (e.key === 'Escape') {
         el.searchInput.value = '';
         state.search = '';
+        resetFeedTop();
         renderAll();
       }
     });
@@ -1285,10 +1310,24 @@
     if (!sbFeed || !sbBar || !sbThumb) return;
     sbFeed.addEventListener('mouseenter', function () { sbFeed.classList.add('scroll-hover'); updateFeedScrollbar(); });
     sbFeed.addEventListener('mouseleave', function () { sbFeed.classList.remove('scroll-hover'); });
-    sbFeed.addEventListener('scroll', updateFeedScrollbar, { passive: true });
+    sbFeed.addEventListener('scroll', function () {
+      updateFeedScrollbar();
+      updateComposerCollapsed();
+      updateFeedTopBtn();
+    }, { passive: true });
     window.addEventListener('resize', function () { positionFeedScrollbar(); updateFeedScrollbar(); });
     positionFeedScrollbar();
     updateFeedScrollbar();
+    lastFeedTop = sbFeed.getBoundingClientRect().top;
+
+    // 回到顶部：向下滚动超过阈值显示按钮，点击平滑回顶
+    var btnFeedTop = el.btnFeedTop;
+    if (btnFeedTop) {
+      btnFeedTop.addEventListener('click', function () {
+        if (sbFeed) sbFeed.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+      updateFeedTopBtn();
+    }
 
     // 拖拽滚动条滚动内容
     var dragging = false, dragStartY = 0, dragStartScroll = 0;
@@ -1316,6 +1355,68 @@
     });
   }
 
+  // ---------- 导航/筛选切换时右侧列表回到顶部 ----------
+  // 点击「全部笔记」、标签、inline 标签或搜索时，内容重排前先把滚动位置归零；
+  // scroll 事件会自动同步输入框压缩态（恢复原样）与回到顶部按钮（隐藏）
+  function resetFeedTop() {
+    const feed = document.querySelector('.feed');
+    if (feed) feed.scrollTop = 0;
+  }
+
+  // ---------- 回到顶部浮动按钮显隐 ----------
+  // 向下滚动超过 280px 显示（避开输入区压缩阈值 100px，避免刚压缩就闪现）；回到顶部附近隐藏
+  function updateFeedTopBtn() {
+    var btn = el.btnFeedTop;
+    if (!btn || !sbFeed) return;
+    btn.classList.toggle('show', sbFeed.scrollTop > 280);
+  }
+
+  // ---------- 顶部输入区滚动联动压缩（第二屏离开顶部压缩、回到顶部恢复） ----------
+  // 输入区高度变化会移动 feed 视口位置（flex 布局联动）；ResizeObserver 感知尺寸变化后
+  // 反向补偿 scrollTop，让视口内内容保持在屏幕原位（配合 CSS overflow-anchor:none），
+  // 滚动时页面不抖动。压缩态下：输入框空 → 一行 + 工具栏；非空 → 内容行数 + 工具栏。
+  var composerZone = document.querySelector('.composer-zone');
+  var lastFeedTop = null;
+
+  function updateComposerCollapsed() {
+    if (!sbFeed || !composerZone) return;
+    if (composerZone.classList.contains('collapsed')) {
+      // 已压缩：只有真正滚回顶部（scrollTop <= 0）才恢复。
+      // 阈值带滞后（压缩 2px / 恢复 0px），避免向上微滚时输入框反复回弹。
+      if (sbFeed.scrollTop <= 0) {
+        composerZone.classList.remove('collapsed');
+        // 输入区高度变化后 feed 尺寸变化，刷新自绘滚动条定位与尺寸
+        positionFeedScrollbar();
+        updateFeedScrollbar();
+      }
+    } else if (sbFeed.scrollTop > 100) {
+      // 未压缩：离开顶部足够远才压缩。阈值（100px）大于输入区压缩高度差（约 94px），
+      // 保证压缩动画期间 ResizeObserver 补偿不会把 scrollTop 拉回 0（否则立即触发恢复，
+      // 造成「压缩→补偿归零→恢复」的抖动循环）；同时顶部附近微滚不触发压缩，
+      // 上滑一点点（未真正回顶）输入框保持压缩不回弹。
+      composerZone.classList.add('collapsed');
+      positionFeedScrollbar();
+      updateFeedScrollbar();
+    }
+  }
+
+  if (composerZone && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(function () {
+      if (!sbFeed) return;
+      var top = sbFeed.getBoundingClientRect().top;
+      if (lastFeedTop !== null && composerZone.classList.contains('collapsed')) {
+        var d = top - lastFeedTop;   // 视口移动量（压缩上移为负，输入增高下移为正）
+        if (d !== 0 && sbFeed.scrollTop > 0) {
+          // 反向补偿：视口移动 d 时 scrollTop 同步移动 d，内容保持在屏幕原位。
+          // 补偿后若 <= 0（滚动位置不足时压缩），放弃本次补偿，避免触发恢复误判造成抖动
+          var ns = sbFeed.scrollTop + d;
+          if (ns > 0) sbFeed.scrollTop = ns;
+        }
+      }
+      lastFeedTop = top;
+    }).observe(composerZone);
+  }
+
   async function saveMemo() {
     const val = state.composer.value();
     if (!val.trim()) return;
@@ -1323,6 +1424,17 @@
       const memo = await window.ideaNote.sync.create(val);
       state.composer.clear();
       upsertLocal(memo);
+      // 标签视图下发无标签（或不含当前标签）的笔记：该笔记在当前视图被过滤不可见，
+      // 自动跳回「全部笔记」并定位到新笔记（新笔记按时间排序恒为列表第一条 → 回到顶部即可）
+      if (state.filter === 'tag' && state.tag && !(memo.tags || []).includes(state.tag)) {
+        state.filter = 'all';
+        state.tag = null;
+        state.day = null;
+        renderAll();
+        sbFeed.scrollTop = 0;
+        positionFeedScrollbar();
+        updateFeedScrollbar();
+      }
       state.composer.focus();
     } catch (err) {
       handleSyncError(err, '保存失败');

@@ -210,6 +210,22 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
   ipcMain.handle('app:getDataPath', () => path.join(dataDir, 'idea-cache.json'));
   ipcMain.handle('app:openDataPath', () => shell.openPath(dataDir));
 
+  // 桌面小组件：把某条笔记推送到桌面小组件（写入 widget.json，原生宿主 App 监听后刷新 WidgetKit）
+  ipcMain.handle('widget:push', (_e, memo) => {
+    const widgetFile = path.join(dataDir, 'widget.json');
+    const payload = {
+      updatedAt: Date.now(),
+      memo: {
+        id: String((memo && memo.id) || ''),
+        content: String((memo && memo.content) || ''),
+        createdAt: String((memo && memo.createdAt) || ''),
+        tags: Array.isArray(memo && memo.tags) ? memo.tags.map(String) : []
+      }
+    };
+    fs.writeFileSync(widgetFile, JSON.stringify(payload, null, 2), 'utf-8');
+    return { ok: true, path: widgetFile };
+  });
+
   // 后台保鲜：应用运行期间每 12h 主动刷新一次 Vue H5 token，保持同步随时可用
   if (typeof api.startH5KeepAlive === 'function') {
     api.startH5KeepAlive();

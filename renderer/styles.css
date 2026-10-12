@@ -39,7 +39,7 @@ html, body {
   flex-shrink: 0;
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 40;   /* 高于侧边栏内全部内容（用户按钮 26、遮罩 25、下拉菜单 30），滚动时始终遮住经过的内容 */
   background: var(--bg-side);   /* 底色与侧边栏一致，滚动内容从下方经过时被遮住 */
   -webkit-app-region: drag;     /* 红黄绿交通灯区域，可拖动窗口 */
 }
@@ -322,6 +322,8 @@ html, body {
   position: relative;
   /* 原生滚动条隐藏（不占布局宽度，卡片宽度稳定）；滚动仍可用 */
   scrollbar-width: none;
+  /* 顶部输入区高度变化时，禁用浏览器滚动锚点自动修正，避免视口内容跳动（防抖动） */
+  overflow-anchor: none;
 }
 .feed::-webkit-scrollbar { display: none; }
 /* 自绘 overlay 滚动条：位于滚动容器外，由 JS 定位到内容区右侧，不随内容滚动 */
@@ -346,12 +348,37 @@ html, body {
   display: flex; flex-direction: column; gap: 16px;
 }
 
+/* 回到顶部按钮（第二屏右下角浮动） */
+.feed-top {
+  position: absolute;
+  right: 26px;          /* 避开右侧自绘滚动条（right 3px + 宽 6px） */
+  bottom: 30px;
+  width: 44px; height: 44px;
+  border: none; border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.28);
+  z-index: 19;
+  opacity: 0; visibility: hidden;
+  transform: translateY(10px);
+  transition: opacity .18s ease, transform .18s ease, visibility .18s;
+  -webkit-app-region: no-drag;
+}
+.feed-top.show { opacity: 1; visibility: visible; transform: translateY(0); }
+.feed-top:hover { background: var(--green-hover); }
+.feed-top:active { transform: translateY(0) scale(0.94); }
+
 /* 输入卡片 */
 /* 固定输入区（第二栏顶部，不参与滚动）：背景与主区其他部分保持一致 */
 .composer-zone {
   flex-shrink: 0;
   background: var(--bg-side);
   padding: 24px 20px 16px;
+  /* 滚动联动压缩（collapsed）时平滑过渡高度，配合 JS 的 scrollTop 补偿，页面不抖动 */
+  transition: padding .12s ease;
 }
 .composer-inner { max-width: 720px; margin: 0 auto; }
 
@@ -362,6 +389,7 @@ html, body {
   box-shadow: var(--shadow);
   border: 1px solid var(--card-border);
   padding: 16px;
+  transition: padding .12s ease;
 }
 .composer-toolbar { transition: opacity .15s ease, height .15s ease; }
 .composer {
@@ -373,12 +401,19 @@ html, body {
   min-height: 80px;
   word-break: break-word;
   white-space: pre-wrap;
+  transition: min-height .12s ease;
 }
 /* 第二栏顶部输入框：自动增高，最多 15 行（15 × 行高 1.7em），超出显示滚动条 */
 .composer-zone .composer {
   max-height: calc(15 * 1.7em);
   overflow-y: auto;
 }
+/* 滚动联动压缩态：第二屏离开顶部时输入区整体压扁。
+   空输入框 → 只留一行 + 底部工具栏；非空 → 压缩到内容行数高度 + 底部工具栏。
+   回到顶部时移除 collapsed 恢复原样。 */
+.composer-zone.collapsed { padding: 8px 20px 8px; }
+.composer-zone.collapsed .composer-card { padding: 8px 14px; }
+.composer-zone.collapsed .composer { min-height: 0; }
 .composer:empty::before {
   content: attr(data-placeholder);
   color: #a08a70;

@@ -26,6 +26,10 @@ contextBridge.exposeInMainWorld('ideaNote', {
     importLegacy: () => ipcRenderer.invoke('sync:importLegacy'),
     hasLegacy: () => ipcRenderer.invoke('sync:hasLegacy')
   },
+  // 桌面小组件：推送某条笔记内容到桌面小组件
+  widget: {
+    push: (memo) => ipcRenderer.invoke('widget:push', memo)
+  },
   // 应用
   app: {
     getDataPath: () => ipcRenderer.invoke('app:getDataPath'),
