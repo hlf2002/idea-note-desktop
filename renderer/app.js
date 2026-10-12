@@ -901,6 +901,14 @@
     }, delay);
   }
 
+  /** 服务类异常（网络失败/超时/网关 5xx）：凭证未失效，静默重试等恢复即可 */
+  function isRetryableServiceError(err) {
+    if (!err || isAuthError(err)) return false;
+    const msg = err.message || '';
+    if (msg.indexOf('网络请求失败') >= 0 || msg.indexOf('超时') >= 0 || msg.indexOf('HTTP 5') >= 0) return true;
+    return typeof err.code === 'number' && (err.code < 0 || err.code >= 500);
+  }
+
   function handleSyncError(err, fallback) {
     if (isAuthError(err)) {
       if (isAuthExpired(err)) {
@@ -918,6 +926,10 @@
         return;
       }
       // 只在首次失败时提示一次；后续自动重试保持静默
+      if (authRetryAttempt === 0) showToast('同步暂时中断，正在自动恢复…');
+      scheduleAuthRetry();
+    } else if (isRetryableServiceError(err)) {
+      // 服务端瞬时故障（5xx/超时/断网）：自动重试，恢复后自动回到在线状态
       if (authRetryAttempt === 0) showToast('同步暂时中断，正在自动恢复…');
       scheduleAuthRetry();
     } else {

@@ -17,6 +17,9 @@ const crypto = require('crypto');
 
 const { BASE_URL, API_CLIENT_TYPE_PC, PAGE_SIZE } = require('./config');
 
+/** /h5/jump 换取超时：网关/上游抖动时该接口可能长时间无响应（曾实测 127s 才返回 502） */
+const H5_EXCHANGE_TIMEOUT_MS = 20000;
+
 class QzApiError extends Error {
   constructor(message, code, payload) {
     super(message);
@@ -76,12 +79,25 @@ class QzApi {
     }).toString();
     let res;
     try {
-      res = await this.fetchImpl(`${this.baseUrl}/h5/jump/idea_note?${query}`, {
-        method: 'GET',
-        redirect: 'manual'
-      });
+      // 网关/上游抖动时 /h5/jump 可能长时间不返回，加超时避免界面长时间无响应；
+      // 超时按服务异常处理，不误判为凭证失效
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), H5_EXCHANGE_TIMEOUT_MS);
+      try {
+        res = await this.fetchImpl(`${this.baseUrl}/h5/jump/idea_note?${query}`, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: ctrl.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
     } catch (err) {
-      throw new QzApiError('换取 H5 访问凭证失败: ' + ((err && err.message) || err), -1);
+      const aborted = err && (err.name === 'AbortError' || err.code === 20);
+      throw new QzApiError(
+        aborted ? '换取 H5 访问凭证超时，请稍后重试' : ('换取 H5 访问凭证失败: ' + ((err && err.message) || err)),
+        aborted ? -2 : -1
+      );
     }
     const location = res.headers.get('location') || '';
     const hash = location.split('#')[1] || '';
@@ -90,11 +106,15 @@ class QzApi {
     const vTk = params.get('tk') || '';
     const expire = parseInt(params.get('expire') || '0', 10);
     if (!vToken || !vTk) {
-      // 换取失败 = 扩展端凭证已被服务端判死（跳回登录页）。统一抛 401 并打 authExpired 标记，
-      // 上层据此进入「自动重试 + 优雅降级」，不再让用户看到「请重新登录」的吓人文案。
-      const err = new QzApiError('登录凭证已失效', 401, { location, reason: 'h5_exchange_rejected' });
-      err.authExpired = true;
-      throw err;
+      // 仅当服务端明确跳回登录页（302 重定向）时才判定凭证已失效；
+      // 网关 5xx / 超时 / 其它异常响应同样拿不到 token，但那属于瞬时故障，
+      // 误判为失效会把用户踢回登录页（曾因 /h5/jump 502 误触发，导致登录后看不到笔记）
+      if (res.status === 302) {
+        const err = new QzApiError('登录凭证已失效', 401, { location, reason: 'h5_exchange_rejected' });
+        err.authExpired = true;
+        throw err;
+      }
+      throw new QzApiError('换取 H5 访问凭证失败(HTTP ' + (res.status || 'unknown') + ')', res.status || -1);
     }
     const ttlMs = expire > 0 ? expire * 1000 : 24 * 3600 * 1000;
     this._h5 = {

@@ -393,6 +393,48 @@ test('api: 换取 Vue token 失败（跳登录页）-> 抛 401 + authExpired，�
   assert.strictEqual(jumpCount, 1, '凭证已判死，不应重复换取');
 });
 
+test('api: /h5/jump 网关 502（无 location）-> 服务异常而非凭证失效，不误判 authExpired', async () => {
+  let jumpCount = 0;
+  const api = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url) => {
+      if (url.includes('/h5/jump/')) {
+        jumpCount += 1;
+        return { headers: { get: () => null }, status: 502 };
+      }
+      throw new Error('不应调用业务接口');
+    }
+  });
+  api.setAuth({ uid: 'u1', token: 'tok1', tk: 'p_x' });
+  await assert.rejects(() => api.getIdeaList({}), (err) => {
+    assert.strictEqual(err.authExpired, undefined, '502 不应标记为凭证失效');
+    assert.notStrictEqual(err.code, 401, '502 不应抛 401');
+    return true;
+  });
+  assert.strictEqual(jumpCount, 1, '服务异常非 401，不走自愈重试');
+});
+
+test('api: /h5/jump 超时 -> 抛超时错误（code<0）而非凭证失效', async () => {
+  const api = new QzApi({
+    baseUrl: 'https://mock.qzhuli.com',
+    fetchImpl: async (url, init) => {
+      if (url.includes('/h5/jump/')) {
+        const e = new Error('aborted');
+        e.name = 'AbortError';
+        throw e;
+      }
+      throw new Error('不应调用业务接口');
+    }
+  });
+  api.setAuth({ uid: 'u1', token: 'tok1', tk: 'p_x' });
+  await assert.rejects(() => api.getH5Access(), (err) => {
+    assert.strictEqual(err.authExpired, undefined, '超时不应标记为凭证失效');
+    assert.ok(err.code < 0, '超时应为服务异常错误码');
+    assert.ok((err.message || '').indexOf('超时') >= 0, '超时错误应有明确提示');
+    return true;
+  });
+});
+
 test('api: ensureH5Fresh 寿命<70% 不重换，>=70% 强制重换', async () => {
   let jumpCount = 0;
   const api = new QzApi({
