@@ -1,6 +1,6 @@
 {
   "name": "idea-note-local",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "本地版 灵感笔记 —— 极简卡片式记录桌面应用",
   "main": "main.js",
   "scripts": {
@@ -49,7 +49,10 @@
         }
       ],
       "category": "public.app-category.productivity",
-      "identity": null
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": true
     },
     "win": {
       "icon": "build/icon.ico",
