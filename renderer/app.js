@@ -860,6 +860,10 @@
 
   let authRetryTimer = null;
   let authRetryAttempt = 0;
+  // 连续收到「凭证已失效」的次数：qz 层已自愈可恢复的 401（重换 H5 token 重试一次），
+  // 能到渲染层的 [AUTH] 登录凭证已失效 = 扩展端凭证被服务端判死，自动重试不可能成功，
+  // 连续确认 2 次（防网关偶发 5xx 误判）后引导用户重新扫码登录，而不是无限静默重试。
+  let authExpiredStreak = 0;
   const AUTH_RETRY_DELAYS_MS = [30000, 120000, 300000]; // 30s / 2min / 5min
 
   function cancelAuthRetry() {
@@ -868,6 +872,13 @@
       authRetryTimer = null;
     }
     authRetryAttempt = 0;
+    authExpiredStreak = 0;
+  }
+
+  /** 服务端明确判死扩展端凭证（换取 H5 token 被拒）——必须重新扫码登录才能恢复 */
+  function isAuthExpired(err) {
+    if (!err) return false;
+    return (err.message || '').indexOf('登录凭证已失效') >= 0;
   }
 
   /** 鉴权类失败：静默排队自动重试，恢复后自动回到在线状态 */
@@ -887,6 +898,20 @@
 
   function handleSyncError(err, fallback) {
     if (isAuthError(err)) {
+      if (isAuthExpired(err)) {
+        authExpiredStreak += 1;
+        // 连续 2 次确认凭证已失效：重试无意义，引导重新扫码登录
+        if (authExpiredStreak >= 2) {
+          cancelAuthRetry();
+          showToast('登录状态已失效，请重新扫码登录');
+          showLogin();
+          startQr();
+          return;
+        }
+        showToast('同步暂时中断，正在自动恢复…');
+        scheduleAuthRetry();
+        return;
+      }
       // 只在首次失败时提示一次；后续自动重试保持静默
       if (authRetryAttempt === 0) showToast('同步暂时中断，正在自动恢复…');
       scheduleAuthRetry();
@@ -910,8 +935,10 @@
       state.memos = memos;
       renderAll();
       cancelAuthRetry(); // 同步成功：清除自动重试
+      return true;
     } catch (err) {
       handleSyncError(err, '同步失败，正在展示本地缓存');
+      return false;
     }
   }
 
@@ -1148,8 +1175,8 @@
     el.syncRefresh.addEventListener('click', async () => {
       el.syncRefresh.classList.add('spinning');
       try {
-        await loadData(false);
-        showToast('已同步');
+        const ok = await loadData(false);
+        if (ok) showToast('已同步');
       } catch (e) { /* loadData 已处理错误 */ }
       setTimeout(() => el.syncRefresh.classList.remove('spinning'), 600);
     });
