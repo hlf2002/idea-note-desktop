@@ -178,10 +178,15 @@ app.whenReady().then(async () => {
       out.trashTitle = document.getElementById('app-title').textContent;
       out.trashComposerHidden = document.querySelector('.composer-zone').classList.contains('hidden');
       out.trashBtnActive = document.getElementById('btn-trash').classList.contains('active');
-      // 恢复全部（每次点击后卡片重建，循环取最新按钮；含冒烟链路删除的那条 + 预置的一条）
+      // 恢复全部（卡片右上角「⋯」菜单里的恢复；每次恢复后卡片重建，循环取最新菜单）
       let guard = 0;
-      while (document.querySelector('.trash-restore-btn') && guard < 5) {
-        document.querySelector('.trash-restore-btn').click();
+      while (document.querySelector('.trash-card .memo-ellipsis') && guard < 5) {
+        const ellipsis = document.querySelector('.trash-card .memo-ellipsis');
+        ellipsis.click();
+        await wait(100);
+        const restoreBtn = document.querySelector('.trash-card .memo-menu [data-action="restore"]');
+        if (!restoreBtn) break;
+        restoreBtn.click();
         await wait(350);
         guard += 1;
       }

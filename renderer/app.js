@@ -392,7 +392,7 @@
     if (state.search.trim()) highlightSearch(el.memoList, state.search.trim());
   }
 
-  /** 回收站卡片：头部显示删除时间，正文/图片与普通卡片一致，底部操作条提供「恢复」 */
+  /** 回收站卡片：头部显示删除时间，正文/图片与普通卡片一致，右上角菜单提供「恢复」 */
   function buildTrashCard(memo) {
     const card = document.createElement('article');
     card.className = 'memo-card trash-card';
@@ -407,6 +407,13 @@
     time.textContent = '删除于 ' + formatFullTime(memo.deletedAt);
     headLeft.appendChild(time);
     head.appendChild(headLeft);
+
+    const ellipsis = document.createElement('button');
+    ellipsis.className = 'memo-ellipsis';
+    ellipsis.dataset.action = 'menu';
+    ellipsis.title = '更多操作';
+    ellipsis.innerHTML = '<i class="fa-solid fa-ellipsis"></i>';
+    head.appendChild(ellipsis);
     card.appendChild(head);
 
     // 正文：标签保留在原位置（#标签 原位渲染为绿色）
@@ -443,15 +450,14 @@
       card.appendChild(imagesWrap);
     }
 
-    // 操作条：恢复
-    const actions = document.createElement('div');
-    actions.className = 'trash-actions';
+    // 右上角菜单：恢复
+    const menu = document.createElement('div');
+    menu.className = 'memo-menu';
     const restoreBtn = document.createElement('button');
-    restoreBtn.className = 'trash-restore-btn';
+    restoreBtn.textContent = '恢复';
     restoreBtn.dataset.action = 'restore';
-    restoreBtn.innerHTML = '<i class="fa-solid fa-rotate-left"></i> 恢复';
-    actions.appendChild(restoreBtn);
-    card.appendChild(actions);
+    menu.appendChild(restoreBtn);
+    card.appendChild(menu);
 
     return card;
   }
