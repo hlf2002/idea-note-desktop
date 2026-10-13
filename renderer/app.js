@@ -56,6 +56,7 @@
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
+    trashCount: $('#trash-count'),
     appTitle: $('#app-title'),
     composerZone: $('.composer-zone'),
     btnFeedTop: $('#feed-top'),
@@ -248,8 +249,13 @@
     // 打卡热力图（最近 3 个自然月，GitHub 风格）
     renderHeatmap();
 
-    // 导航高亮：回收站视图下「全部笔记」不高亮
+    // 导航选中态互斥：全部笔记（仅非回收站视图 + 无筛选时）/ 每日回顾（遮罩式，无持久选中）/ 回收站
     el.navAll.classList.toggle('active', state.view === 'notes' && state.filter === 'all' && !state.tag && !state.day);
+    el.navDaily.classList.remove('active');
+    el.btnTrash.classList.toggle('active', state.view === 'trash');
+
+    // 回收站计数徽标：state.trash 由启动/删除后/进入回收站时后台刷新
+    el.trashCount.textContent = String(state.trash.length);
 
     // 标签列表
     el.tagList.innerHTML = '';
@@ -462,14 +468,13 @@
     return card;
   }
 
-  /** 进入回收站视图：隐藏输入区、切换标题、拉取回收站列表 */
+  /** 进入回收站视图：隐藏输入区、切换标题、拉取回收站列表（导航选中态由 renderSidebar 统一） */
   async function enterTrash() {
     if (state.view === 'trash') return;
     state.view = 'trash';
     el.appTitle.textContent = '回收站';
     el.composerZone.classList.add('hidden');
     el.composerZone.classList.remove('collapsed');
-    el.btnTrash.classList.add('active');
     state.search = '';
     el.searchInput.value = '';
     resetFeedTop();
@@ -485,16 +490,24 @@
     renderAll();
   }
 
-  /** 退出回收站视图：恢复主界面，回到全部笔记 */
+  /** 退出回收站视图：恢复主界面，回到全部笔记（导航选中态由 renderSidebar 统一） */
   function exitTrash() {
     if (state.view !== 'trash') return;
     state.view = 'notes';
     el.appTitle.textContent = '灵感笔记';
     el.composerZone.classList.remove('hidden');
     el.composerZone.classList.remove('collapsed');
-    el.btnTrash.classList.remove('active');
     resetFeedTop();
     renderAll();
+  }
+
+  /** 后台拉取回收站并刷新侧边栏计数（启动/删除后静默调用，失败不打扰） */
+  async function refreshTrash() {
+    try {
+      const list = await window.ideaNote.sync.trash();
+      state.trash = list;
+      renderSidebar();
+    } catch (e) { /* 静默：徽标保持旧值，进入回收站时会再次拉取 */ }
   }
 
   // ===== 图片大图查看（lightbox：按钮缩放 / 鼠标拖拽平移 / 滚轮缩放） =====
@@ -1089,6 +1102,7 @@
       state.memos = memos;
       renderAll();
       cancelAuthRetry(); // 同步成功：清除自动重试
+      refreshTrash();    // 后台刷新回收站计数徽标（不阻塞列表展示）
       return true;
     } catch (err) {
       handleSyncError(err, '同步失败，正在展示本地缓存');
@@ -1187,6 +1201,7 @@
             state.pendingDeleteId = null;
             closeMenus();
             removeLocal(id);
+            refreshTrash(); // 后台刷新回收站计数
           } catch (err) {
             handleSyncError(err, '删除失败');
           }

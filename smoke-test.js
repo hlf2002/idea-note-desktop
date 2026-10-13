@@ -172,12 +172,14 @@ app.whenReady().then(async () => {
       // 回收站交互：进入 -> 列表渲染 -> 全部恢复 -> 空态 -> 回到全部笔记可见
       document.getElementById('nav-all').click();
       await wait(100);
+      out.trashCountBadge = document.getElementById('trash-count').textContent; // 启动后台刷新后应显示回收站条数
       document.getElementById('btn-trash').click();
       await wait(400); // 拉取回收站列表
       out.trashCardCount = document.querySelectorAll('.trash-card').length;
       out.trashTitle = document.getElementById('app-title').textContent;
       out.trashComposerHidden = document.querySelector('.composer-zone').classList.contains('hidden');
       out.trashBtnActive = document.getElementById('btn-trash').classList.contains('active');
+      out.navAllActiveInTrash = document.getElementById('nav-all').classList.contains('active');
       // 恢复全部（卡片右上角「⋯」菜单里的恢复；每次恢复后卡片重建，循环取最新菜单）
       let guard = 0;
       while (document.querySelector('.trash-card .memo-ellipsis') && guard < 5) {
@@ -192,6 +194,7 @@ app.whenReady().then(async () => {
       }
       out.trashCardCountAfterRestore = document.querySelectorAll('.trash-card').length;
       out.trashEmptyText = document.getElementById('empty-state').querySelector('p').textContent;
+      out.trashCountBadgeAfterRestore = document.getElementById('trash-count').textContent;
       // 诊断：恢复后服务端/缓存/UI 三处数量
       await wait(600); // 等恢复 handler 内串行 loadData 完成
       out.pullCountAfterRestore = (await window.ideaNote.sync.pull()).length;
@@ -246,8 +249,11 @@ app.whenReady().then(async () => {
       result.trashTitle === '回收站' &&
       result.trashComposerHidden &&
       result.trashBtnActive &&
+      !result.navAllActiveInTrash &&
+      result.trashCountBadge === '1' &&
       result.trashCardCountAfterRestore === 0 &&
       result.trashEmptyText === '回收站是空的' &&
+      result.trashCountBadgeAfterRestore === '0' &&
       result.cardCountAfterRestore === 4 &&
       result.imgCount === 1 &&
       result.imgHasThumbParam && result.imgHasLargeParam &&

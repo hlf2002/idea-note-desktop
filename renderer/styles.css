@@ -238,25 +238,16 @@ html, body {
 .tag-item:hover .tag-count { background: #e3d2af; }
 .tag-item.active .tag-count { background: rgba(255,255,255,.22); color: #fff; }
 
-.tag-bottom {
-  margin-top: 10px; padding-top: 10px;
-  border-top: 1px solid #efe3c9;
+/* 导航选中态互斥 + 回收站计数徽标 */
+.nav-count {
+  margin-left: auto;
+  font-size: 11px; font-weight: 500;
+  line-height: 18px; padding: 0 6px;
+  border-radius: 9999px;
+  background: #ecdfc4; color: #8a7358;
+  font-variant-numeric: tabular-nums;
 }
-.tag-bottom-link {
-  display: flex; align-items: center; gap: 10px;
-  width: 100%; padding: 6px 16px;
-  border: none; border-radius: 6px; background: transparent;
-  font-size: 14px; color: #6b5942; cursor: pointer; text-align: left;
-  transition: background .12s;
-}
-.tag-bottom-link:hover { background: #ecdfc4; }
-.tag-bottom-link i { color: var(--muted); }
-/* 回收站视图：底部入口高亮 */
-.tag-bottom-link.active {
-  background: var(--green); color: #fff; font-weight: 500;
-}
-.tag-bottom-link.active:hover { background: var(--green-hover); }
-.tag-bottom-link.active i { color: #fff; }
+.nav-item.active .nav-count { background: rgba(255,255,255,.22); color: #fff; }
 
 /* 侧边栏底部 */
 .sidebar-footer { padding-top: 8px; }
