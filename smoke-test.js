@@ -26,6 +26,10 @@ function makeMockApi() {
     { id: 2, plain_text: '今天第一条 **重点** #生活', tags: ['生活'], create_time: now - 3600, update_time: now - 3600, image_url: '' },
     { id: 1, plain_text: '昨天旧笔记 #灵感', tags: ['灵感'], create_time: now - 86400 - 3600, update_time: now - 86400 - 3600, image_url: 'https://res.qzhuli.com/test/note-1.jpg' }
   ];
+  // 回收站（软删除，带 delete_time）
+  const trash = [
+    { id: 11, plain_text: '已删除的旧想法 #删除', tags: ['删除'], create_time: now - 3 * 86400, update_time: now - 3 * 86400, delete_time: now - 7200, image_url: '' }
+  ];
   let nextId = 100;
   return {
     get isAuthed() { return !!auth; },
@@ -45,6 +49,20 @@ function makeMockApi() {
       if (page === 1) return { list: store.slice(), has_more: false };
       return { list: [], has_more: false };
     },
+    getRecycleList: async ({ page }) => {
+      if (page === 1) return { list: trash.slice(), has_more: false };
+      return { list: [], has_more: false };
+    },
+    restoreIdea: async (id) => {
+      // 渲染层经 dataset 传字符串 id；真实服务端会强转 int，mock 需宽松比较
+      const idx = trash.findIndex((s) => String(s.id) === String(id));
+      if (idx >= 0) {
+        const item = trash.splice(idx, 1)[0];
+        delete item.delete_time;
+        store.push(item);
+      }
+      return null;
+    },
     saveIdea: async (payload) => {
       const item = {
         id: payload.id || nextId++,
@@ -59,8 +77,12 @@ function makeMockApi() {
       return item;
     },
     deleteIdea: async (id) => {
-      const idx = store.findIndex((s) => s.id === id);
-      if (idx >= 0) store.splice(idx, 1);
+      const idx = store.findIndex((s) => String(s.id) === String(id));
+      if (idx >= 0) {
+        const item = store.splice(idx, 1)[0];
+        item.delete_time = now;
+        trash.push(item);
+      }
       return null;
     }
   };
@@ -147,6 +169,32 @@ app.whenReady().then(async () => {
       if (tagBtn) { tagBtn.click(); await wait(120); }
       out.filteredCardCount = document.querySelectorAll('.memo-card').length;
 
+      // 回收站交互：进入 -> 列表渲染 -> 全部恢复 -> 空态 -> 回到全部笔记可见
+      document.getElementById('nav-all').click();
+      await wait(100);
+      document.getElementById('btn-trash').click();
+      await wait(400); // 拉取回收站列表
+      out.trashCardCount = document.querySelectorAll('.trash-card').length;
+      out.trashTitle = document.getElementById('app-title').textContent;
+      out.trashComposerHidden = document.querySelector('.composer-zone').classList.contains('hidden');
+      out.trashBtnActive = document.getElementById('btn-trash').classList.contains('active');
+      // 恢复全部（每次点击后卡片重建，循环取最新按钮；含冒烟链路删除的那条 + 预置的一条）
+      let guard = 0;
+      while (document.querySelector('.trash-restore-btn') && guard < 5) {
+        document.querySelector('.trash-restore-btn').click();
+        await wait(350);
+        guard += 1;
+      }
+      out.trashCardCountAfterRestore = document.querySelectorAll('.trash-card').length;
+      out.trashEmptyText = document.getElementById('empty-state').querySelector('p').textContent;
+      // 诊断：恢复后服务端/缓存/UI 三处数量
+      await wait(600); // 等恢复 handler 内串行 loadData 完成
+      out.pullCountAfterRestore = (await window.ideaNote.sync.pull()).length;
+      out.cacheCountAfterRestore = (await window.ideaNote.sync.cache()).length;
+      document.getElementById('nav-all').click();
+      await wait(200);
+      out.cardCountAfterRestore = document.querySelectorAll('.memo-card').length;
+
       // Md / Tags 可用
       out.mdOk = window.Md.render('**b**').includes('<strong>b</strong>');
       out.tagsOk = window.Tags.extractTags('#a #b').length === 2;
@@ -189,6 +237,13 @@ app.whenReady().then(async () => {
       result.updatedContent === '已改 #改过' &&
       result.pullCount === 2 &&
       result.filteredCardCount === 1 &&
+      result.trashCardCount === 2 &&
+      result.trashTitle === '回收站' &&
+      result.trashComposerHidden &&
+      result.trashBtnActive &&
+      result.trashCardCountAfterRestore === 0 &&
+      result.trashEmptyText === '回收站是空的' &&
+      result.cardCountAfterRestore === 4 &&
       result.imgCount === 1 &&
       result.imgHasThumbParam && result.imgHasLargeParam &&
       result.lightboxOpen && result.lbBtnCount === 4 &&
@@ -198,7 +253,7 @@ app.whenReady().then(async () => {
       result.mdOk && result.tagsOk &&
       result.listEnterOk && result.listExitOk && result.beginListOk &&
       authOnDisk && authOnDisk.uid === 'u10001' &&
-      cacheOnDisk && cacheOnDisk.memos.length === 2;
+      cacheOnDisk && cacheOnDisk.memos.length === 4;
 
     console.log('SMOKE_PASS=' + pass);
     app.exit(pass ? 0 : 1);

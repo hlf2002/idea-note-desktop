@@ -13,7 +13,7 @@ const fs = require('fs');
 const { extractServerTags, textToContentJson, contentJsonToText } = require('../qz/content');
 const { createSign } = require('../qz/sign');
 const { QzApi } = require('../qz/api');
-const { IdeaSync, mapServerMemo } = require('../qz/sync');
+const { IdeaSync, mapServerMemo, mapTrashMemo } = require('../qz/sync');
 
 // ============ content.js ============
 test('extractServerTags: 基本提取', () => {
@@ -233,6 +233,38 @@ test('api: 未登录调用灵感笔记直接抛 401，不发请求', async () =>
   assert.strictEqual(requested, false, '未登录不应发任何请求');
 });
 
+// ---------- 回收站 API ----------
+test('api: getRecycleList 请求路径与分页参数（带 Vue token）', async () => {
+  let captured = null;
+  const api = mockIdeaFetch(async (url, init) => {
+    captured = { url, init };
+    return { json: async () => ({ code: 200, msg: 'ok', data: { list: [], has_more: false } }) };
+  });
+  api.setAuth({ uid: 'u1', token: 't1', tk: 'p_x' });
+  await api.getRecycleList({ page: 2, pageSize: 20 });
+  assert.ok(captured.url.includes('/h5/idea_note/get_recycle_list'));
+  assert.ok(captured.url.includes('page=2'));
+  assert.ok(captured.url.includes('page_size=20'));
+  assert.strictEqual(captured.init.method, 'GET');
+  assert.strictEqual(captured.init.headers.token, 'vue_tok_1');
+  assert.strictEqual(captured.init.headers.uid, 'u1');
+});
+
+test('api: restoreIdea JSON body（带 Vue token）', async () => {
+  let captured = null;
+  const api = mockIdeaFetch(async (url, init) => {
+    captured = { url, init };
+    return { json: async () => ({ code: 200, msg: 'ok', data: null }) };
+  });
+  api.setAuth({ uid: 'u1', token: 't1', tk: 'p_x' });
+  await api.restoreIdea(42);
+  assert.ok(captured.url.includes('/h5/idea_note/restore'));
+  assert.strictEqual(captured.init.method, 'POST');
+  assert.deepStrictEqual(JSON.parse(captured.init.body), { id: 42 });
+  assert.strictEqual(captured.init.headers['Content-Type'], 'application/json');
+  assert.strictEqual(captured.init.headers.token, 'vue_tok_1');
+});
+
 // ============ sync.js（mock api） ============
 function mockSync(api) {
   const cacheFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'qz-cache-')), 'cache.json');
@@ -305,6 +337,58 @@ test('sync: update 与 remove 维护缓存', async () => {
   assert.strictEqual(s.loadCache()[0].content, '第二版 #改');
   await s.remove(1);
   assert.strictEqual(s.loadCache().length, 0);
+});
+
+// ---------- 回收站 sync ----------
+test('sync: pullTrash 分页合并、deletedAt 映射并按删除时间倒序', async () => {
+  const calls = [];
+  const api = {
+    getRecycleList: async ({ page, pageSize }) => {
+      calls.push({ page, pageSize });
+      if (page === 1) {
+        return {
+          list: [
+            { id: 3, plain_text: '先删的', tags: [], create_time: 100, update_time: 200, delete_time: 900, image_url: '' },
+            { id: 2, plain_text: '后删的', tags: ['x'], create_time: 100, update_time: 200, delete_time: 700, image_url: '' }
+          ],
+          has_more: true
+        };
+      }
+      return { list: [{ id: 1, plain_text: '更早删的', tags: [], create_time: 100, update_time: 150, delete_time: 500, image_url: '' }], has_more: false };
+    }
+  };
+  const s = mockSync(api);
+  const list = await s.pullTrash();
+  assert.strictEqual(list.length, 3);
+  // 按 deletedAt 倒序：先删的(900) 在前
+  assert.deepStrictEqual(list.map((m) => m.id), [3, 2, 1]);
+  assert.strictEqual(list[0].deletedAt, 900000);
+  assert.strictEqual(list[0].content, '先删的');
+  assert.deepStrictEqual(calls.map((c) => c.page), [1, 2]);
+  assert.strictEqual(calls[0].pageSize, 20, '分页大小应取默认 PAGE_SIZE');
+  // 回收站不写入主缓存
+  assert.deepStrictEqual(s.loadCache(), []);
+});
+
+test('sync: restore 调用服务端恢复接口并返回 true', async () => {
+  let restoredId = null;
+  const api = { restoreIdea: async (id) => { restoredId = id; return null; } };
+  const s = mockSync(api);
+  const r = await s.restore(42);
+  assert.strictEqual(r, true);
+  assert.strictEqual(restoredId, 42);
+});
+
+test('mapTrashMemo: 普通字段 + deletedAt 毫秒映射', () => {
+  const m = mapTrashMemo({
+    id: 8, plain_text: '回收站里', tags: ['a'], image_url: 'u', create_time: 1000, update_time: 2000, delete_time: 3000
+  });
+  assert.strictEqual(m.id, 8);
+  assert.strictEqual(m.createdAt, 1000000);
+  assert.strictEqual(m.updatedAt, 2000000);
+  assert.strictEqual(m.deletedAt, 3000000);
+  // 无 delete_time 时兜底为 0
+  assert.strictEqual(mapTrashMemo({ id: 1, plain_text: '', create_time: 1, update_time: 1 }).deletedAt, 0);
 });
 
 test('sync: loadCache 损坏时返回空且备份', () => {

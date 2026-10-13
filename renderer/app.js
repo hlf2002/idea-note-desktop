@@ -20,6 +20,9 @@
     tag: null,
     day: null,           // 按天筛选：'YYYY-MM-DD'，点击热力图格子设置
     search: '',
+    view: 'notes',       // 主视图状态：'notes' 全部笔记 | 'trash' 回收站
+    trash: [],           // 回收站列表（含 deletedAt 删除时间）
+    trashFailed: false,  // 回收站拉取失败标志（用于空态文案区分）
     editingId: null,
     pendingDeleteId: null,
     roamStack: [],
@@ -53,6 +56,8 @@
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
+    appTitle: $('#app-title'),
+    composerZone: $('.composer-zone'),
     btnFeedTop: $('#feed-top'),
     openDataPath: $('#open-data-path'),
     searchInput: $('#search-input'),
@@ -243,8 +248,8 @@
     // 打卡热力图（最近 3 个自然月，GitHub 风格）
     renderHeatmap();
 
-    // 导航高亮
-    el.navAll.classList.toggle('active', state.filter === 'all' && !state.tag && !state.day);
+    // 导航高亮：回收站视图下「全部笔记」不高亮
+    el.navAll.classList.toggle('active', state.view === 'notes' && state.filter === 'all' && !state.tag && !state.day);
 
     // 标签列表
     el.tagList.innerHTML = '';
@@ -358,6 +363,132 @@
     el.memoList.appendChild(frag);
 
     if (state.search.trim()) highlightSearch(el.memoList, state.search.trim());
+  }
+
+  // ---------- 回收站 ----------
+  function filteredTrash() {
+    let list = state.trash;
+    if (state.search.trim()) {
+      const q = state.search.trim().toLowerCase();
+      list = list.filter((m) => (m.content || '').toLowerCase().includes(q));
+    }
+    return list;
+  }
+
+  function renderTrashList() {
+    const list = filteredTrash();
+    el.memoList.innerHTML = '';
+    if (list.length === 0) {
+      el.emptyState.classList.remove('hidden');
+      el.emptyState.querySelector('p').textContent = state.trashFailed
+        ? '回收站加载失败，点击右上角刷新重试'
+        : (state.trash.length > 0 ? '没有符合条件的笔记' : '回收站是空的');
+      return;
+    }
+    el.emptyState.classList.add('hidden');
+    const frag = document.createDocumentFragment();
+    list.forEach((m) => frag.appendChild(buildTrashCard(m)));
+    el.memoList.appendChild(frag);
+    if (state.search.trim()) highlightSearch(el.memoList, state.search.trim());
+  }
+
+  /** 回收站卡片：头部显示删除时间，正文/图片与普通卡片一致，底部操作条提供「恢复」 */
+  function buildTrashCard(memo) {
+    const card = document.createElement('article');
+    card.className = 'memo-card trash-card';
+    card.dataset.id = memo.id;
+
+    const head = document.createElement('div');
+    head.className = 'memo-head';
+    const headLeft = document.createElement('div');
+    headLeft.className = 'memo-head-left';
+    const time = document.createElement('span');
+    time.className = 'memo-time';
+    time.textContent = '删除于 ' + formatFullTime(memo.deletedAt);
+    headLeft.appendChild(time);
+    head.appendChild(headLeft);
+    card.appendChild(head);
+
+    // 正文：标签保留在原位置（#标签 原位渲染为绿色）
+    const content = document.createElement('div');
+    content.className = 'memo-content';
+    content.innerHTML = window.Md.render(memo.content || '', { highlightTags: true });
+    content.querySelectorAll('.tag-inline').forEach((s) => {
+      s.dataset.tag = s.textContent.replace(/^#/, '');
+    });
+    card.appendChild(content);
+
+    // 图片缩略图（与普通卡片一致，点击 lightbox 看大图）
+    const rawImgs = Array.isArray(memo.images) && memo.images.length ? memo.images : [];
+    const imgs = rawImgs.length
+      ? rawImgs.map((img) => (typeof img === 'string'
+        ? { original: img, thumbnail: img, large: img }
+        : img))
+      : (typeof memo.imageUrl === 'string' && /^(https?:|data:image\/)/i.test(memo.imageUrl.trim())
+        ? [{ original: memo.imageUrl.trim(), thumbnail: memo.imageUrl.trim(), large: memo.imageUrl.trim() }]
+        : []);
+    if (imgs.length) {
+      const imagesWrap = document.createElement('div');
+      imagesWrap.className = 'memo-images';
+      imgs.forEach((img) => {
+        const imgEl = document.createElement('img');
+        imgEl.className = 'memo-image-thumb';
+        imgEl.loading = 'lazy';
+        imgEl.alt = '';
+        imgEl.src = img.thumbnail || img.original;
+        imgEl.dataset.full = img.large || img.original;
+        imgEl.addEventListener('click', () => openLightbox(imgEl.dataset.full));
+        imagesWrap.appendChild(imgEl);
+      });
+      card.appendChild(imagesWrap);
+    }
+
+    // 操作条：恢复
+    const actions = document.createElement('div');
+    actions.className = 'trash-actions';
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'trash-restore-btn';
+    restoreBtn.dataset.action = 'restore';
+    restoreBtn.innerHTML = '<i class="fa-solid fa-rotate-left"></i> 恢复';
+    actions.appendChild(restoreBtn);
+    card.appendChild(actions);
+
+    return card;
+  }
+
+  /** 进入回收站视图：隐藏输入区、切换标题、拉取回收站列表 */
+  async function enterTrash() {
+    if (state.view === 'trash') return;
+    state.view = 'trash';
+    el.appTitle.textContent = '回收站';
+    el.composerZone.classList.add('hidden');
+    el.composerZone.classList.remove('collapsed');
+    el.btnTrash.classList.add('active');
+    state.search = '';
+    el.searchInput.value = '';
+    resetFeedTop();
+    renderAll();
+    state.trashFailed = false;
+    try {
+      const list = await window.ideaNote.sync.trash();
+      state.trash = list;
+    } catch (err) {
+      state.trashFailed = true;
+      handleSyncError(err, '加载回收站失败');
+    }
+    renderAll();
+  }
+
+  /** 退出回收站视图：恢复主界面，回到全部笔记 */
+  function exitTrash() {
+    if (state.view !== 'trash') return;
+    state.view = 'notes';
+    el.appTitle.textContent = '灵感笔记';
+    el.composerZone.classList.remove('hidden');
+    el.composerZone.classList.remove('collapsed');
+    el.btnTrash.classList.remove('active');
+    resetFeedTop();
+    renderAll();
   }
 
   // ===== 图片大图查看（lightbox：按钮缩放 / 鼠标拖拽平移 / 滚轮缩放） =====
@@ -970,7 +1101,8 @@
   // ---------- 渲染入口 ----------
   function renderAll() {
     renderSidebar();
-    renderList();
+    if (state.view === 'trash') renderTrashList();
+    else renderList();
     // 内容渲染完成后刷新滚动条定位与尺寸
     positionFeedScrollbar();
     updateFeedScrollbar();
@@ -999,6 +1131,8 @@
     el.memoList.addEventListener('click', async (e) => {
       const tagBtn = e.target.closest('.tag-inline, .memo-tag');
       if (tagBtn) {
+        // 回收站卡片上的标签：退出回收站并筛选该标签
+        exitTrash();
         state.filter = 'tag';
         state.tag = tagBtn.dataset.tag;
         resetFeedTop();
@@ -1061,6 +1195,18 @@
             }
           }, 2500);
         }
+      } else if (action === 'restore') {
+        // 回收站：恢复笔记（可逆操作，直接执行）
+        try {
+          await window.ideaNote.sync.restore(id);
+          state.trash = state.trash.filter((m) => String(m.id) !== String(id));
+          showToast('已恢复到全部笔记');
+          renderAll();
+          // 刷新主列表与本地缓存：恢复后笔记按原排序位置回归（串行等待，避免并发刷新互相覆盖）
+          await loadData(false);
+        } catch (err) {
+          handleSyncError(err, '恢复失败');
+        }
       }
     });
     // 点击外部关闭菜单
@@ -1076,6 +1222,7 @@
     el.tagList.addEventListener('click', (e) => {
       const btn = e.target.closest('.tag-item');
       if (!btn) return;
+      exitTrash(); // 标签筛选只作用于全部笔记
       if (state.filter === 'tag' && state.tag === btn.dataset.tag) {
         state.filter = 'all';
         state.tag = null;
@@ -1089,12 +1236,16 @@
 
     // 导航
     el.navAll.addEventListener('click', () => {
+      exitTrash();
       state.filter = 'all'; state.tag = null; state.day = null; state.search = '';
       el.searchInput.value = '';
       resetFeedTop();
       renderAll();
     });
-    el.navDaily.addEventListener('click', openRoam);
+    el.navDaily.addEventListener('click', () => {
+      exitTrash();
+      openRoam();
+    });
 
     // 热力图：hover 提示（日期 + 条数）+ 点击按天筛选
     el.heatmapGrid.addEventListener('mouseover', (e) => {
@@ -1120,6 +1271,7 @@
     el.heatmapGrid.addEventListener('click', (e) => {
       const cell = e.target.closest('.heatmap-cell.has-data');
       if (!cell) return;
+      exitTrash(); // 按天筛选只作用于全部笔记
       const key = cell.dataset.key;
       // 再次点击同一天：取消筛选
       state.day = (state.day === key) ? null : key;
@@ -1208,13 +1360,26 @@
       startQr();
     });
 
-    // 刷新同步
+    // 刷新同步：全部笔记视图拉主列表；回收站视图重新拉回收站
     el.syncRefresh.addEventListener('click', async () => {
       el.syncRefresh.classList.add('spinning');
       try {
-        const ok = await loadData(false);
-        if (ok) showToast('已同步');
-      } catch (e) { /* loadData 已处理错误 */ }
+        if (state.view === 'trash') {
+          state.trashFailed = false;
+          try {
+            const list = await window.ideaNote.sync.trash();
+            state.trash = list;
+            showToast('已同步');
+          } catch (err) {
+            state.trashFailed = true;
+            handleSyncError(err, '加载回收站失败');
+          }
+          renderAll();
+        } else {
+          const ok = await loadData(false);
+          if (ok) showToast('已同步');
+        }
+      } catch (e) { /* 错误已由 handleSyncError 提示 */ }
       setTimeout(() => el.syncRefresh.classList.remove('spinning'), 600);
     });
 
@@ -1224,8 +1389,11 @@
       el.searchInput.select();
     });
 
-    // 回收站
-    el.btnTrash.addEventListener('click', () => showToast('回收站 · 敬请期待'));
+    // 回收站：进入/退出回收站视图
+    el.btnTrash.addEventListener('click', () => {
+      if (state.view === 'trash') exitTrash();
+      else enterTrash();
+    });
 
     // 输入工具条：插入 markdown 语法；列表按钮按"行首起列表"语义插入
     el.tbTag.addEventListener('click', () => state.composer.insertText(' #'));
@@ -1430,6 +1598,7 @@
   }
 
   async function saveMemo() {
+    if (state.view === 'trash') return; // 回收站视图下输入区已隐藏，防御
     const val = state.composer.value();
     if (!val.trim()) return;
     try {

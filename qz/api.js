@@ -267,9 +267,25 @@ class QzApi {
     }));
   }
 
-  /** 删除灵感笔记（软删除） */
+  /** 删除灵感笔记（软删除，仅置 delete_time） */
   async deleteIdea(id) {
     return this._authRetryOnce(async () => this._request('POST', '/h5/idea_note/delete', {
+      json: { id },
+      headers: await this._ideaHeaders()
+    }));
+  }
+
+  /** 分页拉取回收站列表（已软删除的笔记，含 delete_time） */
+  async getRecycleList({ page = 1, pageSize = PAGE_SIZE } = {}) {
+    return this._authRetryOnce(async () => this._request('GET', '/h5/idea_note/get_recycle_list', {
+      query: { page, page_size: pageSize },
+      headers: await this._ideaHeaders()
+    }));
+  }
+
+  /** 恢复回收站中的笔记（服务端仅清 delete_time，不改 update_time） */
+  async restoreIdea(id) {
+    return this._authRetryOnce(async () => this._request('POST', '/h5/idea_note/restore', {
       json: { id },
       headers: await this._ideaHeaders()
     }));

@@ -131,6 +131,8 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
   ipcMain.handle('sync:create', (_e, text) => guard(() => { requireAuth(); return sync.createFromText(text); }));
   ipcMain.handle('sync:update', (_e, id, text) => guard(() => { requireAuth(); return sync.update(id, text); }));
   ipcMain.handle('sync:delete', (_e, id) => guard(() => { requireAuth(); return sync.remove(id); }));
+  ipcMain.handle('sync:trash', () => guard(() => { requireAuth(); return sync.pullTrash(); }));
+  ipcMain.handle('sync:restore', (_e, id) => guard(() => { requireAuth(); return sync.restore(id); }));
   ipcMain.handle('sync:cache', () => sync.loadCache());
 
   // 旧本地数据一次性导入（登录后可用）

@@ -251,6 +251,26 @@ html, body {
 }
 .tag-bottom-link:hover { background: #ecdfc4; }
 .tag-bottom-link i { color: var(--muted); }
+/* 回收站视图：底部入口高亮 */
+.tag-bottom-link.active {
+  background: var(--green); color: #fff; font-weight: 500;
+}
+.tag-bottom-link.active:hover { background: var(--green-hover); }
+.tag-bottom-link.active i { color: #fff; }
+
+/* 回收站卡片：删除时间 + 恢复操作条 */
+.trash-actions {
+  display: flex; justify-content: flex-end;
+  padding: 8px 14px 10px;
+}
+.trash-restore-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border: none; border-radius: 6px;
+  background: var(--green); color: #fff;
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background .12s;
+}
+.trash-restore-btn:hover { background: var(--green-hover); }
 
 /* 侧边栏底部 */
 .sidebar-footer { padding-top: 8px; }

@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('ideaNote', {
     create: (text) => ipcRenderer.invoke('sync:create', text),
     update: (id, text) => ipcRenderer.invoke('sync:update', id, text),
     remove: (id) => ipcRenderer.invoke('sync:delete', id),
+    trash: () => ipcRenderer.invoke('sync:trash'),
+    restore: (id) => ipcRenderer.invoke('sync:restore', id),
     cache: () => ipcRenderer.invoke('sync:cache'),
     importLegacy: () => ipcRenderer.invoke('sync:importLegacy'),
     hasLegacy: () => ipcRenderer.invoke('sync:hasLegacy')

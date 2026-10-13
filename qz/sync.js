@@ -31,6 +31,11 @@ function mapServerMemo(item) {
   };
 }
 
+/** 回收站条目 -> 本地结构：普通 memo 字段 + deletedAt（删除时间，毫秒） */
+function mapTrashMemo(item) {
+  return { ...mapServerMemo(item), deletedAt: (item.delete_time || 0) * 1000 };
+}
+
 class IdeaSync {
   /**
    * @param {object} deps
@@ -96,6 +101,34 @@ class IdeaSync {
     return true;
   }
 
+  /** 分页拉取回收站全部（新删除在前），仅返回列表，不写入主缓存 */
+  async pullTrash() {
+    const all = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const data = await this.api.getRecycleList({ page, pageSize: PAGE_SIZE });
+      const list = (data && Array.isArray(data.list)) ? data.list : [];
+      list.forEach((item) => all.push(mapTrashMemo(item)));
+      hasMore = !!(data && data.has_more);
+      if (list.length === 0) hasMore = false;
+      page += 1;
+      // 防御：异常循环保护
+      if (page > 500) break;
+    }
+    all.sort((a, b) => b.deletedAt - a.deletedAt);
+    return all;
+  }
+
+  /**
+   * 恢复：调用服务端恢复接口（仅清 delete_time，不改 update_time）。
+   * 服务端不返回笔记数据，恢复后的排序位置由渲染层重新 pull 主列表保证。
+   */
+  async restore(id) {
+    await this.api.restoreIdea(id);
+    return true;
+  }
+
   /** 读取缓存（不访问网络）；不存在返回 [] */
   loadCache() {
     try {
@@ -138,4 +171,4 @@ class IdeaSync {
   }
 }
 
-module.exports = { IdeaSync, mapServerMemo };
+module.exports = { IdeaSync, mapServerMemo, mapTrashMemo };
