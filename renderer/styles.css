@@ -590,8 +590,10 @@ html, body {
 .memo-menu button.danger { color: var(--red); }
 .memo-menu button.danger:hover { background: var(--red-soft); }
 
-.memo-content { color: #5d4430; font-size: 15px; line-height: 1.7; white-space: pre-wrap; }
-.memo-content p { margin: 0 0 6px; }
+/* 注意：pre-wrap 只放在段落/引用上，不能放容器——md.js 渲染输出在块级元素间插入 \n，
+   容器级 pre-wrap 会把块间换行渲染成空白行，导致卡片内容块之间出现大空隙 */
+.memo-content { color: #5d4430; font-size: 15px; line-height: 1.7; }
+.memo-content p { margin: 0 0 6px; white-space: pre-wrap; }
 .memo-content p:last-child { margin-bottom: 0; }
 .memo-content a { color: var(--green); text-decoration: none; }
 .memo-content a:hover { text-decoration: underline; }
@@ -763,8 +765,8 @@ html, body {
   to { opacity: 1; transform: none; }
 }
 .roam-date { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
-.roam-content { font-size: 19px; line-height: 1.85; color: #5d4430; white-space: pre-wrap; }
-.roam-content p { margin: 0 0 10px; }
+.roam-content { font-size: 19px; line-height: 1.85; color: #5d4430; }
+.roam-content p { margin: 0 0 10px; white-space: pre-wrap; }
 .roam-content a { color: var(--green); }
 .roam-content code { background: #efe3c9; padding: 1px 5px; border-radius: 5px; font-size: 15px; }
 .roam-content pre { background: #efe3c9; border-radius: 10px; padding: 10px; margin: 8px 0; font-size: 14px; }
@@ -866,6 +868,14 @@ html, body {
   transition: background .12s, color .12s;
 }
 .update-close:hover { background: #efe3c9; color: #5d4430; }
+
+/* 侧边栏「检查更新」链接：下载进度后的关闭按钮 */
+.check-update-x {
+  margin-left: 7px; cursor: pointer; font-size: 13px; line-height: 1;
+  color: var(--muted); border-radius: 50%; padding: 1px 5px;
+  transition: color .12s, background .12s;
+}
+.check-update-x:hover { background: #efe3c9; color: #5d4430; }
 
 /* 轻提示 */
 .toast {

@@ -162,6 +162,8 @@
       if (listStart) {
         var listType = line.match(/^\s*\d+[.)]/) ? 'ol' : 'ul';
         var items = [];
+        var startNum = 1;     // 有序列表起始编号：取用户写的第一个编号，避免独立列表块编号重置
+        var startSet = false;
         while (i < lines.length) {
           var tl = lines[i];
           var todo = tl.match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/);
@@ -174,6 +176,7 @@
             items.push({ text: ul[1] });
             i++;
           } else if (listType === 'ol' && ol) {
+            if (!startSet) { startNum = parseInt(ol[1], 10) || 1; startSet = true; }
             items.push({ text: ol[2] });
             i++;
           } else {
@@ -181,7 +184,7 @@
           }
         }
         var tag = listType === 'ol' ? 'ol' : 'ul';
-        out.push('<' + tag + '>');
+        out.push('<' + tag + (listType === 'ol' && startNum > 1 ? ' start="' + startNum + '"' : '') + '>');
         items.forEach(function (it) {
           out.push('<li>'
             + (it.todo !== undefined
@@ -195,8 +198,9 @@
       }
 
       // 普通段落：连续非空行合并在一个 <p> 内，保留换行（配合 white-space:pre-wrap）
+      // 排除列表行，否则 "3. xxx" / "- xxx" 会被吞进段落，无法解析为列表
       var para = [];
-      while (i < lines.length && lines[i].trim() !== '' && !/^```/.test(lines[i]) && !/^>/.test(lines[i])) {
+      while (i < lines.length && lines[i].trim() !== '' && !/^```/.test(lines[i]) && !/^>/.test(lines[i]) && !/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(lines[i])) {
         para.push(lines[i]);
         i++;
       }
