@@ -81,6 +81,8 @@
     roamNext: $('#roam-next'),
     toast: $('#toast'),
     checkUpdate: $('#check-update'),
+    checkUpdateLabel: $('#check-update-label'),
+    checkUpdateX: $('#check-update-x'),
     footerVersion: $('#footer-version'),
     updateBar: $('#update-bar'),
     updateText: $('#update-text'),
@@ -927,6 +929,8 @@
   let updateDismissedVersion = null;  // 用户忽略的版本号（不再重复提示）
   let updateShownVersion = null;      // 更新条当前展示的版本
   let updateActionMode = null;        // 'download' | 'restart'
+  let checkUpdateState = 'idle';      // 侧边栏「检查更新」链接状态：'idle' | 'downloading' | 'downloaded'
+  let downloadDismissed = false;      // 用户点 x 关闭下载进度提示后，不再刷新进度文案
 
   function showUpdateBar(text, mode) {
     el.updateBar.classList.remove('hidden');
@@ -951,7 +955,7 @@
   function handleUpdateEvent(payload) {
     const ev = payload && payload.event;
     if (ev === 'checking') {
-      if (payload.manual) showToast('正在检查更新…');
+      // 检查过程不再弹 toast，结果由下方事件与「检查更新」链接状态反馈
     } else if (ev === 'available') {
       if (payload.version && payload.version === updateDismissedVersion) return;
       if (payload.version && payload.version === updaterInfo.currentVersion) return; // 防御：版本未变
@@ -959,21 +963,28 @@
       showUpdateBar('发现新版本 v' + payload.version,
         updaterInfo.autoDownload ? null : 'download');
     } else if (ev === 'downloading') {
-      el.updateBar.classList.remove('hidden');
-      el.updateText.textContent = '正在下载更新…';
-      el.updateAction.classList.add('hidden');
-      el.updateProgress.classList.remove('hidden');
-      el.updateProgress.textContent = (payload.percent || 0) + '%';
+      // 下载进度改由侧边栏「检查更新」链接展示，隐藏顶部提示条避免重复
+      hideUpdateBar();
+      checkUpdateState = 'downloading';
+      if (!downloadDismissed) {
+        el.checkUpdateLabel.textContent = '正在下载更新… ' + (payload.percent || 0) + '%';
+        el.checkUpdateX.classList.remove('hidden');
+      }
     } else if (ev === 'downloaded') {
+      hideUpdateBar();
       updateShownVersion = payload.version;
-      el.updateBar.classList.remove('hidden');
-      el.updateText.textContent = '新版本 v' + (payload.version || '') + ' 已就绪';
-      el.updateProgress.classList.add('hidden');
-      showUpdateBar('新版本已就绪，重启后生效', 'restart');
+      downloadDismissed = false;
+      checkUpdateState = 'downloaded';
+      el.checkUpdateLabel.textContent = '重启并安装';
+      el.checkUpdateX.classList.add('hidden');
     } else if (ev === 'not-available') {
       if (payload.manual) showToast('已是最新版本');
     } else if (ev === 'error') {
       hideUpdateBar();
+      downloadDismissed = false;
+      checkUpdateState = 'idle';
+      el.checkUpdateLabel.textContent = '检查更新';
+      el.checkUpdateX.classList.add('hidden');
       showToast('更新失败：' + (payload.message || '网络异常，请稍后再试'));
     }
   }
@@ -1444,15 +1455,32 @@
     // 数据目录
     el.openDataPath.addEventListener('click', () => window.ideaNote.app.openDataPath());
 
-    // 检查更新（手动）
+    // 检查更新（手动）：空闲 → 检查；下载中 → 忽略；已就绪 → 重启安装
     el.checkUpdate.addEventListener('click', async () => {
+      if (checkUpdateState === 'downloading') return;
+      if (checkUpdateState === 'downloaded') {
+        try {
+          const r = await window.ideaNote.updater.install();
+          if (!r || !r.ok) showToast((r && r.message) || '安装失败，请重试');
+        } catch (e) {
+          showToast('安装失败，请重试');
+        }
+        return;
+      }
       try {
         const r = await window.ideaNote.updater.check();
         if (!r || !r.ok) showToast((r && r.message) || '检查更新失败');
-        else if (r.message) showToast(r.message);
       } catch (e) {
         showToast('检查更新失败');
       }
+    });
+    // 关闭下载进度提示（下载在后台继续，完成后链接自动变为「重启并安装」）
+    el.checkUpdateX.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadDismissed = true;
+      checkUpdateState = 'idle';
+      el.checkUpdateLabel.textContent = '检查更新';
+      el.checkUpdateX.classList.add('hidden');
     });
     // 更新条操作：下载更新 / 重启并安装
     el.updateAction.addEventListener('click', async () => {
