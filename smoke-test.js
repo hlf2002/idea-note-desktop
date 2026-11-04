@@ -13,10 +13,30 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const http = require('http');
 const { initApp } = require('./app-core');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'idea-note-smoke-'));
 app.setPath('userData', tmpDir); // 独立数据目录，不污染真实数据
+
+// 1x1 透明 PNG：冒烟用的真实图片文件（走真实的 FormData 上传链路）
+const SMOKE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64'
+);
+const smokeImagePath = path.join(tmpDir, 'smoke-upload.png');
+fs.writeFileSync(smokeImagePath, SMOKE_PNG);
+
+// 本地假七牛：接收 FormData 上传，回显 image_id（与 requestUpload 的凭证一致）
+const uploadServer = http.createServer((req, res) => {
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ image_id: 'img_uploaded', key: 'idea_note/smoke.png' }));
+  });
+});
+let uploadPort = 0;
 
 // ---- mock QzOpenApi（模拟开放平台 + 中转服务） ----
 function makeMockApi() {
@@ -101,13 +121,29 @@ function makeMockApi() {
       return [];
     },
     async requestUpload() {
-      return { image_id: 'img_uploaded', upload_url: 'https://upload.qiniup.com/', token: 'tk', max_size: 10485760, mime_type: 'image/png' };
+      return {
+        image_id: 'img_uploaded',
+        upload_url: 'http://127.0.0.1:' + uploadPort + '/upload',
+        token: 'tk',
+        max_size: 10485760,
+        mime_type: 'image/png'
+      };
     }
   };
 }
 
 app.whenReady().then(async () => {
   try {
+    // 假七牛上传服务先起来（media.upload 会真实 POST 到这里）
+    await new Promise((resolve, reject) => {
+      uploadServer.once('error', reject);
+      uploadServer.listen(0, '127.0.0.1', () => {
+        uploadPort = uploadServer.address().port;
+        resolve();
+      });
+    });
+
+
     const authFile = path.join(tmpDir, 'auth.json');
     const cacheFile = path.join(tmpDir, 'idea-cache.json');
     const legacyFile = path.join(tmpDir, 'flomo-local.json');
@@ -138,6 +174,10 @@ app.whenReady().then(async () => {
     });
 
     await win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    // 把测试图片路径注入渲染层（media.upload 需要真实文件绝对路径）
+    await win.webContents.executeJavaScript(
+      'window.__smokeImagePath = ' + JSON.stringify(smokeImagePath) + ';'
+    );
 
     // 等待：渲染层 init -> 自动 startQr -> 2s 轮询 -> ok -> 主视图 -> 拉数据渲染
     await new Promise((r) => setTimeout(r, 4500));
@@ -155,27 +195,12 @@ app.whenReady().then(async () => {
       out.sidebarTagCount = document.querySelectorAll('.tag-item').length;
       out.memoCount = document.getElementById('stat-memos').textContent;
 
-      // 图片渲染：旧数据带 image_url 的仍应渲染缩略图（开放平台新数据只有 image_id，暂不展示）
+      // 图片渲染：mock 的 image_url 是假七牛域名（必然加载失败）→ 应降级为占位且保留原地址
       out.hasLightbox = !!document.getElementById('image-lightbox');
       out.imgCount = document.querySelectorAll('.memo-image-thumb').length;
-      const firstImg = document.querySelector('.memo-image-thumb');
-      out.firstImgSrc = firstImg ? firstImg.getAttribute('src') : null;
-      out.imgHasThumbParam = !!(firstImg && firstImg.getAttribute('src').indexOf('imageView2/2/w/180') >= 0);
-
-      if (firstImg) {
-        firstImg.click();
-        await wait(200);
-      }
-      const lbEl = document.getElementById('image-lightbox');
-      if (lbEl) {
-        out.lightboxOpen = lbEl.classList.contains('open');
-        const closeBtn = document.querySelector('#image-lightbox [data-action="close"]');
-        if (closeBtn) closeBtn.click();
-        out.lightboxClosed = !lbEl.classList.contains('open');
-      } else {
-        out.lightboxOpen = false;
-        out.lightboxClosed = false;
-      }
+      const brokenImg = document.querySelector('.memo-image-missing[data-src]');
+      out.brokenSrc = brokenImg ? brokenImg.getAttribute('data-src') : null;
+      out.imgHasThumbParam = !!(out.brokenSrc || '').indexOf('imageView2/2/w/180') >= 0;
 
       // 登录态 API（开放平台字段 q_uid）
       const auth = await window.ideaNote.auth.get();
@@ -224,6 +249,53 @@ app.whenReady().then(async () => {
       } catch (e) {
         out.listErr = String((e && e.message) || e);
       }
+
+      // ---- 图片上传链路：真实 FormData 上传到本地假七牛 → 本地缓存 → 卡片缩略图 ----
+      out.upload = null;
+      try {
+        out.upload = await window.ideaNote.media.upload(window.__smokeImagePath);
+      } catch (e) { out.uploadError = String((e && e.message) || e); }
+
+      if (out.upload && out.upload.imageId) {
+        out.mediaFileName = out.upload.fileName;
+        const withImg = await window.ideaNote.sync.create('带图 #图片', [out.upload.imageId]);
+        out.withImgId = withImg.id;
+        // 同步刷新：loadData → refreshMediaIndex → 卡片显示本地缩略图
+        document.getElementById('sync-refresh').click();
+        await wait(1200);
+        const thumbs = Array.prototype.slice.call(document.querySelectorAll('.memo-image-thumb'));
+        const localThumbs = thumbs.filter((t) => (t.getAttribute('src') || '').indexOf('file://') === 0);
+        out.localThumbCount = localThumbs.length;
+        out.localThumbSrc = localThumbs.length ? localThumbs[0].getAttribute('src') : null;
+        out.missingBadgeCount = document.querySelectorAll('.memo-image-missing').length;
+        // lightbox：点击真实本地缩略图能打开/关闭
+        if (localThumbs.length) {
+          localThumbs[0].click();
+          await wait(300);
+          const lbEl = document.getElementById('image-lightbox');
+          out.lightboxOpen = !!(lbEl && lbEl.classList.contains('open'));
+          const closeBtn = document.querySelector('#image-lightbox [data-action="close"]');
+          if (closeBtn) closeBtn.click();
+          out.lightboxClosed = !!(lbEl && !lbEl.classList.contains('open'));
+        }
+
+        // 链路验证：用 Image 探针真实加载本机副本（不受 lazy 与窗口隐藏影响）
+        const probeSrc = out.upload.url;
+        out.localImageSrc = probeSrc;
+        out.protocolProbe = await new Promise((resolve) => {
+          const probe = new Image();
+          const info = { events: [] };
+          const onViolation = (ev) => info.events.push('csp:' + ev.violatedDirective + '|' + ev.blockedURI);
+          document.addEventListener('securitypolicyviolation', onViolation);
+          const timer = setTimeout(() => { document.removeEventListener('securitypolicyviolation', onViolation); info.result = 'timeout'; resolve(info); }, 2500);
+          probe.onload = () => { clearTimeout(timer); document.removeEventListener('securitypolicyviolation', onViolation); info.result = 'load:' + probe.naturalWidth; resolve(info); };
+          probe.onerror = () => { clearTimeout(timer); document.removeEventListener('securitypolicyviolation', onViolation); info.result = 'error'; resolve(info); };
+          probe.src = probeSrc;
+        });
+        out.protocolImageLoaded = /^load:[1-9]/.test(out.protocolProbe.result || '');
+        // 清理：删除带图笔记，保持数据基线
+        await window.ideaNote.sync.remove(withImg.id);
+      }
       } catch (e) { return { __smokeError: String((e && e.stack) || e), __partial: out }; }
       return out;
     })()`);
@@ -244,6 +316,15 @@ app.whenReady().then(async () => {
     console.log('SMOKE_AUTH_UID=' + (authOnDisk ? authOnDisk.q_uid : 'null'));
     console.log('SMOKE_CACHE_COUNT=' + (cacheOnDisk && cacheOnDisk.memos ? cacheOnDisk.memos.length : -1));
 
+    // 磁盘验证：图片本地副本 + 映射索引
+    const mediaIndexFile = path.join(tmpDir, 'media-index.json');
+    const mediaIndexOnDisk = fs.existsSync(mediaIndexFile)
+      ? JSON.parse(fs.readFileSync(mediaIndexFile, 'utf8')) : null;
+    const uploadedName = mediaIndexOnDisk ? mediaIndexOnDisk['img_uploaded'] : null;
+    const mediaFileOnDisk = !!(uploadedName && fs.existsSync(path.join(tmpDir, 'media', uploadedName)));
+    const mediaFileBytes = mediaFileOnDisk ? fs.statSync(path.join(tmpDir, 'media', uploadedName)).size : -1;
+    console.log('SMOKE_MEDIA=' + JSON.stringify({ uploadedName, mediaFileOnDisk, mediaFileBytes }));
+
     const pass =
       result.loginHidden && result.appVisible &&
       result.userName === '测试用户' &&
@@ -259,11 +340,20 @@ app.whenReady().then(async () => {
       result.trashTitle === '回收站' &&
       /暂未开放回收站/.test(result.trashEmptyText) &&
       result.cardCountAfterBack === 2 &&
-      result.imgCount === 1 &&
+      /^https:\/\/.+imageView2\/2\/w\/180/.test(result.brokenSrc || '') &&
       result.imgHasThumbParam &&
-      result.lightboxOpen && result.lightboxClosed &&
       result.mdOk && result.tagsOk &&
       result.listEnterOk && result.listExitOk && result.beginListOk &&
+      // 图片上传链路
+      !!result.upload && result.upload.imageId === 'img_uploaded' &&
+      result.mediaFileName === 'img_uploaded.png' &&
+      result.localThumbCount >= 1 &&
+      /^file:\/\//.test(result.localThumbSrc || '') &&
+      result.protocolImageLoaded === true &&
+      result.lightboxOpen === true && result.lightboxClosed === true &&
+      result.missingBadgeCount >= 1 &&
+      mediaFileOnDisk && mediaFileBytes === SMOKE_PNG.length &&
+      uploadedName === 'img_uploaded.png' &&
       authOnDisk && authOnDisk.q_uid === 'q10001' &&
       !!authOnDisk.access_token && !!authOnDisk.refresh_token &&
       cacheOnDisk && cacheOnDisk.memos.length === 2;

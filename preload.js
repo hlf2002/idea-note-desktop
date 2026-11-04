@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld('ideaNote', {
   // 灵感笔记同步
   sync: {
     pull: () => ipcRenderer.invoke('sync:pull'),
-    create: (text) => ipcRenderer.invoke('sync:create', text),
+    create: (text, imageIds) => ipcRenderer.invoke('sync:create', text, imageIds),
     update: (id, text, imageIds) => ipcRenderer.invoke('sync:update', id, text, imageIds),
     remove: (id) => ipcRenderer.invoke('sync:delete', id),
     trash: () => ipcRenderer.invoke('sync:trash'),
@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld('ideaNote', {
     cache: () => ipcRenderer.invoke('sync:cache'),
     importLegacy: () => ipcRenderer.invoke('sync:importLegacy'),
     hasLegacy: () => ipcRenderer.invoke('sync:hasLegacy')
+  },
+  // 图片：选图 → 上传 → 本地映射（平台只给 image_id，本机展示靠本地缓存）
+  media: {
+    choose: () => ipcRenderer.invoke('dialog:openImages'),
+    upload: (filePath) => ipcRenderer.invoke('media:upload', filePath),
+    index: () => ipcRenderer.invoke('media:index')
   },
   // 桌面小组件：推送某条笔记内容到桌面小组件
   widget: {

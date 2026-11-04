@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://client.qzhuli.com https://test.client.qzhuli.com;" />
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https: idenote-media:; font-src 'self'; connect-src 'self' https://client.qzhuli.com https://test.client.qzhuli.com;" />
   <title>灵感笔记 · Q助理</title>
   <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css" />
   <link rel="stylesheet" href="styles.css" />
@@ -128,6 +128,7 @@
           <div class="composer-card">
             <div class="composer" id="composer" contenteditable="true" spellcheck="false"
                  data-placeholder="现在的想法是…"></div>
+            <div class="composer-attachments hidden" id="composer-images"></div>
             <div class="composer-toolbar">
               <div class="toolbar-left">
                 <button id="tb-tag" class="tool-btn" data-tip="标签"><i class="fa-solid fa-hashtag"></i></button>

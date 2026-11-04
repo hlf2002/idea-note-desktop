@@ -16,17 +16,18 @@
 const { ipcMain, shell, dialog, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
 const { AuthStore } = require('./qz/auth');
 const { QzOpenApi } = require('./qz/openapi');
 const { IdeaSync } = require('./qz/sync');
+const { MediaStore, validateImage } = require('./qz/media');
 const {
   RELAY_BASE_URL,
   QZ_APP_KEY,
   RELAY_CLIENT_PIN,
   LOGIN_POLL_INTERVAL_MS,
   LOGIN_POLL_TIMEOUT_MS,
-  IMAGE_MAX_BYTES,
-  IMAGE_MIME_ALLOWED
+  IMAGE_MAX_COUNT
 } = require('./qz/config');
 
 /** 已知数据目录名：flomo-local → idea-note-local → 灵感笔记（应用改名/打包导致 userData 路径变化） */
@@ -79,6 +80,12 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
   if (loaded && !loaded.legacy && loaded.access_token) api.setAuth(loaded);
 
   const sync = new IdeaSync({ api, cacheFile });
+  // 本地图片缓存：平台只给 image_id，不给 URL，本机展示靠这份副本
+  const baseDir = dataDir || path.dirname(cacheFile);
+  const mediaStore = new MediaStore({
+    dir: path.join(baseDir, 'media'),
+    indexFile: path.join(baseDir, 'media-index.json')
+  });
 
   // ---------- 登录态 ----------
   ipcMain.handle('auth:get', () => {
@@ -220,7 +227,7 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     }
   }
   ipcMain.handle('sync:pull', () => guard(() => { requireAuth(); return sync.pullAll(); }));
-  ipcMain.handle('sync:create', (_e, text) => guard(() => { requireAuth(); return sync.createFromText(text); }));
+  ipcMain.handle('sync:create', (_e, text, imageIds) => guard(() => { requireAuth(); return sync.createFromText(text, imageIds); }));
   ipcMain.handle('sync:update', (_e, id, text, imageIds) => guard(() => { requireAuth(); return sync.update(id, text, imageIds); }));
   ipcMain.handle('sync:delete', (_e, id) => guard(() => { requireAuth(); return sync.remove(id); }));
   ipcMain.handle('sync:trash', () => guard(() => { requireAuth(); return sync.pullTrash(); }));
@@ -256,28 +263,25 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
   });
 
   // ---------- 图片上传（申请凭证 → 客户端直传七牛 → 拿 image_id） ----------
-  ipcMain.handle('dialog:openImage', async () => {
+  // 多选：返回文件绝对路径数组；用户取消返回空数组
+  ipcMain.handle('dialog:openImages', async () => {
     const result = await dialog.showOpenDialog({
-      properties: ['openFile'],
+      properties: ['openFile', 'multiSelections'],
       filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'webp'] }]
     });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    return result.filePaths[0];
+    if (result.canceled || !Array.isArray(result.filePaths)) return [];
+    return result.filePaths.slice(0, IMAGE_MAX_COUNT);
   });
 
-  ipcMain.handle('qiniu:upload', (_e, filePath) => guard(async () => {
+  // 单张上传：校验 → 申请凭证 → 直传七牛 → 本地缓存原图（供本机展示）
+  ipcMain.handle('media:upload', (_e, filePath) => guard(async () => {
     requireAuth();
-    if (!filePath || !fs.existsSync(filePath)) {
-      throw new Error('文件不存在');
+    if (!filePath || typeof filePath !== 'string' || !fs.existsSync(filePath)) {
+      throw new Error('图片文件不存在或已被移动');
     }
     const stat = fs.statSync(filePath);
-    if (stat.size <= 0) throw new Error('图片文件为空');
-    if (stat.size > IMAGE_MAX_BYTES) throw new Error('图片超过 10MB，请压缩后重试');
-
-    const ext = path.extname(filePath).toLowerCase();
-    if (ext === '.gif' || ext === '.bmp') throw new Error('平台不支持 GIF / BMP，请转成 JPG 或 PNG');
-    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
-    if (!IMAGE_MIME_ALLOWED.includes(mime)) throw new Error('仅支持 JPG / PNG / WEBP 图片');
+    if (!stat.isFile()) throw new Error('请选择图片文件');
+    const { mime, ext } = validateImage(filePath, stat.size);
 
     // 1. 申请上传凭证（返回 image_id，是后续写入笔记的唯一凭据）
     const ticket = await api.requestUpload({ mime_type: mime, size: stat.size });
@@ -293,15 +297,38 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     try {
       res = await fetch(ticket.upload_url, { method: 'POST', body: form });
     } catch (err) {
-      throw new Error('图片上传网络失败: ' + ((err && err.message) || err));
+      throw new Error('图片上传网络失败，请检查网络后重试');
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data || data.image_id !== ticket.image_id) {
       throw new Error('图片上传失败' + (data && data.error ? ': ' + data.error : ''));
     }
-    // 平台不返回图片 URL，客户端只能用 image_id 提交；展示待平台补齐访问规则
-    return { imageId: ticket.image_id };
+
+    // 3. 本机留一份原图：平台不返回图片 URL，桌面端要靠这份副本展示
+    let fileName = '';
+    let url = '';
+    try {
+      fileName = mediaStore.save(ticket.image_id, filePath, ext);
+      const saved = mediaStore.filePath(fileName);
+      if (saved) url = pathToFileURL(saved).toString();
+    } catch (err) {
+      // 缓存失败不影响笔记写入（服务端已收到图片），只是本机看不到缩略图
+      console.warn('[media] 本地缓存失败: ' + ((err && err.message) || err));
+    }
+    return { imageId: ticket.image_id, fileName, url };
   }));
+
+  // 本地图片映射：image_id -> file:// 绝对地址（渲染层直接给 <img src>）
+  // 平台不返回图片 URL，本机副本是唯一可展示来源；文件被清理时 img 会 onerror 降级为占位
+  ipcMain.handle('media:index', () => {
+    const map = mediaStore.map();
+    const out = {};
+    for (const id of Object.keys(map)) {
+      const p = mediaStore.filePath(map[id]);
+      if (p) out[id] = pathToFileURL(p).toString();
+    }
+    return out;
+  });
 
   // ---------- 其它 ----------
   ipcMain.handle('app:getDataPath', () => path.join(dataDir, 'idea-cache.json'));

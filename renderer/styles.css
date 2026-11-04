@@ -912,3 +912,53 @@ html, body {
   opacity: 1;
   transform: translateY(0);
 }
+
+/* ===== 图片附件（输入区 / 编辑区 / 卡片占位） ===== */
+/* 输入区与编辑卡片共用：选图后先出「上传中」占位，成功后换成缩略图 */
+.composer-attachments {
+  margin-top: 10px;
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.attach-item {
+  position: relative;
+  width: 82px; height: 82px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #efe3c9;
+  border: 1px solid #e2d3b6;
+  flex: 0 0 auto;
+}
+.attach-item.error { border-color: #d9534f; background: #fbeceb; }
+.attach-thumb {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+  cursor: zoom-in;
+}
+.attach-loading,
+.attach-error {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: #a08a70; font-size: 12px;
+}
+.attach-error { color: #c0392b; }
+.attach-remove {
+  position: absolute; top: 2px; right: 2px;
+  width: 18px; height: 18px; border-radius: 50%;
+  border: none; padding: 0; cursor: pointer;
+  background: rgba(0,0,0,.55); color: #fff;
+  font-size: 10px; line-height: 18px; text-align: center;
+  display: flex; align-items: center; justify-content: center;
+}
+.attach-remove:hover { background: rgba(0,0,0,.8); }
+
+/* 服务端有图但本机无副本（其他设备上传）：降级为占位徽标，不显示破图 */
+.memo-image-missing {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #efe3c9;
+  color: #8a7358;
+  font-size: 12px;
+  cursor: default;
+}
+.memo-image-missing i { font-size: 12px; }

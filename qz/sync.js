@@ -75,11 +75,24 @@ class IdeaSync {
     return all;
   }
 
-  /** 新建：文本 -> 灵感笔记，返回本地 memo 结构（标签由平台从 content_json 提取） */
-  async createFromText(text) {
-    const saved = await this.api.createNote({
-      content_json: textToContentJson(text)
-    });
+  /**
+   * 新建：文本 + 已上传的 image_id 数组 -> 灵感笔记，返回本地 memo 结构
+   * （标签由平台从 content_json 提取；纯图片笔记允许 text 为空）
+   */
+  async createFromText(text, imageIds) {
+    const images = Array.isArray(imageIds)
+      ? imageIds.filter((x) => typeof x === 'string' && x)
+      : [];
+    const content = String(text == null ? '' : text);
+    if (!content.trim() && images.length === 0) {
+      // 服务端要求有效正文，空也无图时直接拒绝，避免产生空笔记
+      const err = new Error('笔记内容不能为空');
+      err.code = -2;
+      throw err;
+    }
+    const payload = { content_json: textToContentJson(content) };
+    if (images.length) payload.images = images;
+    const saved = await this.api.createNote(payload);
     const memo = mapServerMemo(saved);
     this._upsertCache(memo);
     return memo;

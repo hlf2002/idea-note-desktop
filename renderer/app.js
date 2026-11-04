@@ -28,7 +28,8 @@
     roamStack: [],
     pollTimer: null,
     pollSceneId: null,
-    composer: null
+    composer: null,
+    composerImages: []   // 顶部输入框待发送图片：[{ key, imageId, fileName, status, error }]
   };
 
   const el = {
@@ -64,6 +65,7 @@
     searchInput: $('#search-input'),
     btnFilter: $('#btn-filter'),
     composer: $('#composer'),
+    composerImages: $('#composer-images'),
     composerSend: $('#composer-send'),
     tbTag: $('#tb-tag'),
     tbImage: $('#tb-image'),
@@ -409,19 +411,12 @@
     });
     card.appendChild(content);
 
-    // 图片缩略图（与普通卡片一致，点击 lightbox 看大图）
-    const rawImgs = Array.isArray(memo.images) && memo.images.length ? memo.images : [];
-    const imgs = rawImgs.length
-      ? rawImgs.map((img) => (typeof img === 'string'
-        ? { original: img, thumbnail: img, large: img }
-        : img))
-      : (typeof memo.imageUrl === 'string' && /^(https?:|data:image\/)/i.test(memo.imageUrl.trim())
-        ? [{ original: memo.imageUrl.trim(), thumbnail: memo.imageUrl.trim(), large: memo.imageUrl.trim() }]
-        : []);
-    if (imgs.length) {
+    // 图片缩略图（与普通卡片一致：本机有副本显示缩略图，否则占位徽标）
+    const media = memoDisplayImages(memo);
+    if (media.images.length || media.missing > 0) {
       const imagesWrap = document.createElement('div');
       imagesWrap.className = 'memo-images';
-      imgs.forEach((img) => {
+      media.images.forEach((img) => {
         const imgEl = document.createElement('img');
         imgEl.className = 'memo-image-thumb';
         imgEl.loading = 'lazy';
@@ -429,8 +424,24 @@
         imgEl.src = img.thumbnail || img.original;
         imgEl.dataset.full = img.large || img.original;
         imgEl.addEventListener('click', () => openLightbox(imgEl.dataset.full));
+        // 图片加载失败（本机副本被清理 / 远端地址失效）→ 降级为占位徽标，
+        // 原始地址留在 data-src 便于排查，绝不显示破图图标
+        imgEl.addEventListener('error', () => {
+          const ph = document.createElement('span');
+          ph.className = 'memo-image-missing';
+          ph.setAttribute('data-src', imgEl.getAttribute('src') || '');
+          ph.innerHTML = '<i class="fa-regular fa-image"></i><span>图片已不在本机</span>';
+          if (imgEl.parentNode) imgEl.parentNode.replaceChild(ph, imgEl);
+        });
         imagesWrap.appendChild(imgEl);
       });
+      if (media.missing > 0) {
+        const ph = document.createElement('span');
+        ph.className = 'memo-image-missing';
+        ph.innerHTML = '<i class="fa-regular fa-image"></i><span></span>';
+        ph.querySelector('span').textContent = media.missing + ' 张图片 · 在 Q助理 App 查看';
+        imagesWrap.appendChild(ph);
+      }
       card.appendChild(imagesWrap);
     }
 
@@ -712,29 +723,38 @@
     });
     card.appendChild(content);
 
-    // 图片：卡片内只展示七牛小缩略图，点击打开 lightbox 看大图
-    // 兼容三种数据形态：新格式对象数组 / 旧格式字符串数组 / 更老的 imageUrl 单图
-    const rawImgs = Array.isArray(memo.images) && memo.images.length ? memo.images : [];
-    const imgs = rawImgs.length
-      ? rawImgs.map((img) => (typeof img === 'string'
-        ? { original: img, thumbnail: img, large: img }
-        : img))
-      : (typeof memo.imageUrl === 'string' && /^(https?:|data:image\/)/i.test(memo.imageUrl.trim())
-        ? [{ original: memo.imageUrl.trim(), thumbnail: memo.imageUrl.trim(), large: memo.imageUrl.trim() }]
-        : []);
-    if (imgs.length) {
+    // 图片：本机有副本的显示缩略图（点击 lightbox 看大图）；
+    // 只有 image_id、本机无副本的（其他设备上传）显示占位徽标，不显示破图
+    const media = memoDisplayImages(memo);
+    if (media.images.length || media.missing > 0) {
       const imagesWrap = document.createElement('div');
       imagesWrap.className = 'memo-images';
-      imgs.forEach((img) => {
-        const el = document.createElement('img');
-        el.className = 'memo-image-thumb';
-        el.loading = 'lazy';
-        el.alt = '';
-        el.src = img.thumbnail || img.original;
-        el.dataset.full = img.large || img.original;
-        el.addEventListener('click', () => openLightbox(el.dataset.full));
-        imagesWrap.appendChild(el);
+      media.images.forEach((img) => {
+        const imgEl = document.createElement('img');
+        imgEl.className = 'memo-image-thumb';
+        imgEl.loading = 'lazy';
+        imgEl.alt = '';
+        imgEl.src = img.thumbnail || img.original;
+        imgEl.dataset.full = img.large || img.original;
+        imgEl.addEventListener('click', () => openLightbox(imgEl.dataset.full));
+        // 图片加载失败（本机副本被清理 / 远端地址失效）→ 降级为占位徽标，
+        // 原始地址留在 data-src 便于排查，绝不显示破图图标
+        imgEl.addEventListener('error', () => {
+          const ph = document.createElement('span');
+          ph.className = 'memo-image-missing';
+          ph.setAttribute('data-src', imgEl.getAttribute('src') || '');
+          ph.innerHTML = '<i class="fa-regular fa-image"></i><span>图片已不在本机</span>';
+          if (imgEl.parentNode) imgEl.parentNode.replaceChild(ph, imgEl);
+        });
+        imagesWrap.appendChild(imgEl);
       });
+      if (media.missing > 0) {
+        const ph = document.createElement('span');
+        ph.className = 'memo-image-missing';
+        ph.innerHTML = '<i class="fa-regular fa-image"></i><span></span>';
+        ph.querySelector('span').textContent = media.missing + ' 张图片 · 在 Q助理 App 查看';
+        imagesWrap.appendChild(ph);
+      }
       card.appendChild(imagesWrap);
     }
 
@@ -805,7 +825,24 @@
         '<button type="button" class="composer-send" data-edit-tool="save" title="保存"><i class="fa-solid fa-paper-plane"></i></button>' +
       '</div>';
 
+    // 图片附件条：编辑时保留原图片（image_ids），可继续加图/删图
+    const attachWrap = document.createElement('div');
+    attachWrap.className = 'composer-attachments hidden';
+    const editImages = (Array.isArray(memo.imageIds) ? memo.imageIds : []).map((id) => ({
+      key: 'img_' + id,
+      imageId: id,
+      fileName: '',
+      url: mediaIndex[id] || '',
+      status: 'done',
+      error: ''
+    }));
+    function renderEditImages() {
+      renderAttachments(attachWrap, editImages, renderEditImages);
+    }
+    renderEditImages();
+
     card.appendChild(editEl);
+    card.appendChild(attachWrap);
     card.appendChild(tb);
     inner.appendChild(card);
     wrap.appendChild(inner);
@@ -822,9 +859,14 @@
     });
 
     async function saveEdit(val) {
-      if (!val || !val.trim()) return;
+      // 允许纯图片笔记：没文字但有图也能保存
+      if ((!val || !val.trim()) && editImages.length === 0) return;
+      if (hasUploadingImage(editImages)) {
+        showToast('图片还在上传，请稍候再保存');
+        return;
+      }
       try {
-        const updated = await window.ideaNote.sync.update(memo.id, val);
+        const updated = await window.ideaNote.sync.update(memo.id, val || '', uploadedImageIds(editImages));
         detachSuggester();
         state.editingId = null;
         upsertLocal(updated);
@@ -840,7 +882,7 @@
 
     // 工具栏：行为与顶部输入框完全一致
     tb.querySelector('[data-edit-tool="tag"]').addEventListener('click', () => composer.insertText(' #'));
-    tb.querySelector('[data-edit-tool="image"]').addEventListener('click', () => showToast('图片上传 · 敬请期待'));
+    tb.querySelector('[data-edit-tool="image"]').addEventListener('click', () => pickAndUploadImages(editImages, renderEditImages));
     tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
     tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
     tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
@@ -979,6 +1021,203 @@
     window.ideaNote.updater.onStatus(handleUpdateEvent);
   }
 
+  // ---------- 图片上传与展示 ----------
+  // 平台（/open/idea_note/*）只返回 image_id，不返回图片 URL：
+  //  - 本机上传的图：主进程在 <userData>/media/ 留了副本，返回 file:// 地址直接给 <img>；
+  //  - 其他设备上传的图：本机没有副本 → 显示占位徽标，不显示破图。
+  const MAX_IMAGES = 9; // 与 qz/config.js 的 IMAGE_MAX_COUNT 保持一致
+  let mediaIndex = {};  // imageId -> 本机图片 file:// 地址
+
+  /** 拉取本地图片映射（启动、同步后调用） */
+  async function refreshMediaIndex() {
+    try {
+      const map = window.ideaNote && window.ideaNote.media ? await window.ideaNote.media.index() : {};
+      mediaIndex = (map && typeof map === 'object') ? map : {};
+    } catch (e) {
+      mediaIndex = {};
+    }
+    return mediaIndex;
+  }
+
+  /**
+   * memo -> 卡片展示用图片
+   * @returns {{images: Array<{thumbnail: string, large: string}>, missing: number}}
+   *   images：可直接展示的图（本机副本优先，其次旧 image_url）
+   *   missing：服务端有 image_id 但本机无副本的张数
+   */
+  function memoDisplayImages(memo) {
+    const ids = (memo && Array.isArray(memo.imageIds)) ? memo.imageIds : [];
+    const images = [];
+    const seen = {};
+    let missing = 0;
+    ids.forEach((id) => {
+      const url = mediaIndex[id];
+      if (url) {
+        if (!seen[url]) { seen[url] = true; images.push({ thumbnail: url, large: url }); }
+      } else {
+        missing += 1;
+      }
+    });
+    // 旧数据：服务端 image_url（有 CDN 地址时可展示）
+    const legacy = (memo && Array.isArray(memo.images)) ? memo.images : [];
+    legacy.forEach((img) => {
+      const obj = typeof img === 'string' ? { thumbnail: img, large: img } : img;
+      if (!obj || !obj.thumbnail) return;
+      if (seen[obj.thumbnail]) return;
+      seen[obj.thumbnail] = true;
+      images.push({ thumbnail: obj.thumbnail, large: obj.large || obj.thumbnail });
+    });
+    if (!images.length && typeof memo.imageUrl === 'string' && /^(https?:|data:image\/)/i.test(memo.imageUrl.trim())) {
+      const u = memo.imageUrl.trim();
+      images.push({ thumbnail: u, large: u });
+    }
+    return { images, missing };
+  }
+
+  /**
+   * 渲染附件条（顶部输入框与编辑卡片共用）
+   * @param {HTMLElement} container 容器
+   * @param {Array} items 附件数组
+   * @param {Function} onChange 变更后回调（调用方负责重绘）
+   */
+  function renderAttachments(container, items, onChange) {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!Array.isArray(items) || items.length === 0) {
+      container.classList.add('hidden');
+      return;
+    }
+    container.classList.remove('hidden');
+    items.forEach((item) => {
+      const cell = document.createElement('div');
+      cell.className = 'attach-item' + (item.status === 'error' ? ' error' : '');
+
+      if (item.status === 'done' && item.url) {
+        const img = document.createElement('img');
+        img.className = 'attach-thumb';
+        img.alt = '';
+        img.src = item.url;
+        img.addEventListener('click', () => openLightbox(item.url));
+        // 本地副本被清理/移动 → 降级为占位，不显示破图
+        img.addEventListener('error', () => {
+          img.remove();
+          const ph = document.createElement('div');
+          ph.className = 'attach-error';
+          ph.textContent = '图片';
+          cell.insertBefore(ph, cell.firstChild);
+        });
+        cell.appendChild(img);
+      } else if (item.status === 'uploading') {
+        const ph = document.createElement('div');
+        ph.className = 'attach-loading';
+        ph.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+        cell.appendChild(ph);
+      } else {
+        // 上传失败 / 本机无副本（其他设备上传）→ 占位，避免破图
+        const ph = document.createElement('div');
+        ph.className = 'attach-error';
+        ph.textContent = item.status === 'error' ? '失败' : '图片';
+        ph.title = item.error || '该图片在本机没有副本（其他设备上传）';
+        cell.appendChild(ph);
+      }
+
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'attach-remove';
+      rm.title = '移除';
+      rm.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+      rm.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const i = items.indexOf(item);
+        if (i >= 0) items.splice(i, 1);
+        onChange();
+      });
+      cell.appendChild(rm);
+      container.appendChild(cell);
+    });
+  }
+
+  /**
+   * 选图 → 逐张上传 → 追加到目标附件数组。
+   * 串行上传：并发多张容易撞七牛配额/凭证，且串行的进度反馈更稳。
+   * @param {Array} items 目标附件数组
+   * @param {Function} onChange 每张状态变化后重绘
+   */
+  async function pickAndUploadImages(items, onChange) {
+    if (!window.ideaNote || !window.ideaNote.media) {
+      showToast('当前版本不支持图片上传，请更新到最新版');
+      return;
+    }
+    if (items.length >= MAX_IMAGES) {
+      showToast('单条笔记最多 ' + MAX_IMAGES + ' 张图片');
+      return;
+    }
+    let paths = [];
+    try {
+      paths = await window.ideaNote.media.choose();
+    } catch (err) {
+      showToast('打开图片选择器失败');
+      return;
+    }
+    if (!Array.isArray(paths) || paths.length === 0) return;
+
+    const room = MAX_IMAGES - items.length;
+    if (paths.length > room) {
+      paths = paths.slice(0, room);
+      showToast('单条笔记最多 ' + MAX_IMAGES + ' 张图片，本次只上传前 ' + room + ' 张');
+    }
+
+    for (const p of paths) {
+      const item = {
+        key: 'img_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        imageId: '',
+        fileName: '',
+        url: '',
+        status: 'uploading',
+        error: ''
+      };
+      items.push(item);
+      onChange();
+      try {
+        const r = await window.ideaNote.media.upload(p);
+        item.imageId = r && r.imageId ? r.imageId : '';
+        item.fileName = r && r.fileName ? r.fileName : '';
+        item.url = r && r.url ? r.url : '';
+        if (!item.imageId) throw new Error('图片上传失败，请重试');
+        item.status = 'done';
+        if (item.url) mediaIndex[item.imageId] = item.url;
+      } catch (err) {
+        item.status = 'error';
+        item.error = (err && err.message) || '图片上传失败';
+        showToast(item.error);
+      }
+      onChange();
+    }
+  }
+
+  /** 待发送附件里已上传成功的 image_id 列表 */
+  function uploadedImageIds(items) {
+    return (items || [])
+      .filter((it) => it && it.status === 'done' && it.imageId)
+      .map((it) => it.imageId);
+  }
+
+  /** 是否有图片还在上传（提交前校验） */
+  function hasUploadingImage(items) {
+    return (items || []).some((it) => it && it.status === 'uploading');
+  }
+
+  /** 顶部输入区附件条重绘（模块级，事件与提交流程共用） */
+  function renderComposerImages() {
+    renderAttachments(el.composerImages, state.composerImages, renderComposerImages);
+  }
+
+  /** 顶部输入区附件全部清空（提交成功后调用） */
+  function clearComposerImages() {
+    state.composerImages = [];
+    renderComposerImages();
+  }
+
   // ---------- 同步操作 ----------
   function upsertLocal(memo) {
     const idx = state.memos.findIndex((m) => m.id === memo.id);
@@ -1090,6 +1329,8 @@
     try {
       const memos = await window.ideaNote.sync.pull();
       state.memos = memos;
+      // 同步后刷新本地图片映射：上传成功的那批图才能显示缩略图
+      await refreshMediaIndex();
       renderAll();
       cancelAuthRetry(); // 同步成功：清除自动重试
       refreshTrash();    // 后台刷新回收站计数徽标（不阻塞列表展示）
@@ -1137,6 +1378,8 @@
       }
     });
     el.composerSend.addEventListener('click', async () => { await saveMemo(); });
+    // 输入区附件条：上传中 → 缩略图；可逐张移除
+    renderComposerImages();
 
     el.memoList.addEventListener('click', async (e) => {
       const tagBtn = e.target.closest('.tag-inline, .memo-tag');
@@ -1418,7 +1661,7 @@
     el.tbTag.addEventListener('click', () => state.composer.insertText(' #'));
     el.tbUl.addEventListener('click', () => state.composer.beginList('- '));
     el.tbOl.addEventListener('click', () => state.composer.beginList('1. '));
-    el.tbImage.addEventListener('click', () => showToast('图片上传 · 敬请期待'));
+    el.tbImage.addEventListener('click', () => pickAndUploadImages(state.composerImages, renderComposerImages));
     el.tbFont.addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
     el.tbAt.addEventListener('click', () => showToast('提及 · 敬请期待'));
 
@@ -1636,10 +1879,16 @@
   async function saveMemo() {
     if (state.view === 'trash') return; // 回收站视图下输入区已隐藏，防御
     const val = state.composer.value();
-    if (!val.trim()) return;
+    const hasImages = state.composerImages.length > 0;
+    if (!hasImages && !val.trim()) return;
+    if (hasUploadingImage(state.composerImages)) {
+      showToast('图片还在上传，请稍候再发送');
+      return;
+    }
     try {
-      const memo = await window.ideaNote.sync.create(val);
+      const memo = await window.ideaNote.sync.create(val, uploadedImageIds(state.composerImages));
       state.composer.clear();
+      clearComposerImages();
       upsertLocal(memo);
       // 标签视图下发无标签（或不含当前标签）的笔记：该笔记在当前视图被过滤不可见，
       // 自动跳回「全部笔记」并定位到新笔记（新笔记按时间排序恒为列表第一条 → 回到顶部即可）
@@ -1662,6 +1911,7 @@
   async function init() {
     bindEvents();
     initUpdaterUi();
+    await refreshMediaIndex(); // 本地图片映射：决定卡片能否显示本机缩略图
     // 旧版内部接口登录态无法续期到开放平台：提示重新扫码一次
     try {
       const legacy = await window.ideaNote.auth.legacyNotice();

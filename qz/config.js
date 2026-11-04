@@ -31,5 +31,7 @@ module.exports = {
 
   // 图片上传限制（/open/media/upload）
   IMAGE_MAX_BYTES: 10 * 1024 * 1024,
-  IMAGE_MIME_ALLOWED: ['image/jpeg', 'image/png', 'image/webp']
+  IMAGE_MIME_ALLOWED: ['image/jpeg', 'image/png', 'image/webp'],
+  // 单条笔记最多图片数（与手机端体验对齐）
+  IMAGE_MAX_COUNT: 9
 };
