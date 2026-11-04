@@ -354,9 +354,22 @@ class QzOpenApi {
     return this._authRetryOnce(() => this._open('GET', '/open/idea_note/detail', { query: { id } }));
   }
 
-  /** 新建笔记：content_json 必填，images 为已上传完成的 image_id 数组 */
+  /**
+   * 笔记正文序列化。
+   * 重要：开放平台文档示例给的是嵌套对象，但实测必须传 **JSON 字符串**，
+   * 传对象会返回 40002「签名参数无效」（平台把 content_json 当字符串参与签名）。
+   */
+  _serializeContent(contentJson) {
+    if (typeof contentJson === 'string') return contentJson;
+    if (!contentJson || typeof contentJson !== 'object') {
+      throw new QzApiError('笔记正文格式错误', -1);
+    }
+    return JSON.stringify(contentJson);
+  }
+
+  /** 新建笔记：content_json 必传（对象或字符串），images 为已上传完成的 image_id 数组 */
   async createNote({ content_json, images, record_time }) {
-    const body = { content_json };
+    const body = { content_json: this._serializeContent(content_json) };
     if (Array.isArray(images) && images.length) body.images = images;
     if (record_time) body.record_time = Math.floor(Number(record_time));
     return this._authRetryOnce(() => this._open('POST', '/open/idea_note/create', { body }));
@@ -366,7 +379,11 @@ class QzOpenApi {
   async updateNote({ id, content_json, images }) {
     if (id === undefined || id === null || id === '') throw new QzApiError('修改笔记缺少 id', -1);
     return this._authRetryOnce(() => this._open('POST', '/open/idea_note/update', {
-      body: { id, content_json, images: Array.isArray(images) ? images : [] }
+      body: {
+        id,
+        content_json: this._serializeContent(content_json),
+        images: Array.isArray(images) ? images : []
+      }
     }));
   }
 

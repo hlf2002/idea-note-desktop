@@ -202,6 +202,9 @@ test('createNote: 没有图片时不传 images 字段', async () => {
   await api.createNote({ content_json: { type: 'doc', content: [] } });
   assert.strictEqual(calls[0].body.body.images, undefined);
   assert.strictEqual(calls[0].body.path, '/open/idea_note/create');
+  // 实测：平台要求 content_json 是 JSON 字符串，传对象会 40002 签名参数无效
+  assert.strictEqual(typeof calls[0].body.body.content_json, 'string');
+  assert.deepStrictEqual(JSON.parse(calls[0].body.body.content_json), { type: 'doc', content: [] });
 });
 
 test('createNote: 有图片时传 image_id 数组', async () => {
@@ -209,6 +212,7 @@ test('createNote: 有图片时传 image_id 数组', async () => {
   api.setAuth(AUTH);
   await api.createNote({ content_json: { type: 'doc', content: [] }, images: ['img_1', 'img_2'] });
   assert.deepStrictEqual(calls[0].body.body.images, ['img_1', 'img_2']);
+  assert.strictEqual(typeof calls[0].body.body.content_json, 'string');
 });
 
 test('updateNote: 必须带 id 与 images 数组（不传等于清空）', async () => {
@@ -216,6 +220,7 @@ test('updateNote: 必须带 id 与 images 数组（不传等于清空）', async
   api.setAuth(AUTH);
   await api.updateNote({ id: 3, content_json: { type: 'doc', content: [] } });
   assert.deepStrictEqual(calls[0].body.body.images, []);
+  assert.strictEqual(typeof calls[0].body.body.content_json, 'string', 'update 同样要传字符串');
   await assert.rejects(() => api.updateNote({ content_json: {} }), /缺少 id/);
 });
 
