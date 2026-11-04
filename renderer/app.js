@@ -1145,6 +1145,7 @@
         exitTrash();
         state.filter = 'tag';
         state.tag = tagBtn.dataset.tag;
+        state.day = null; // 标签与热力图日期互斥：只看标签，不再叠加某一天
         resetFeedTop();
         renderAll();
         return;
@@ -1234,6 +1235,8 @@
       const btn = e.target.closest('.tag-item');
       if (!btn) return;
       exitTrash(); // 标签筛选只作用于全部笔记
+      // 标签与热力图日期互斥：点标签时清掉按天筛选，避免出现「标签 ∩ 某天」的交集
+      state.day = null;
       if (state.filter === 'tag' && state.tag === btn.dataset.tag) {
         state.filter = 'all';
         state.tag = null;
