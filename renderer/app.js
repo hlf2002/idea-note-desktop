@@ -1284,6 +1284,11 @@
       if (!cell) return;
       exitTrash(); // 按天筛选只作用于全部笔记
       const key = cell.dataset.key;
+      // 热力图是独立视图：点格子只看当天内容，不叠加标签筛选
+      if (state.filter !== 'all' || state.tag !== null) {
+        state.filter = 'all';
+        state.tag = null;
+      }
       // 再次点击同一天：取消筛选
       state.day = (state.day === key) ? null : key;
       const feed = document.querySelector('.feed');
