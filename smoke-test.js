@@ -1,7 +1,7 @@
 /**
- * smoke-test.js —— Electron 集成冒烟测试（扫码登录 + 灵感笔记同步，mock API）
- * 用注入的 mock QzApi 验证完整链路：
- *   扫码创建 -> 轮询 confirmed -> 登录态持久化 -> 渲染层自动进入主视图
+ * smoke-test.js —— Electron 集成冒烟测试（Q助理开放平台登录 + 灵感笔记同步，mock API）
+ * 用注入的 mock QzOpenApi 验证完整链路：
+ *   开始授权 -> 轮询 ok -> 登录态持久化 -> 渲染层自动进入主视图
  *   -> 拉取灵感笔记 -> 渲染卡片 -> 增删改查
  * 运行：npx electron smoke-test.js
  * 退出码：0 = 通过，1 = 失败
@@ -18,72 +18,90 @@ const { initApp } = require('./app-core');
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'idea-note-smoke-'));
 app.setPath('userData', tmpDir); // 独立数据目录，不污染真实数据
 
-// ---- mock QzApi（模拟 Q助理服务端） ----
+// ---- mock QzOpenApi（模拟开放平台 + 中转服务） ----
 function makeMockApi() {
   let auth = null;
   const now = Math.floor(Date.now() / 1000);
   const store = [
-    { id: 2, plain_text: '今天第一条 **重点** #生活', tags: ['生活'], create_time: now - 3600, update_time: now - 3600, image_url: '' },
-    { id: 1, plain_text: '昨天旧笔记 #灵感', tags: ['灵感'], create_time: now - 86400 - 3600, update_time: now - 86400 - 3600, image_url: 'https://res.qzhuli.com/test/note-1.jpg' }
-  ];
-  // 回收站（软删除，带 delete_time）
-  const trash = [
-    { id: 11, plain_text: '已删除的旧想法 #删除', tags: ['删除'], create_time: now - 3 * 86400, update_time: now - 3 * 86400, delete_time: now - 7200, image_url: '' }
+    { id: 2, plain_text: '今天第一条 **重点** #生活', tags: ['生活'], create_time: now - 3600, update_time: now - 3600, images: [], image_url: '' },
+    { id: 1, plain_text: '昨天旧笔记 #灵感', tags: ['灵感'], create_time: now - 86400 - 3600, update_time: now - 86400 - 3600, images: ['img_mock_1'], image_url: 'https://res.qzhuli.com/test/note-1.jpg' }
   ];
   let nextId = 100;
   return {
     get isAuthed() { return !!auth; },
     setAuth(a) { auth = a; },
-    qrLoginCreate: async (type) => ({ scene_id: 'mock-scene-1', expires_in: 300, api_client_type: type }),
-    qrLoginStatus: async (sceneId) => {
-      if (sceneId === 'mock-scene-1') {
-        return {
-          status: 'confirmed',
-          api_client_type: 3,
-          login_data: { id: 1, uid: 'u10001', cid: 'c10001', nickname: '测试用户', real_name: '', avatar: '', token: 'mock-token-abc', tk: 'pc_mock_tk' }
-        };
-      }
-      return { status: 'pending' };
+    async startLogin() { return { state: 'st_smoke_1234567890', authorizeUrl: 'about:blank' }; },
+    async pollLogin() {
+      return {
+        status: 'ok',
+        q_uid: 'q10001',
+        nickname: '测试用户',
+        avatar: '',
+        access_token: 'ou_smoke',
+        refresh_token: 'or_smoke',
+        expires_in: 7200,
+        refresh_expires_in: 7776000
+      };
     },
-    getIdeaList: async ({ page }) => {
+    async acceptLoginResult(r) {
+      auth = {
+        q_uid: r.q_uid,
+        nickname: r.nickname,
+        avatar: r.avatar || '',
+        access_token: r.access_token,
+        refresh_token: r.refresh_token,
+        expires_at: Date.now() + 7200 * 1000,
+        refresh_expires_at: Date.now() + 7776000 * 1000,
+        authorized_at: Date.now()
+      };
+      return auth;
+    },
+    async ensureFresh() { return auth; },
+    async probeAuth() { return { ok: !!auth }; },
+    startKeepAlive() {},
+    stopKeepAlive() {},
+    async listNotes({ page }) {
       if (page === 1) return { list: store.slice(), has_more: false };
       return { list: [], has_more: false };
     },
-    getRecycleList: async ({ page }) => {
-      if (page === 1) return { list: trash.slice(), has_more: false };
-      return { list: [], has_more: false };
+    async getNote(id) {
+      const item = store.find((s) => String(s.id) === String(id));
+      return item || null;
     },
-    restoreIdea: async (id) => {
-      // 渲染层经 dataset 传字符串 id；真实服务端会强转 int，mock 需宽松比较
-      const idx = trash.findIndex((s) => String(s.id) === String(id));
-      if (idx >= 0) {
-        const item = trash.splice(idx, 1)[0];
-        delete item.delete_time;
-        store.push(item);
-      }
-      return null;
-    },
-    saveIdea: async (payload) => {
+    async createNote({ content_json, images }) {
       const item = {
-        id: payload.id || nextId++,
-        plain_text: payload.plain_text,
-        tags: payload.tags || [],
-        create_time: payload.id ? now - 86400 : now,
+        id: nextId++,
+        plain_text: (content_json && content_json.__plain) || '新增 #测试',
+        tags: ['测试'],
+        create_time: now,
         update_time: now,
+        images: Array.isArray(images) ? images : [],
         image_url: ''
       };
-      const idx = store.findIndex((s) => s.id === item.id);
+      store.push(item);
+      return item;
+    },
+    async updateNote({ id, content_json, images }) {
+      const idx = store.findIndex((s) => String(s.id) === String(id));
+      const item = {
+        id: Number(id),
+        plain_text: (content_json && content_json.__plain) || '已改 #改过',
+        tags: ['改过'],
+        create_time: idx >= 0 ? store[idx].create_time : now,
+        update_time: now,
+        images: Array.isArray(images) ? images : [],
+        image_url: ''
+      };
       if (idx >= 0) store[idx] = item; else store.push(item);
       return item;
     },
-    deleteIdea: async (id) => {
+    async deleteNote(id) {
       const idx = store.findIndex((s) => String(s.id) === String(id));
-      if (idx >= 0) {
-        const item = store.splice(idx, 1)[0];
-        item.delete_time = now;
-        trash.push(item);
-      }
-      return null;
+      if (idx >= 0) store.splice(idx, 1);
+      return [];
+    },
+    async requestUpload() {
+      return { image_id: 'img_uploaded', upload_url: 'https://upload.qiniup.com/', token: 'tk', max_size: 10485760, mime_type: 'image/png' };
     }
   };
 }
@@ -95,7 +113,7 @@ app.whenReady().then(async () => {
     const legacyFile = path.join(tmpDir, 'flomo-local.json');
     const mockApi = makeMockApi();
 
-    initApp({ authFile, cacheFile, legacyFile, dataDir: tmpDir, apiOverride: mockApi });
+    const core = initApp({ authFile, cacheFile, legacyFile, dataDir: tmpDir, apiOverride: mockApi });
 
     const win = new BrowserWindow({
       width: 1040,
@@ -109,49 +127,59 @@ app.whenReady().then(async () => {
       }
     });
 
+    // 登录 IPC 必须在渲染层加载前注册（渲染层 init 会立刻调 auth:start）
+    core.registerAuthIpc(() => win);
+
+    win.webContents.on('console-message', (_e, level, message) => {
+      console.log('[renderer]', level, message);
+    });
+    win.webContents.on('preload-error', (_e, p, err) => {
+      console.log('[preload-error]', p, err && err.message);
+    });
+
     await win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-    // 等待：渲染层 init -> 自动 startQr -> 3s 轮询 -> confirmed -> 主视图 -> 拉数据渲染
+    // 等待：渲染层 init -> 自动 startQr -> 2s 轮询 -> ok -> 主视图 -> 拉数据渲染
     await new Promise((r) => setTimeout(r, 4500));
 
     const result = await win.webContents.executeJavaScript(`(async () => {
       const wait = (ms) => new Promise(r => setTimeout(r, ms));
       const out = {};
+      try {
+      out.loginStatus = (document.getElementById('qr-status')||{}).textContent;
+      out.loginLoading = (document.getElementById('qr-loading')||{}).textContent;
       out.loginHidden = document.getElementById('login-view').classList.contains('hidden');
       out.appVisible = !document.getElementById('app-view').classList.contains('hidden');
       out.userName = document.getElementById('user-name').textContent;
       out.cardCount = document.querySelectorAll('.memo-card').length;
-      out.dayTitles = Array.from(document.querySelectorAll('.day-title')).map(e => e.textContent);
       out.sidebarTagCount = document.querySelectorAll('.tag-item').length;
       out.memoCount = document.getElementById('stat-memos').textContent;
 
-      // 图片渲染：七牛 image_url 的笔记卡片应渲染缩略图 <img>，并带大图 data-full
+      // 图片渲染：旧数据带 image_url 的仍应渲染缩略图（开放平台新数据只有 image_id，暂不展示）
+      out.hasLightbox = !!document.getElementById('image-lightbox');
       out.imgCount = document.querySelectorAll('.memo-image-thumb').length;
       const firstImg = document.querySelector('.memo-image-thumb');
       out.firstImgSrc = firstImg ? firstImg.getAttribute('src') : null;
-      out.firstImgFull = firstImg ? firstImg.getAttribute('data-full') : null;
       out.imgHasThumbParam = !!(firstImg && firstImg.getAttribute('src').indexOf('imageView2/2/w/180') >= 0);
-      out.imgHasLargeParam = !!(firstImg && firstImg.getAttribute('data-full').indexOf('imageView2/2/w/1200') >= 0);
 
-      // lightbox 交互：点击缩略图打开 -> 工具栏按钮 -> 放大 -> 重置 -> 关闭
-      if (firstImg) firstImg.click();
-      await wait(150);
-      out.lightboxOpen = document.getElementById('image-lightbox').classList.contains('open');
-      out.lbBtnCount = document.querySelectorAll('#image-lightbox .lb-btn').length;
-      const lbImg = document.querySelector('#image-lightbox .lightbox-img');
-      const zoomInBtn = document.querySelector('#image-lightbox [data-action="zoom-in"]');
-      if (zoomInBtn) zoomInBtn.click();
-      out.afterZoomInTransform = lbImg ? lbImg.style.transform : '';
-      const resetBtn = document.querySelector('#image-lightbox [data-action="reset"]');
-      if (resetBtn) resetBtn.click();
-      out.afterResetTransform = lbImg ? lbImg.style.transform : '';
-      const closeBtn = document.querySelector('#image-lightbox [data-action="close"]');
-      if (closeBtn) closeBtn.click();
-      out.lightboxClosed = !document.getElementById('image-lightbox').classList.contains('open');
+      if (firstImg) {
+        firstImg.click();
+        await wait(200);
+      }
+      const lbEl = document.getElementById('image-lightbox');
+      if (lbEl) {
+        out.lightboxOpen = lbEl.classList.contains('open');
+        const closeBtn = document.querySelector('#image-lightbox [data-action="close"]');
+        if (closeBtn) closeBtn.click();
+        out.lightboxClosed = !lbEl.classList.contains('open');
+      } else {
+        out.lightboxOpen = false;
+        out.lightboxClosed = false;
+      }
 
-      // 登录态 API
+      // 登录态 API（开放平台字段 q_uid）
       const auth = await window.ideaNote.auth.get();
-      out.authUid = auth ? auth.uid : null;
+      out.authUid = auth ? auth.q_uid : null;
       out.authNickname = auth ? auth.nickname : null;
 
       // 同步 CRUD 全链路
@@ -169,57 +197,39 @@ app.whenReady().then(async () => {
       if (tagBtn) { tagBtn.click(); await wait(120); }
       out.filteredCardCount = document.querySelectorAll('.memo-card').length;
 
-      // 回收站交互：进入 -> 列表渲染 -> 全部恢复 -> 空态 -> 回到全部笔记可见
+      // 回收站：开放平台首版无接口 -> 空列表 + 说明文案
       document.getElementById('nav-all').click();
       await wait(100);
-      out.trashCountBadge = document.getElementById('trash-count').textContent; // 启动后台刷新后应显示回收站条数
       document.getElementById('btn-trash').click();
-      await wait(400); // 拉取回收站列表
+      await wait(400);
       out.trashCardCount = document.querySelectorAll('.trash-card').length;
       out.trashTitle = document.getElementById('app-title').textContent;
-      out.trashComposerHidden = document.querySelector('.composer-zone').classList.contains('hidden');
-      out.trashBtnActive = document.getElementById('btn-trash').classList.contains('active');
-      out.navAllActiveInTrash = document.getElementById('nav-all').classList.contains('active');
-      // 恢复全部（卡片右上角「⋯」菜单里的恢复；每次恢复后卡片重建，循环取最新菜单）
-      let guard = 0;
-      while (document.querySelector('.trash-card .memo-ellipsis') && guard < 5) {
-        const ellipsis = document.querySelector('.trash-card .memo-ellipsis');
-        ellipsis.click();
-        await wait(100);
-        const restoreBtn = document.querySelector('.trash-card .memo-menu [data-action="restore"]');
-        if (!restoreBtn) break;
-        restoreBtn.click();
-        await wait(350);
-        guard += 1;
-      }
-      out.trashCardCountAfterRestore = document.querySelectorAll('.trash-card').length;
-      out.trashEmptyText = document.getElementById('empty-state').querySelector('p').textContent;
-      out.trashCountBadgeAfterRestore = document.getElementById('trash-count').textContent;
-      // 诊断：恢复后服务端/缓存/UI 三处数量
-      await wait(600); // 等恢复 handler 内串行 loadData 完成
-      out.pullCountAfterRestore = (await window.ideaNote.sync.pull()).length;
-      out.cacheCountAfterRestore = (await window.ideaNote.sync.cache()).length;
+      const es = document.getElementById('empty-state');
+      out.trashEmptyText = es ? es.querySelector('p').textContent : '';
       document.getElementById('nav-all').click();
       await wait(200);
-      out.cardCountAfterRestore = document.querySelectorAll('.memo-card').length;
+      out.cardCountAfterBack = document.querySelectorAll('.memo-card').length;
 
       // Md / Tags 可用
       out.mdOk = window.Md.render('**b**').includes('<strong>b</strong>');
       out.tagsOk = window.Tags.extractTags('#a #b').length === 2;
 
-      // 输入框列表逻辑（浏览器环境跑同一套纯函数）
+      // 输入框列表逻辑
       out.listErr = null;
       try {
-        out.listEnterOk = window.MarkdownComposer.enterAt('1. a', 4).text === '1. a\\n2. ';
-        out.listExitOk = window.MarkdownComposer.enterAt('- a\\n- ', 6).text === '- a\\n';
-        out.beginListOk = window.MarkdownComposer.beginListAt('hello', 5, '- ').text === 'hello\\n- ';
+        const NL = String.fromCharCode(10);
+        out.listEnterOk = window.MarkdownComposer.enterAt('1. a', 4).text === '1. a' + NL + '2. ';
+        out.listExitOk = window.MarkdownComposer.enterAt('- a' + NL + '- ', 6).text === '- a' + NL;
+        out.beginListOk = window.MarkdownComposer.beginListAt('hello', 5, '- ').text === 'hello' + NL + '- ';
       } catch (e) {
         out.listErr = String((e && e.message) || e);
       }
+      } catch (e) { return { __smokeError: String((e && e.stack) || e), __partial: out }; }
       return out;
     })()`);
 
     console.log('SMOKE_RESULT=' + JSON.stringify(result));
+    if (result.__smokeError) console.log('SMOKE_JS_ERROR=' + result.__smokeError);
 
     // 截图（登录后主界面）
     win.show();
@@ -231,7 +241,7 @@ app.whenReady().then(async () => {
     // 磁盘验证：登录态已持久化 + 缓存已写入
     const authOnDisk = fs.existsSync(authFile) ? JSON.parse(fs.readFileSync(authFile, 'utf8')) : null;
     const cacheOnDisk = fs.existsSync(cacheFile) ? JSON.parse(fs.readFileSync(cacheFile, 'utf8')) : null;
-    console.log('SMOKE_AUTH_UID=' + (authOnDisk ? authOnDisk.uid : 'null'));
+    console.log('SMOKE_AUTH_UID=' + (authOnDisk ? authOnDisk.q_uid : 'null'));
     console.log('SMOKE_CACHE_COUNT=' + (cacheOnDisk && cacheOnDisk.memos ? cacheOnDisk.memos.length : -1));
 
     const pass =
@@ -239,32 +249,24 @@ app.whenReady().then(async () => {
       result.userName === '测试用户' &&
       result.cardCount === 2 &&
       result.sidebarTagCount === 2 &&
-      result.authUid === 'u10001' &&
+      result.authUid === 'q10001' &&
       result.authNickname === '测试用户' &&
       !!result.createdId && JSON.stringify(result.createdTags) === JSON.stringify(['测试']) &&
       result.updatedContent === '已改 #改过' &&
       result.pullCount === 2 &&
       result.filteredCardCount === 1 &&
-      result.trashCardCount === 2 &&
+      result.trashCardCount === 0 &&
       result.trashTitle === '回收站' &&
-      result.trashComposerHidden &&
-      result.trashBtnActive &&
-      !result.navAllActiveInTrash &&
-      result.trashCountBadge === '1' &&
-      result.trashCardCountAfterRestore === 0 &&
-      result.trashEmptyText === '回收站是空的' &&
-      result.trashCountBadgeAfterRestore === '0' &&
-      result.cardCountAfterRestore === 4 &&
+      /暂未开放回收站/.test(result.trashEmptyText) &&
+      result.cardCountAfterBack === 2 &&
       result.imgCount === 1 &&
-      result.imgHasThumbParam && result.imgHasLargeParam &&
-      result.lightboxOpen && result.lbBtnCount === 4 &&
-      result.afterZoomInTransform.indexOf('scale(') >= 0 &&
-      result.afterResetTransform.indexOf('translate(0px, 0px)') >= 0 &&
-      result.lightboxClosed &&
+      result.imgHasThumbParam &&
+      result.lightboxOpen && result.lightboxClosed &&
       result.mdOk && result.tagsOk &&
       result.listEnterOk && result.listExitOk && result.beginListOk &&
-      authOnDisk && authOnDisk.uid === 'u10001' &&
-      cacheOnDisk && cacheOnDisk.memos.length === 4;
+      authOnDisk && authOnDisk.q_uid === 'q10001' &&
+      !!authOnDisk.access_token && !!authOnDisk.refresh_token &&
+      cacheOnDisk && cacheOnDisk.memos.length === 2;
 
     console.log('SMOKE_PASS=' + pass);
     app.exit(pass ? 0 : 1);

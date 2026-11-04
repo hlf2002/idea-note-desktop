@@ -9,18 +9,23 @@ contextBridge.exposeInMainWorld('ideaNote', {
   // 登录态
   auth: {
     get: () => ipcRenderer.invoke('auth:get'),
-    logout: () => ipcRenderer.invoke('auth:logout')
-  },
-  // 扫码登录
-  qr: {
-    create: () => ipcRenderer.invoke('qr:create'),
-    status: (sceneId) => ipcRenderer.invoke('qr:status', sceneId)
+    logout: () => ipcRenderer.invoke('auth:logout'),
+    // 打开授权窗口并开始轮询（结果由主进程通过 onEvent 推送）
+    start: () => ipcRenderer.invoke('auth:start'),
+    cancel: () => ipcRenderer.invoke('auth:cancel'),
+    probe: () => ipcRenderer.invoke('auth:probe'),
+    // 旧版内部接口登录态无法迁移时的提示（只返回一次 true）
+    legacyNotice: () => ipcRenderer.invoke('auth:legacyNotice'),
+    // 订阅登录事件：{ type: 'success'|'error'|'expired', message? }
+    onEvent: (cb) => {
+      ipcRenderer.on('auth:event', (_e, payload) => cb(payload));
+    }
   },
   // 灵感笔记同步
   sync: {
     pull: () => ipcRenderer.invoke('sync:pull'),
     create: (text) => ipcRenderer.invoke('sync:create', text),
-    update: (id, text) => ipcRenderer.invoke('sync:update', id, text),
+    update: (id, text, imageIds) => ipcRenderer.invoke('sync:update', id, text, imageIds),
     remove: (id) => ipcRenderer.invoke('sync:delete', id),
     trash: () => ipcRenderer.invoke('sync:trash'),
     restore: (id) => ipcRenderer.invoke('sync:restore', id),

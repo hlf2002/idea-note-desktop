@@ -225,13 +225,17 @@ app.whenReady().then(async () => {
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(APP_ICON());
   }
-  initApp({
+  const core = initApp({
     authFile: AUTH_FILE(),
     cacheFile: CACHE_FILE(),
     legacyFile: LEGACY_FILE(),
     dataDir: DATA_DIR()
   });
   createWindow();
+  // 登录相关 IPC 需要主窗口句柄（用于推送 auth:event、作为授权窗口父级）
+  if (core && typeof core.registerAuthIpc === 'function') {
+    core.registerAuthIpc(() => mainWindow);
+  }
   createTray();
   registerGlobalShortcut();
 

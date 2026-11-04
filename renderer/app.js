@@ -150,78 +150,52 @@
     else el.userAvatar.removeAttribute('src');
   }
 
-  // ---------- 扫码登录 ----------
+  // ---------- 扫码登录（Q助理开放平台 OAuth，内嵌授权窗口） ----------
+  // 轮询已移到主进程（app-core），渲染层只负责触发与展示状态
   function stopPolling() {
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
-    }
+    state.pollTimer = null;
     state.pollSceneId = null;
+  }
+
+  function setLoginStatus(text, kind) {
+    el.qrStatus.textContent = text || '';
+    el.qrStatus.className = 'qr-status' + (kind ? ' ' + kind : '');
   }
 
   async function startQr() {
     stopPolling();
-    el.qrImage.style.display = 'none';
+    if (el.qrImage) el.qrImage.style.display = 'none';
     el.qrLoading.classList.remove('hidden');
-    el.qrStatus.textContent = '正在生成二维码…';
-    el.qrStatus.className = 'qr-status';
+    el.qrLoading.textContent = '正在打开授权窗口…';
+    setLoginStatus('');
     el.qrExpire.textContent = '';
     try {
-      const qr = await window.ideaNote.qr.create();
-      el.qrImage.src = qr.qrDataUrl;
-      el.qrImage.style.display = 'block';
+      await window.ideaNote.auth.start();
       el.qrLoading.classList.add('hidden');
-      el.qrStatus.textContent = '等待扫码…';
-      el.qrExpire.textContent = '二维码 ' + Math.round(qr.expiresIn / 60) + ' 分钟内有效';
-      state.pollSceneId = qr.sceneId;
-      state.pollTimer = setInterval(() => pollOnce(qr.sceneId), QR_POLL_MS);
+      setLoginStatus('已打开授权窗口，请用 Q助理 App 扫码确认');
+      el.qrExpire.textContent = '扫码确认后会自动完成登录';
     } catch (err) {
       el.qrLoading.classList.add('hidden');
-      el.qrStatus.textContent = '二维码生成失败，请点击刷新';
-      el.qrStatus.className = 'qr-status error';
+      setLoginStatus('打开授权窗口失败：' + ((err && err.message) || '请稍后重试'), 'error');
     }
   }
 
-  async function pollOnce(sceneId) {
-    if (state.pollSceneId !== sceneId) return; // 已被刷新/停止
-    try {
-      const res = await window.ideaNote.qr.status(sceneId);
-      if (state.pollSceneId !== sceneId) return;
-      if (res.status === 'pending') {
-        el.qrStatus.textContent = '等待扫码…';
-        el.qrStatus.className = 'qr-status';
-      } else if (res.status === 'scanned') {
-        el.qrStatus.textContent = '已扫码，请在手机上确认登录';
-        el.qrStatus.className = 'qr-status';
-      } else if (res.status === 'confirmed') {
-        stopPolling();
-        el.qrStatus.textContent = '登录成功！';
-        el.qrStatus.className = 'qr-status success';
-        const user = await window.ideaNote.auth.get();
-        if (user) {
-          showApp(user);
-          showToast('登录成功，正在同步灵感笔记…');
-          await loadData(true);
-          checkLegacy();
-        }
-      } else if (res.status === 'used') {
-        stopPolling();
-        el.qrStatus.textContent = '登录已完成';
-        el.qrStatus.className = 'qr-status success';
-      } else if (res.status === 'expired') {
-        stopPolling();
-        el.qrStatus.textContent = '二维码已过期，请刷新';
-        el.qrStatus.className = 'qr-status error';
+  // 登录结果由主进程推送（成功 / 取消 / 超时）
+  window.ideaNote.auth.onEvent(async (ev) => {
+    if (!ev || !ev.type) return;
+    if (ev.type === 'success') {
+      setLoginStatus('登录成功！', 'success');
+      const user = await window.ideaNote.auth.get();
+      if (user) {
+        showApp(user);
+        showToast('登录成功，正在同步灵感笔记…');
+        await loadData(true);
+        checkLegacy();
       }
-    } catch (err) {
-      // 单次轮询失败不中断，继续尝试（网络抖动）
-      if (err && err.code === 401) {
-        stopPolling();
-        el.qrStatus.textContent = '会话失效，请刷新二维码';
-        el.qrStatus.className = 'qr-status error';
-      }
+    } else if (ev.type === 'error' || ev.type === 'expired') {
+      setLoginStatus(ev.message || '授权未完成，请重试', 'error');
     }
-  }
+  });
 
   // ---------- 数据 ----------
   function filteredMemos() {
@@ -390,7 +364,9 @@
       el.emptyState.classList.remove('hidden');
       el.emptyState.querySelector('p').textContent = state.trashFailed
         ? '回收站加载失败，点击右上角刷新重试'
-        : (state.trash.length > 0 ? '没有符合条件的笔记' : '回收站是空的');
+        : (state.trashUnsupported
+          ? '当前平台暂未开放回收站，删除的笔记可在 Q助理 App 内找回'
+          : (state.trash.length > 0 ? '没有符合条件的笔记' : '回收站是空的'));
       return;
     }
     el.emptyState.classList.add('hidden');
@@ -482,9 +458,12 @@
     resetFeedTop();
     renderAll();
     state.trashFailed = false;
+    state.trashUnsupported = false;
     try {
-      const list = await window.ideaNote.sync.trash();
+      const res = await window.ideaNote.sync.trash();
+      const list = Array.isArray(res) ? res : (res && Array.isArray(res.list) ? res.list : []);
       state.trash = list;
+      state.trashUnsupported = !!(res && res.unsupported);
     } catch (err) {
       state.trashFailed = true;
       handleSyncError(err, '加载回收站失败');
@@ -506,8 +485,8 @@
   /** 后台拉取回收站并刷新侧边栏计数（启动/删除后静默调用，失败不打扰） */
   async function refreshTrash() {
     try {
-      const list = await window.ideaNote.sync.trash();
-      state.trash = list;
+      const res = await window.ideaNote.sync.trash();
+      state.trash = Array.isArray(res) ? res : (res && Array.isArray(res.list) ? res.list : []);
       renderSidebar();
     } catch (e) { /* 静默：徽标保持旧值，进入回收站时会再次拉取 */ }
   }
@@ -1675,6 +1654,12 @@
   async function init() {
     bindEvents();
     initUpdaterUi();
+    // 旧版内部接口登录态无法续期到开放平台：提示重新扫码一次
+    try {
+      const legacy = await window.ideaNote.auth.legacyNotice();
+      if (legacy) showToast('登录方式已升级，请重新扫码登录一次', 6000);
+    } catch (e) { /* noop */ }
+
     let user = null;
     try {
       user = await window.ideaNote.auth.get();

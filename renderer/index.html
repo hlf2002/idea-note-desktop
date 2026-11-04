@@ -16,19 +16,19 @@
         <span class="brand-dot"></span>
         <span class="brand-name">灵感笔记</span>
       </div>
-      <h1 class="login-title">使用 Q助理 App 扫码登录</h1>
-      <p class="login-sub">连接你的灵感笔记，记录自动同步到手机</p>
+      <h1 class="login-title">使用 Q助理 扫码登录</h1>
+      <p class="login-sub">登录后灵感笔记自动同步到手机，账号长期保持登录</p>
       <div class="qr-box">
-        <img id="qr-image" class="qr-image" alt="登录二维码" />
-        <div id="qr-loading" class="qr-loading">正在生成二维码…</div>
+        <img id="qr-image" class="qr-image" alt="登录二维码" style="display:none" />
+        <div id="qr-loading" class="qr-loading">点击下方按钮，用 Q助理 App 扫码授权</div>
       </div>
-      <div id="qr-status" class="qr-status">等待扫码…</div>
+      <div id="qr-status" class="qr-status"></div>
       <div id="qr-expire" class="qr-expire"></div>
-      <button id="qr-refresh" class="qr-refresh">刷新二维码</button>
+      <button id="qr-refresh" class="qr-refresh">打开扫码授权</button>
       <ol class="login-steps">
-        <li>打开 <b>Q助理</b> App</li>
-        <li>点击右上角「扫一扫」</li>
-        <li>扫描二维码并确认登录</li>
+        <li>点击「打开扫码授权」</li>
+        <li>在弹出窗口用 <b>Q助理</b> App 扫一扫</li>
+        <li>手机上确认后自动完成登录</li>
       </ol>
     </div>
   </div>
