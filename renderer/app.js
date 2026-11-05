@@ -847,52 +847,67 @@
     inner.appendChild(card);
     wrap.appendChild(inner);
 
-    // 初始化 composer（与顶部同一套：所见即所得、⌘/⇧+Enter 提交）
-    const composer = window.MarkdownComposer(editEl, {
-      render: (text) => window.Md.renderWysiwyg(text),
-      onCommit: (text) => { saveEdit(text); }
-    });
-    composer.setValue(memo.content);
-    // 标签联想：与顶部输入框同一套交互
-    const detachSuggester = window.TagSuggester.attach(composer, {
-      getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
-    });
+    // 初始化 composer（与顶部同一套：所见即所得、⌘/⇧+Enter 提交）。
+    // 注意：buildEditor 在卡片插入 document 之前执行，此时 editEl 不在文档中，
+    // el.focus() 无效、setCaret 的 addRange 会抛错（selection 无法落到编辑器内），
+    // 导致标签联想把光标误判到内容末尾而误弹下拉。因此延迟到下一帧（DOM 已挂载）
+    // 再初始化；若期间编辑被取消/重建（editEl 已脱离文档）则跳过。
+    function initEditor() {
+      const composer = window.MarkdownComposer(editEl, {
+        render: (text) => window.Md.renderWysiwyg(text),
+        onCommit: (text) => { saveEdit(text); }
+      });
+      composer.setValue(memo.content);
+      // 标签联想：与顶部输入框同一套交互
+      const detachSuggester = window.TagSuggester.attach(composer, {
+        getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
+      });
 
-    async function saveEdit(val) {
-      // 允许纯图片笔记：没文字但有图也能保存
-      if ((!val || !val.trim()) && editImages.length === 0) return;
-      if (hasUploadingImage(editImages)) {
-        showToast('图片还在上传，请稍候再保存');
-        return;
+      async function saveEdit(val) {
+        // 允许纯图片笔记：没文字但有图也能保存
+        if ((!val || !val.trim()) && editImages.length === 0) return;
+        if (hasUploadingImage(editImages)) {
+          showToast('图片还在上传，请稍候再保存');
+          return;
+        }
+        try {
+          const updated = await window.ideaNote.sync.update(memo.id, val || '', uploadedImageIds(editImages));
+          detachSuggester();
+          state.editingId = null;
+          upsertLocal(updated);
+        } catch (err) {
+          handleSyncError(err, '保存失败');
+        }
       }
-      try {
-        const updated = await window.ideaNote.sync.update(memo.id, val || '', uploadedImageIds(editImages));
+      function cancelEdit() {
         detachSuggester();
         state.editingId = null;
-        upsertLocal(updated);
-      } catch (err) {
-        handleSyncError(err, '保存失败');
+        renderList();
       }
-    }
-    function cancelEdit() {
-      detachSuggester();
-      state.editingId = null;
-      renderList();
+
+      // 工具栏：行为与顶部输入框完全一致
+      tb.querySelector('[data-edit-tool="tag"]').addEventListener('click', () => composer.insertText(' #'));
+      tb.querySelector('[data-edit-tool="image"]').addEventListener('click', () => pickAndUploadImages(editImages, renderEditImages));
+      tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
+      tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
+      tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
+      tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => showToast('提及 · 敬请期待'));
+      tb.querySelector('[data-edit-tool="save"]').addEventListener('click', () => saveEdit(composer.value()));
+      tb.querySelector('[data-edit-tool="cancel"]').addEventListener('click', cancelEdit);
+      // Esc 取消（composer 只处理 Enter，这里兜底）
+      editEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+      });
     }
 
-    // 工具栏：行为与顶部输入框完全一致
-    tb.querySelector('[data-edit-tool="tag"]').addEventListener('click', () => composer.insertText(' #'));
-    tb.querySelector('[data-edit-tool="image"]').addEventListener('click', () => pickAndUploadImages(editImages, renderEditImages));
-    tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
-    tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
-    tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
-    tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => showToast('提及 · 敬请期待'));
-    tb.querySelector('[data-edit-tool="save"]').addEventListener('click', () => saveEdit(composer.value()));
-    tb.querySelector('[data-edit-tool="cancel"]').addEventListener('click', cancelEdit);
-    // Esc 取消（composer 只处理 Enter，这里兜底）
-    editEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
-    });
+    if (document.contains(editEl)) {
+      initEditor();
+    } else {
+      requestAnimationFrame(() => {
+        if (!document.contains(editEl)) return; // 编辑已被取消/重建
+        initEditor();
+      });
+    }
 
     return wrap;
   }

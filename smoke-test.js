@@ -307,6 +307,49 @@ app.whenReady().then(async () => {
     win.show();
     win.focus();
     await new Promise((r) => setTimeout(r, 500));
+
+    // 标签联想（窗口显示后 selection/focus 才正常，隐藏窗口 addRange 不生效）：
+    // 编辑卡片时内容末尾带标签 → 光标进入后下拉弹出；
+    // 光标移到普通文字（非标签输入态）→ 下拉应自动关闭，不再“跟着光标永不消失”
+    const editResult = await win.webContents.executeJavaScript(`(async () => {
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+      const out = {};
+      try {
+        const editBtn = document.querySelector('.memo-card [data-action="edit"]');
+        if (editBtn) {
+          editBtn.click();
+          await wait(200);
+          const editEl = document.querySelector('.memo-edit-card .composer');
+          const boxes = document.querySelectorAll('.tag-suggest');
+          const box = boxes.length ? boxes[boxes.length - 1] : null;
+          out.editOpen = !!editEl;
+          out.suggestShownOnEnter = !!(box && !box.classList.contains('hidden'));
+          if (editEl) {
+            // 用 Range 把光标移到第一个文本节点第 1 个字符后（普通文字，非标签输入态）
+            const walker = document.createTreeWalker(editEl, NodeFilter.SHOW_TEXT);
+            const firstText = walker.nextNode();
+            if (firstText) {
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.setStart(firstText, Math.min(1, firstText.nodeValue.length));
+              range.collapse(true);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              await wait(100); // rAF 一帧 + selectionchange 派发
+              out.suggestClosedAfterMove = !!(box && box.classList.contains('hidden'));
+            }
+            const card = editEl.closest('.memo-edit-card');
+            const cancelBtn = card ? card.querySelector('[data-edit-tool="cancel"]') : null;
+            if (cancelBtn) cancelBtn.click();
+            await wait(150);
+            out.editCanceled = !document.querySelector('.memo-edit-card');
+          }
+        }
+      } catch (e) { out.tagSuggestErr = String((e && e.message) || e); }
+      return out;
+    })()`);
+    console.log('SMOKE_EDIT_RESULT=' + JSON.stringify(editResult));
+
     const image = await win.webContents.capturePage();
     fs.writeFileSync(path.join(__dirname, 'screenshot.png'), image.toPNG());
 
@@ -356,7 +399,13 @@ app.whenReady().then(async () => {
       uploadedName === 'img_uploaded.png' &&
       authOnDisk && authOnDisk.q_uid === 'q10001' &&
       !!authOnDisk.access_token && !!authOnDisk.refresh_token &&
-      cacheOnDisk && cacheOnDisk.memos.length === 2;
+      cacheOnDisk && cacheOnDisk.memos.length === 2 &&
+      // 标签联想交互（窗口显示后跑）
+      editResult.editOpen === true &&
+      editResult.suggestShownOnEnter === true &&
+      editResult.suggestClosedAfterMove === true &&
+      editResult.editCanceled === true &&
+      !editResult.tagSuggestErr;
 
     console.log('SMOKE_PASS=' + pass);
     app.exit(pass ? 0 : 1);

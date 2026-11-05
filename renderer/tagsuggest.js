@@ -224,12 +224,22 @@
 
     var rafId = null;
     function onReposition() {
-      if (!box || box.classList.contains('hidden')) return;
       if (rafId) return;
       // selectionchange 高频触发，rAF 合并到每帧一次
       rafId = window.requestAnimationFrame(function () {
         rafId = null;
-        position();
+        if (detached) return;
+        // 下拉处于关闭状态（Esc/失焦/选中标签后）时，光标移动不重新打开
+        if (!box || box.classList.contains('hidden')) return;
+        // 选区已移出编辑器（点击外部/失焦）→ 立即关闭
+        var sel = window.getSelection();
+        if (!sel || !sel.rangeCount || !composer.el.contains(sel.getRangeAt(0).startContainer)) {
+          close();
+          return;
+        }
+        // 下拉打开时光标移动要重新检测标签输入态：离开 # 输入态则关闭，仍在则重新定位
+        // （open 内部已含 position，因此方向键/点击移动时下拉跟随光标，移出后即消失）
+        refresh();
       });
     }
 
