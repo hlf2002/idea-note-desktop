@@ -31,6 +31,12 @@
   /** @ 输入态的边界字符：空白 / @ / #（# 留给标签）+ 常见中文标点（输入态在标点处中断） */
   var BOUND_RE = /[\s@#，。！？、；：""''()【】《》]/;
 
+  /** @ 下拉限制：菜单项最多 20 条；浮层可见高度最多 10 行（超出滚动） */
+  var MAX_ITEMS = 20;
+  var MAX_VISIBLE_ROWS = 10;
+  /** 量不到首行高度时的兜底行高（padding 7px*2 + 13.5px 字号行高） */
+  var ROW_HEIGHT_FALLBACK = 33;
+
   /**
    * 检测光标是否处于「@ 输入态」：光标前最近的 @ 与光标之间只有非边界字符，
    * 且 @ 前是行首 / 空白 / 标点（避免把 a@b 邮箱误判为提及）。
@@ -66,6 +72,18 @@
       if (String(c.remark || '').toLowerCase().indexOf(q) !== -1) return true;
       return false;
     });
+  }
+
+  /**
+   * 截断联系人列表：@ 下拉菜单项最多 20 条（超出截断，不滚动出更多）。
+   * @param {object[]} contacts
+   * @param {number} [max] 上限，默认 20
+   * @returns {object[]}
+   */
+  function limitContacts(contacts, max) {
+    if (!Array.isArray(contacts)) return [];
+    var n = typeof max === 'number' && max >= 0 ? max : MAX_ITEMS;
+    return contacts.slice(0, n);
   }
 
   function escapeHtml(s) {
@@ -136,7 +154,12 @@
       var top = (r.bottom || r.top) + 4;
       box.style.left = left + 'px';
       box.style.top = top + 'px';
-      box.style.maxHeight = Math.max(120, window.innerHeight - top - 12) + 'px';
+      // 可见高度最多 10 行（量首行 item 高度 + 浮层上下 padding 12px），且不超出视口
+      var first = box.querySelector('.tag-suggest-item');
+      var rowH = first && first.offsetHeight ? first.offsetHeight : ROW_HEIGHT_FALLBACK;
+      var tenRows = rowH * MAX_VISIBLE_ROWS + 12;
+      var viewportMax = window.innerHeight - top - 12;
+      box.style.maxHeight = Math.max(120, Math.min(tenRows, viewportMax)) + 'px';
     }
 
     function render(list, emptyText) {
@@ -212,7 +235,7 @@
     /** 联系人准备就绪后按当前 query 刷新列表；加载失败显示占位 */
     function renderWithContacts(state) {
       if (detached || !queryState || queryState.start !== state.start) return; // 光标已移动，丢弃过期结果
-      var list = filterContacts(contacts, state.query);
+      var list = limitContacts(filterContacts(contacts, state.query), MAX_ITEMS);
       if (list.length) open(list, state);
       else open([], state, contacts && contacts.length ? '没有匹配的联系人' : '暂无联系人');
     }
@@ -325,6 +348,7 @@
   return {
     detectAtQuery: detectAtQuery,
     filterContacts: filterContacts,
+    limitContacts: limitContacts,
     linkTypeLabel: linkTypeLabel,
     attach: attach
   };

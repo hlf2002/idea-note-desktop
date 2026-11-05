@@ -137,9 +137,17 @@ function makeMockCli() {
   return {
     async isAvailable() { return { ok: true, binPath: '/mock/qz' }; },
     async listContacts() {
+      const extra = Array.from({ length: 23 }, (_, i) => ({
+        uid: 'u_smoke_extra_' + i,
+        nickname: '测试联系' + (i + 3), // 共 25 个联系人，验证下拉项上限 20 / 可见高度 10 行
+        remark: '',
+        linkType: 1,
+        avatar: ''
+      }));
       return [
         { uid: 'u_smoke_1', nickname: '测试联系人', remark: '备注甲', linkType: 2, avatar: '' },
-        { uid: 'u_smoke_2', nickname: 'Pitt', remark: '', linkType: 5, avatar: '' }
+        { uid: 'u_smoke_2', nickname: 'Pitt', remark: '', linkType: 5, avatar: '' },
+        ...extra
       ];
     },
     async notifyMentions() {
@@ -411,6 +419,14 @@ app.whenReady().then(async () => {
         const firstName = atBox ? atBox.querySelector('.tag-suggest-item') : null;
         out.atFirstName = firstName ? firstName.textContent : null;
         out.atFirstRelation = firstName ? (firstName.querySelector('.at-relation') || {}).textContent : null;
+        // 可见高度不超过 10 行：clientHeight ≤ 10 × 行高 + 浮层上下 padding 12px
+        if (atBox && firstName) {
+          const rowH = firstName.offsetHeight;
+          out.atRowHeight = rowH;
+          out.atClientHeight = atBox.clientHeight;
+          out.atVisibleRowsOk = atBox.clientHeight <= 10 * rowH + 12 + 1; // +1 容忍取整
+          out.atScrollable = atBox.scrollHeight > atBox.clientHeight; // 20 项 > 10 行可见 → 应可滚动
+        }
         if (atBox) {
           // Esc 关闭：onKeydown 监听在 composer.el（捕获阶段），必须 dispatch 到输入框
           composerEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -492,9 +508,11 @@ app.whenReady().then(async () => {
       !editResult.tagSuggestErr &&
       // @联系人联想 + 提及通知
       atResult.atShown1 === true &&
-      atResult.atItemCount === 2 &&
+      atResult.atItemCount === 20 &&
       /测试联系人/.test(atResult.atFirstName || '') &&
       atResult.atFirstRelation === '朋友' &&
+      atResult.atVisibleRowsOk === true &&
+      atResult.atScrollable === true &&
       atResult.atClosedAfterEsc === true &&
       atResult.notifyOk === true &&
       atResult.notifySentCount === 1 &&

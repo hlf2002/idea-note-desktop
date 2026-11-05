@@ -6,7 +6,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { detectAtQuery, filterContacts, linkTypeLabel } = require('../renderer/atsuggest');
+const { detectAtQuery, filterContacts, limitContacts, linkTypeLabel } = require('../renderer/atsuggest');
 
 // ============ detectAtQuery ============
 test('detectAtQuery: 行首 @ 后中文昵称', () => {
@@ -82,6 +82,32 @@ test('filterContacts: 无匹配返回空数组', () => {
 test('filterContacts: 非法输入', () => {
   assert.deepStrictEqual(filterContacts(null, 'a'), []);
   assert.deepStrictEqual(filterContacts([], 'a'), []);
+});
+
+// ============ limitContacts（@ 下拉菜单项上限 20） ============
+test('limitContacts: 超过 20 条截断为 20', () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({ uid: 'u' + i, nickname: 'N' + i }));
+  const r = limitContacts(many);
+  assert.strictEqual(r.length, 20);
+  assert.strictEqual(r[0].uid, 'u0');
+  assert.strictEqual(r[19].uid, 'u19'); // 保留前 20 条（按排序截断）
+});
+
+test('limitContacts: 少于 20 返回全部', () => {
+  const r = limitContacts(CONTACTS);
+  assert.strictEqual(r.length, 3);
+  assert.strictEqual(r[0].uid, 'u1');
+});
+
+test('limitContacts: 恰好 20 条不截断', () => {
+  const exact = Array.from({ length: 20 }, (_, i) => ({ uid: 'u' + i, nickname: 'N' + i }));
+  assert.strictEqual(limitContacts(exact).length, 20);
+});
+
+test('limitContacts: 非法输入返回空数组', () => {
+  assert.deepStrictEqual(limitContacts(null), []);
+  assert.deepStrictEqual(limitContacts(undefined), []);
+  assert.deepStrictEqual(limitContacts('x'), []);
 });
 
 // ============ linkTypeLabel ============
