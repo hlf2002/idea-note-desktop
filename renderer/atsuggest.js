@@ -73,7 +73,7 @@
   }
 
   /** link_type → 关系文案（qz friend list 字段，与 qzhuli-cli relation type 一致） */
-  var LINK_TYPE_LABELS = { 0: '陌生人', 1: '家人', 2: '朋友', 3: '前同事', 4: '同学', 5: '同事' };
+  var LINK_TYPE_LABELS = { 0: '陌生人', 1: '家人', 2: '朋友', 3: '前同事', 4: '同学', 5: '在职同事' };
   function linkTypeLabel(linkType) {
     return LINK_TYPE_LABELS[linkType] || '';
   }

@@ -91,7 +91,7 @@ test('linkTypeLabel: 关系映射', () => {
   assert.strictEqual(linkTypeLabel(2), '朋友');
   assert.strictEqual(linkTypeLabel(3), '前同事');
   assert.strictEqual(linkTypeLabel(4), '同学');
-  assert.strictEqual(linkTypeLabel(5), '同事');
+  assert.strictEqual(linkTypeLabel(5), '在职同事');
 });
 
 test('linkTypeLabel: 未知类型返回空', () => {
