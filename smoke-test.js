@@ -132,6 +132,27 @@ function makeMockApi() {
   };
 }
 
+// ---- mock QzCli（@ 提及通知：不真发消息，验证链路与渲染） ----
+function makeMockCli() {
+  return {
+    async isAvailable() { return { ok: true, binPath: '/mock/qz' }; },
+    async listContacts() {
+      return [
+        { uid: 'u_smoke_1', nickname: '测试联系人', remark: '备注甲', linkType: 2, avatar: '' },
+        { uid: 'u_smoke_2', nickname: 'Pitt', remark: '', linkType: 5, avatar: '' }
+      ];
+    },
+    async notifyMentions() {
+      return {
+        ok: true,
+        sent: [
+          { name: '测试联系人', nickname: '测试联系人', uid: 'u_smoke_1', ok: true, error: null, conversationId: 'c_smoke_1' }
+        ]
+      };
+    }
+  };
+}
+
 app.whenReady().then(async () => {
   try {
     // 假七牛上传服务先起来（media.upload 会真实 POST 到这里）
@@ -148,8 +169,9 @@ app.whenReady().then(async () => {
     const cacheFile = path.join(tmpDir, 'idea-cache.json');
     const legacyFile = path.join(tmpDir, 'flomo-local.json');
     const mockApi = makeMockApi();
+    const mockCli = makeMockCli();
 
-    const core = initApp({ authFile, cacheFile, legacyFile, dataDir: tmpDir, apiOverride: mockApi });
+    const core = initApp({ authFile, cacheFile, legacyFile, dataDir: tmpDir, apiOverride: mockApi, qzCliOverride: mockCli });
 
     const win = new BrowserWindow({
       width: 1040,
@@ -350,6 +372,68 @@ app.whenReady().then(async () => {
     })()`);
     console.log('SMOKE_EDIT_RESULT=' + JSON.stringify(editResult));
 
+    // @联系人联想 + 提及通知（窗口显示后 selection 才可用）：
+    // 顶部输入框输入 @ → 下拉弹出联系人（mock qz CLI）→ Esc 关闭；
+    // 发布含 @ 的笔记 → mentions:notify 返回已通知的联系人
+    const atResult = await win.webContents.executeJavaScript(`(async () => {
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+      const out = {};
+      try {
+        const composerEl = document.getElementById('composer');
+        composerEl.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(composerEl);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('insertText', false, ' @');
+        await wait(400); // loadContacts IPC + 浮层渲染
+        out.composerTextAfter = composerEl.textContent;
+        out.atModuleOk = typeof window.AtSuggester === 'object' && typeof window.AtSuggester.detectAtQuery === 'function';
+        out.detectAfter = window.AtSuggester && window.AtSuggester.detectAtQuery
+          ? JSON.stringify(window.AtSuggester.detectAtQuery(composerEl.textContent || '', (composerEl.textContent || '').length))
+          : null;
+        try {
+          const c = await window.ideaNote.mentions.contacts();
+          out.contactsIpc = JSON.stringify(c);
+        } catch (e) { out.contactsIpcErr = String((e && e.message) || e); }
+        let atBox = document.querySelector('.tag-suggest.at-suggest');
+        out.atBoxExists1 = !!atBox;
+        out.atShown1 = !!(atBox && !atBox.classList.contains('hidden'));
+        // 对照：手动派发 input 事件（绕过 execCommand 事件链）
+        composerEl.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait(300);
+        atBox = document.querySelector('.tag-suggest.at-suggest');
+        out.atBoxExists2 = !!atBox;
+        out.atShown2 = !!(atBox && !atBox.classList.contains('hidden'));
+        out.atItemCount = atBox ? atBox.querySelectorAll('.tag-suggest-item').length : 0;
+        const firstName = atBox ? atBox.querySelector('.tag-suggest-item') : null;
+        out.atFirstName = firstName ? firstName.textContent : null;
+        out.atFirstRelation = firstName ? (firstName.querySelector('.at-relation') || {}).textContent : null;
+        if (atBox) {
+          // Esc 关闭：onKeydown 监听在 composer.el（捕获阶段），必须 dispatch 到输入框
+          composerEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          await wait(120);
+          out.atClosedAfterEsc = atBox.classList.contains('hidden');
+        }
+        // 清空输入框，避免影响后续
+        composerEl.innerHTML = '';
+
+        // 提及通知链路：创建含 @ 的笔记 → notify → 断言 mock 已通知
+        const val = '测试 @测试联系人 的想法';
+        const created2 = await window.ideaNote.sync.create(val, []);
+        out.mentionsCreatedId = created2.id;
+        const notify = await window.ideaNote.mentions.notify(val);
+        out.notifyOk = !!(notify && notify.ok === true);
+        out.notifySentCount = notify && Array.isArray(notify.sent) ? notify.sent.length : 0;
+        out.notifySentName = notify && notify.sent[0] ? notify.sent[0].name : null;
+        await window.ideaNote.sync.remove(created2.id);
+      } catch (e) { out.atErr = String((e && e.message) || e); }
+      return out;
+    })()`);
+    console.log('SMOKE_AT_RESULT=' + JSON.stringify(atResult));
+
     const image = await win.webContents.capturePage();
     fs.writeFileSync(path.join(__dirname, 'screenshot.png'), image.toPNG());
 
@@ -405,7 +489,17 @@ app.whenReady().then(async () => {
       editResult.suggestShownOnEnter === true &&
       editResult.suggestClosedAfterMove === true &&
       editResult.editCanceled === true &&
-      !editResult.tagSuggestErr;
+      !editResult.tagSuggestErr &&
+      // @联系人联想 + 提及通知
+      atResult.atShown1 === true &&
+      atResult.atItemCount === 2 &&
+      /测试联系人/.test(atResult.atFirstName || '') &&
+      atResult.atFirstRelation === '朋友' &&
+      atResult.atClosedAfterEsc === true &&
+      atResult.notifyOk === true &&
+      atResult.notifySentCount === 1 &&
+      atResult.notifySentName === '测试联系人' &&
+      !atResult.atErr;
 
     console.log('SMOKE_PASS=' + pass);
     app.exit(pass ? 0 : 1);

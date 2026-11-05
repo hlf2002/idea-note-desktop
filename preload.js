@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('ideaNote', {
   widget: {
     push: (memo) => ipcRenderer.invoke('widget:push', memo)
   },
+  // @ 提及通知：本机 qz CLI 联系人 + 发布后通知
+  mentions: {
+    contacts: () => ipcRenderer.invoke('mentions:contacts'),
+    notify: (text) => ipcRenderer.invoke('mentions:notify', text)
+  },
   // 应用
   app: {
     getDataPath: () => ipcRenderer.invoke('app:getDataPath'),

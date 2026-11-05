@@ -21,6 +21,7 @@ const { AuthStore } = require('./qz/auth');
 const { QzOpenApi } = require('./qz/openapi');
 const { IdeaSync } = require('./qz/sync');
 const { MediaStore, validateImage } = require('./qz/media');
+const { QzCli } = require('./qz/cli');
 const {
   RELAY_BASE_URL,
   QZ_APP_KEY,
@@ -33,7 +34,7 @@ const {
 /** 已知数据目录名：flomo-local → idea-note-local → 灵感笔记（应用改名/打包导致 userData 路径变化） */
 const KNOWN_DIR_NAMES = ['flomo-local', 'idea-note-local', '灵感笔记'];
 
-function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
+function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliOverride }) {
   const authStore = new AuthStore(authFile);
   const loaded = authStore.load();
   let legacyNotice = false;
@@ -86,6 +87,8 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     dir: path.join(baseDir, 'media'),
     indexFile: path.join(baseDir, 'media-index.json')
   });
+  // 本机 qz CLI（@ 提及通知用；spawn 子进程，不可用时不阻塞发布）
+  const cli = qzCliOverride || new QzCli();
 
   // ---------- 登录态 ----------
   ipcMain.handle('auth:get', () => {
@@ -349,6 +352,19 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     fs.writeFileSync(widgetFile, JSON.stringify(payload, null, 2), 'utf-8');
     return { ok: true, path: widgetFile };
   });
+
+  // ---------- @ 提及通知（本机 qz CLI；不可用/失败不阻塞发布） ----------
+  // 联系人列表：@ 联想下拉的数据源（qz friend list）
+  ipcMain.handle('mentions:contacts', () => guard(async () => {
+    const av = await cli.isAvailable();
+    if (!av.ok) return { ok: false, error: av.message || 'qz CLI 不可用' };
+    return { ok: true, contacts: await cli.listContacts() };
+  }));
+  // 发布后通知 @ 的联系人：解析正文 @昵称 → 匹配联系人 → 逐人发私信
+  ipcMain.handle('mentions:notify', (_e, text) => guard(async () => {
+    const sender = (authStore.auth && authStore.auth.nickname) || '';
+    return cli.notifyMentions(text, sender);
+  }));
 
   // 后台保鲜：每 30 分钟检查，access_token 快过期或 refresh_token 需滚动时自动续期
   if (typeof api.startKeepAlive === 'function') api.startKeepAlive();

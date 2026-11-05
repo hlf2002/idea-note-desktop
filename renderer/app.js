@@ -1387,6 +1387,10 @@
     window.TagSuggester.attach(state.composer, {
       getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
     });
+    // @联系人联想：输入 @ 或点击工具栏 @ 后弹出 Q助理联系人（数据来自本机 qz CLI）
+    window.AtSuggester.attach(state.composer, {
+      loadContacts: () => window.ideaNote.mentions.contacts().then((r) => (r && r.ok ? r.contacts : []))
+    });
     el.composer.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !e.isComposing) {
         state.composer.clear();
@@ -1678,7 +1682,7 @@
     el.tbOl.addEventListener('click', () => state.composer.beginList('1. '));
     el.tbImage.addEventListener('click', () => pickAndUploadImages(state.composerImages, renderComposerImages));
     el.tbFont.addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
-    el.tbAt.addEventListener('click', () => showToast('提及 · 敬请期待'));
+    el.tbAt.addEventListener('click', () => state.composer.insertText(' @'));
 
     // 旧数据导入
     el.legacyImport.addEventListener('click', async () => {
@@ -1915,6 +1919,23 @@
         sbFeed.scrollTop = 0;
         positionFeedScrollbar();
         updateFeedScrollbar();
+      }
+      // @ 提及通知：想法已发布，通知失败/不可用不阻塞（qz CLI 仅本机可用）
+      if (/@[^\s@#]/.test(val)) {
+        try {
+          const notify = await window.ideaNote.mentions.notify(val);
+          if (notify && notify.ok && Array.isArray(notify.sent) && notify.sent.length) {
+            const sent = notify.sent.filter((s) => s.ok);
+            const failed = notify.sent.filter((s) => !s.ok);
+            if (sent.length && !failed.length) showToast('已通知 ' + sent.length + ' 位联系人');
+            else if (sent.length && failed.length) showToast('已通知 ' + sent.length + ' 位，' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、') + ' 未送达', 4000);
+            else showToast('@通知未送达：' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、'), 4000);
+          } else if (notify && notify.error) {
+            showToast('想法已发布，但 @通知不可用：' + notify.error, 4000);
+          }
+        } catch (e) {
+          console.warn('[mentions] 通知失败: ' + ((e && e.message) || e));
+        }
       }
       state.composer.focus();
     } catch (err) {

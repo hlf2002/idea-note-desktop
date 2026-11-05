@@ -464,6 +464,10 @@ html, body {
 .tag-suggest-item .tag-hash { color: var(--green); flex-shrink: 0; }
 .tag-suggest-item.active { background: #f3e6cf; }
 .tag-suggest-item:hover { background: #f7eeda; }
+/* @联系人联想：与标签联想同浮层样式，@ 前缀与备注区分色 */
+.at-suggest .at-sign { color: var(--blue, #4a90d9); flex-shrink: 0; }
+.at-suggest .at-remark { margin-left: 8px; font-size: 12px; color: #a08a70; }
+.at-suggest .at-relation { margin-left: auto; font-size: 11px; color: #b8a488; background: #f5ecd9; border-radius: 4px; padding: 1px 6px; flex-shrink: 0; }
 .tag-suggest-empty {
   padding: 10px;
   font-size: 12.5px;
