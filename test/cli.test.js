@@ -10,7 +10,8 @@ const {
   extractMentions,
   resolveMentions,
   pickConversation,
-  makeNotifyText
+  makeNotifyText,
+  sortContactsByLastActive
 } = require('../qz/cli');
 
 // ============ extractMentions ============
@@ -139,4 +140,54 @@ test('makeNotifyText: 无发送者用默认称谓', () => {
 
 test('makeNotifyText: null 正文不抛错', () => {
   assert.ok(makeNotifyText('某人', null).indexOf('') >= 0);
+});
+
+// ============ sortContactsByLastActive ============
+test('sortContactsByLastActive: 按最后沟通时间倒序', () => {
+  const contacts = [
+    { uid: 'a', nickname: '旧' },
+    { uid: 'b', nickname: '新' },
+    { uid: 'c', nickname: '中' }
+  ];
+  const map = new Map([
+    ['a', '1000000000000000000'],
+    ['b', '3000000000000000000'],
+    ['c', '2000000000000000000']
+  ]);
+  const sorted = sortContactsByLastActive(contacts, map);
+  assert.deepStrictEqual(sorted.map((c) => c.uid), ['b', 'c', 'a']);
+  assert.strictEqual(sorted[0].lastActiveTs, '3000000000000000000');
+});
+
+test('sortContactsByLastActive: 无记录的联系人排在最后且保持原顺序', () => {
+  const contacts = [
+    { uid: 'a', nickname: '有记录' },
+    { uid: 'x', nickname: '无记录1' },
+    { uid: 'b', nickname: '有记录2' },
+    { uid: 'y', nickname: '无记录2' }
+  ];
+  const map = { a: '2000000000000000000', b: '1000000000000000000' };
+  const sorted = sortContactsByLastActive(contacts, map);
+  assert.deepStrictEqual(sorted.map((c) => c.uid), ['a', 'b', 'x', 'y']);
+});
+
+test('sortContactsByLastActive: 支持对象形式的 map 与空 map', () => {
+  const contacts = [{ uid: 'a', nickname: '甲' }];
+  assert.deepStrictEqual(sortContactsByLastActive(contacts, {}).map((c) => c.uid), ['a']);
+  assert.deepStrictEqual(sortContactsByLastActive(contacts, null).map((c) => c.uid), ['a']);
+  assert.deepStrictEqual(sortContactsByLastActive(null, {}), []);
+});
+
+test('sortContactsByLastActive: 超大时间戳按字符串比较（超出 JS 安全整数）', () => {
+  const contacts = [
+    { uid: 'a', nickname: 'A' },
+    { uid: 'b', nickname: 'B' }
+  ];
+  const map = new Map([
+    ['a', '1793782453119045600'],
+    ['b', '1793782453119045601']
+  ]);
+  const sorted = sortContactsByLastActive(contacts, map);
+  // 末位差 1 的微秒时间戳，Number 会丢精度，字符串比较仍能正确区分
+  assert.deepStrictEqual(sorted.map((c) => c.uid), ['b', 'a']);
 });

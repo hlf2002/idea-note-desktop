@@ -20,7 +20,7 @@
  */
 'use strict';
 
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -29,6 +29,10 @@ const os = require('os');
 const CANDIDATE_BINS = ['/opt/homebrew/bin/qz', '/usr/local/bin/qz', '/usr/bin/qz'];
 /** 子进程 PATH 补充（防止 qz 依赖的同名命令找不到） */
 const EXTRA_PATH = ['/opt/homebrew/bin', '/usr/local/bin'];
+/** qz CLI 缓存库（SQLite，macOS 自带 sqlite3 直读；读不到就降级为不排序） */
+const SQLITE3_BIN = '/usr/bin/sqlite3';
+/** 缓存同步新鲜度：12 小时内同步过就不再 cache sync（避免每次 @ 都等几秒） */
+const SYNC_FRESH_MS = 12 * 3600 * 1000;
 
 class QzCli {
   /**
@@ -124,11 +128,11 @@ class QzCli {
     return { ok: false, reason: r.code || 'auth_failed', message: r.message || 'qz CLI 未登录' };
   }
 
-  /** 联系人列表（qz friend list） */
+  /** 联系人列表（qz friend list），按最后沟通时间倒序（越新越靠前）；读不到时间则保持原顺序 */
   async listContacts() {
     const r = await this.run(['friend', 'list', '--jq', '.data.links']);
     if (r.status !== 'success' || !Array.isArray(r.data)) return [];
-    return r.data
+    const contacts = r.data
       .filter((l) => l && l.uid)
       .map((l) => ({
         uid: l.uid,
@@ -137,6 +141,71 @@ class QzCli {
         linkType: l.link_type,
         avatar: l.avatar || ''
       }));
+    const lastActiveByUid = await this._lastActiveByUid();
+    if (lastActiveByUid) return sortContactsByLastActive(contacts, lastActiveByUid);
+    return contacts;
+  }
+
+  /**
+   * 每个联系人的最后沟通时间（读 qz CLI 本地 SQLite 缓存）。
+   * 链路：先 cache sync 增量同步 → 直读 cache-<ownerUid>.db 的 messages_cache /
+   * conversation_profiles → 每个 uid 取其参与会话的最新消息时间戳。
+   * 任何一步失败返回 null（调用方降级为不排序）。
+   * @returns {Promise<Map<string, string>|null>} uid → 时间戳字符串（19 位微秒，字符串比较即数值序）
+   */
+  async _lastActiveByUid() {
+    try {
+      // 1. 定位缓存库：cache-<ownerUid>.db（ownerUid = auth status 的 uid）
+      const ownerUid = await this._ownerUid();
+      if (!ownerUid) return null;
+      const dbFile = path.join(this.cwd, '.qzhuli-cli', 'cache-' + ownerUid + '.db');
+      if (!fs.existsSync(dbFile) || !fs.existsSync(SQLITE3_BIN)) return null;
+
+      // 2. 增量同步缓存（保证时间新鲜）：缓存 12 小时内同步过就跳过，避免每次 @ 都慢
+      const mtimeMs = fs.statSync(dbFile).mtimeMs;
+      if (Date.now() - mtimeMs > SYNC_FRESH_MS) {
+        await this.run(['cache', 'sync'], 30000);
+      }
+
+      // 3. 会话级聚合最新消息时间；user_ids 在 JS 侧拆分（逗号分隔）
+      const sql = [
+        "SELECT cp.user_ids, m.ts FROM (",
+        "  SELECT conversation_id, MAX(json_extract(data, '$.timestamp')) AS ts",
+        "  FROM messages_cache GROUP BY conversation_id",
+        ") m JOIN conversation_profiles cp ON cp.conversation_id = m.conversation_id;"
+      ].join(' ');
+      const out = execFileSync(SQLITE3_BIN, [dbFile, sql], {
+        encoding: 'utf8',
+        timeout: 10000,
+        maxBuffer: 32 * 1024 * 1024
+      });
+      const map = new Map();
+      for (const line of out.split('\n')) {
+        if (!line) continue;
+        const idx = line.indexOf('|');
+        if (idx <= 0) continue;
+        const uids = line.slice(0, idx).split(',');
+        const ts = line.slice(idx + 1).trim();
+        if (!ts) continue;
+        // 时间戳为 19 位微秒，超出 JS 安全整数范围，全程按字符串比较（等长字典序=数值序）
+        for (const u of uids) {
+          if (!u) continue;
+          const prev = map.get(u);
+          if (!prev || ts > prev) map.set(u, ts);
+        }
+      }
+      return map.size ? map : null;
+    } catch (err) {
+      console.warn('[qz-cli] 读取最后沟通时间失败，联系人按原顺序展示: ' + ((err && err.message) || err));
+      return null;
+    }
+  }
+
+  /** 当前登录账号的 owner uid（qz auth status） */
+  async _ownerUid() {
+    const r = await this.run(['auth', 'status']);
+    if (r.status === 'success' && r.data && r.data.uid) return String(r.data.uid);
+    return '';
   }
 
   /** 某 uid 的既有会话（单聊优先由调用方 pick） */
@@ -205,6 +274,28 @@ class QzCli {
 
 // ---------- 纯函数（单测覆盖） ----------
 
+/**
+ * 按最后沟通时间倒序排列联系人（越新越靠前）。
+ * @param {object[]} contacts [{uid, nickname, ...}]
+ * @param {Map<string,string>|object|null} lastActiveByUid uid → 时间戳字符串（19 位微秒）
+ * @returns {object[]} 有记录者按 ts 降序，无记录者保持原顺序排在最后
+ */
+function sortContactsByLastActive(contacts, lastActiveByUid) {
+  if (!Array.isArray(contacts)) return [];
+  const map = lastActiveByUid instanceof Map
+    ? lastActiveByUid
+    : new Map(Object.entries(lastActiveByUid || {}));
+  const withTs = [];
+  const withoutTs = [];
+  for (const c of contacts) {
+    const ts = map.get(c.uid);
+    if (ts) withTs.push({ ...c, lastActiveTs: ts });
+    else withoutTs.push(c);
+  }
+  withTs.sort((a, b) => (b.lastActiveTs > a.lastActiveTs ? 1 : b.lastActiveTs < a.lastActiveTs ? -1 : 0));
+  return withTs.concat(withoutTs);
+}
+
 /** 提取正文中的 @提及：昵称字符集为 中文/字母/数字/下划线/连字符；@ 前必须独立成词（避免 a@b 邮箱误提） */
 function extractMentions(text) {
   if (typeof text !== 'string') return [];
@@ -258,5 +349,6 @@ module.exports = {
   extractMentions,
   resolveMentions,
   pickConversation,
-  makeNotifyText
+  makeNotifyText,
+  sortContactsByLastActive
 };
