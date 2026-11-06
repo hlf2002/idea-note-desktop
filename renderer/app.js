@@ -20,12 +20,16 @@
     tag: null,
     day: null,           // 按天筛选：'YYYY-MM-DD'，点击热力图格子设置
     search: '',
+    view: 'notes',       // 主视图状态：'notes' 全部笔记 | 'trash' 回收站
+    trash: [],           // 回收站列表（含 deletedAt 删除时间）
+    trashFailed: false,  // 回收站拉取失败标志（用于空态文案区分）
     editingId: null,
     pendingDeleteId: null,
     roamStack: [],
     pollTimer: null,
     pollSceneId: null,
-    composer: null
+    composer: null,
+    composerImages: []   // 顶部输入框待发送图片：[{ key, imageId, fileName, status, error }]
   };
 
   const el = {
@@ -53,10 +57,15 @@
     navDaily: $('#nav-daily'),
     tagList: $('#tag-list'),
     btnTrash: $('#btn-trash'),
+    trashCount: $('#trash-count'),
+    appTitle: $('#app-title'),
+    composerZone: $('.composer-zone'),
+    btnFeedTop: $('#feed-top'),
     openDataPath: $('#open-data-path'),
     searchInput: $('#search-input'),
     btnFilter: $('#btn-filter'),
     composer: $('#composer'),
+    composerImages: $('#composer-images'),
     composerSend: $('#composer-send'),
     tbTag: $('#tb-tag'),
     tbImage: $('#tb-image'),
@@ -74,6 +83,8 @@
     roamNext: $('#roam-next'),
     toast: $('#toast'),
     checkUpdate: $('#check-update'),
+    checkUpdateLabel: $('#check-update-label'),
+    checkUpdateX: $('#check-update-x'),
     footerVersion: $('#footer-version'),
     updateBar: $('#update-bar'),
     updateText: $('#update-text'),
@@ -141,78 +152,52 @@
     else el.userAvatar.removeAttribute('src');
   }
 
-  // ---------- 扫码登录 ----------
+  // ---------- 扫码登录（Q助理开放平台 OAuth，内嵌授权窗口） ----------
+  // 轮询已移到主进程（app-core），渲染层只负责触发与展示状态
   function stopPolling() {
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
-    }
+    state.pollTimer = null;
     state.pollSceneId = null;
+  }
+
+  function setLoginStatus(text, kind) {
+    el.qrStatus.textContent = text || '';
+    el.qrStatus.className = 'qr-status' + (kind ? ' ' + kind : '');
   }
 
   async function startQr() {
     stopPolling();
-    el.qrImage.style.display = 'none';
+    if (el.qrImage) el.qrImage.style.display = 'none';
     el.qrLoading.classList.remove('hidden');
-    el.qrStatus.textContent = '正在生成二维码…';
-    el.qrStatus.className = 'qr-status';
+    el.qrLoading.textContent = '正在打开授权窗口…';
+    setLoginStatus('');
     el.qrExpire.textContent = '';
     try {
-      const qr = await window.ideaNote.qr.create();
-      el.qrImage.src = qr.qrDataUrl;
-      el.qrImage.style.display = 'block';
+      await window.ideaNote.auth.start();
       el.qrLoading.classList.add('hidden');
-      el.qrStatus.textContent = '等待扫码…';
-      el.qrExpire.textContent = '二维码 ' + Math.round(qr.expiresIn / 60) + ' 分钟内有效';
-      state.pollSceneId = qr.sceneId;
-      state.pollTimer = setInterval(() => pollOnce(qr.sceneId), QR_POLL_MS);
+      setLoginStatus('已打开授权窗口，请用 Q助理 App 扫码确认');
+      el.qrExpire.textContent = '扫码确认后会自动完成登录';
     } catch (err) {
       el.qrLoading.classList.add('hidden');
-      el.qrStatus.textContent = '二维码生成失败，请点击刷新';
-      el.qrStatus.className = 'qr-status error';
+      setLoginStatus('打开授权窗口失败：' + ((err && err.message) || '请稍后重试'), 'error');
     }
   }
 
-  async function pollOnce(sceneId) {
-    if (state.pollSceneId !== sceneId) return; // 已被刷新/停止
-    try {
-      const res = await window.ideaNote.qr.status(sceneId);
-      if (state.pollSceneId !== sceneId) return;
-      if (res.status === 'pending') {
-        el.qrStatus.textContent = '等待扫码…';
-        el.qrStatus.className = 'qr-status';
-      } else if (res.status === 'scanned') {
-        el.qrStatus.textContent = '已扫码，请在手机上确认登录';
-        el.qrStatus.className = 'qr-status';
-      } else if (res.status === 'confirmed') {
-        stopPolling();
-        el.qrStatus.textContent = '登录成功！';
-        el.qrStatus.className = 'qr-status success';
-        const user = await window.ideaNote.auth.get();
-        if (user) {
-          showApp(user);
-          showToast('登录成功，正在同步灵感笔记…');
-          await loadData(true);
-          checkLegacy();
-        }
-      } else if (res.status === 'used') {
-        stopPolling();
-        el.qrStatus.textContent = '登录已完成';
-        el.qrStatus.className = 'qr-status success';
-      } else if (res.status === 'expired') {
-        stopPolling();
-        el.qrStatus.textContent = '二维码已过期，请刷新';
-        el.qrStatus.className = 'qr-status error';
+  // 登录结果由主进程推送（成功 / 取消 / 超时）
+  window.ideaNote.auth.onEvent(async (ev) => {
+    if (!ev || !ev.type) return;
+    if (ev.type === 'success') {
+      setLoginStatus('登录成功！', 'success');
+      const user = await window.ideaNote.auth.get();
+      if (user) {
+        showApp(user);
+        showToast('登录成功，正在同步灵感笔记…');
+        await loadData(true);
+        checkLegacy();
       }
-    } catch (err) {
-      // 单次轮询失败不中断，继续尝试（网络抖动）
-      if (err && err.code === 401) {
-        stopPolling();
-        el.qrStatus.textContent = '会话失效，请刷新二维码';
-        el.qrStatus.className = 'qr-status error';
-      }
+    } else if (ev.type === 'error' || ev.type === 'expired') {
+      setLoginStatus(ev.message || '授权未完成，请重试', 'error');
     }
-  }
+  });
 
   // ---------- 数据 ----------
   function filteredMemos() {
@@ -242,8 +227,13 @@
     // 打卡热力图（最近 3 个自然月，GitHub 风格）
     renderHeatmap();
 
-    // 导航高亮
-    el.navAll.classList.toggle('active', state.filter === 'all' && !state.tag && !state.day);
+    // 导航选中态互斥：全部笔记（仅非回收站视图 + 无筛选时）/ 每日回顾（遮罩式，无持久选中）/ 回收站
+    el.navAll.classList.toggle('active', state.view === 'notes' && state.filter === 'all' && !state.tag && !state.day);
+    el.navDaily.classList.remove('active');
+    el.btnTrash.classList.toggle('active', state.view === 'trash');
+
+    // 回收站计数徽标：state.trash 由启动/删除后/进入回收站时后台刷新
+    el.trashCount.textContent = String(state.trash.length);
 
     // 标签列表
     el.tagList.innerHTML = '';
@@ -357,6 +347,159 @@
     el.memoList.appendChild(frag);
 
     if (state.search.trim()) highlightSearch(el.memoList, state.search.trim());
+  }
+
+  // ---------- 回收站 ----------
+  function filteredTrash() {
+    let list = state.trash;
+    if (state.search.trim()) {
+      const q = state.search.trim().toLowerCase();
+      list = list.filter((m) => (m.content || '').toLowerCase().includes(q));
+    }
+    return list;
+  }
+
+  function renderTrashList() {
+    const list = filteredTrash();
+    el.memoList.innerHTML = '';
+    if (list.length === 0) {
+      el.emptyState.classList.remove('hidden');
+      el.emptyState.querySelector('p').textContent = state.trashFailed
+        ? '回收站加载失败，点击右上角刷新重试'
+        : (state.trashUnsupported
+          ? '当前平台暂未开放回收站，删除的笔记可在 Q助理 App 内找回'
+          : (state.trash.length > 0 ? '没有符合条件的笔记' : '回收站是空的'));
+      return;
+    }
+    el.emptyState.classList.add('hidden');
+    const frag = document.createDocumentFragment();
+    list.forEach((m) => frag.appendChild(buildTrashCard(m)));
+    el.memoList.appendChild(frag);
+    if (state.search.trim()) highlightSearch(el.memoList, state.search.trim());
+  }
+
+  /** 回收站卡片：头部显示删除时间，正文/图片与普通卡片一致，右上角菜单提供「恢复」 */
+  function buildTrashCard(memo) {
+    const card = document.createElement('article');
+    card.className = 'memo-card trash-card';
+    card.dataset.id = memo.id;
+
+    const head = document.createElement('div');
+    head.className = 'memo-head';
+    const headLeft = document.createElement('div');
+    headLeft.className = 'memo-head-left';
+    const time = document.createElement('span');
+    time.className = 'memo-time';
+    time.textContent = '删除于 ' + formatFullTime(memo.deletedAt);
+    headLeft.appendChild(time);
+    head.appendChild(headLeft);
+
+    const ellipsis = document.createElement('button');
+    ellipsis.className = 'memo-ellipsis';
+    ellipsis.dataset.action = 'menu';
+    ellipsis.title = '更多操作';
+    ellipsis.innerHTML = '<i class="fa-solid fa-ellipsis"></i>';
+    head.appendChild(ellipsis);
+    card.appendChild(head);
+
+    // 正文：标签保留在原位置（#标签 原位渲染为绿色）
+    const content = document.createElement('div');
+    content.className = 'memo-content';
+    content.innerHTML = window.Md.render(memo.content || '', { highlightTags: true });
+    content.querySelectorAll('.tag-inline').forEach((s) => {
+      s.dataset.tag = s.textContent.replace(/^#/, '');
+    });
+    card.appendChild(content);
+
+    // 图片缩略图（与普通卡片一致：本机有副本显示缩略图，否则占位徽标）
+    const media = memoDisplayImages(memo);
+    if (media.images.length || media.missing > 0) {
+      const imagesWrap = document.createElement('div');
+      imagesWrap.className = 'memo-images';
+      media.images.forEach((img) => {
+        const imgEl = document.createElement('img');
+        imgEl.className = 'memo-image-thumb';
+        imgEl.loading = 'lazy';
+        imgEl.alt = '';
+        imgEl.src = img.thumbnail || img.original;
+        imgEl.dataset.full = img.large || img.original;
+        imgEl.addEventListener('click', () => openLightbox(imgEl.dataset.full));
+        // 图片加载失败（本机副本被清理 / 远端地址失效）→ 降级为占位徽标，
+        // 原始地址留在 data-src 便于排查，绝不显示破图图标
+        imgEl.addEventListener('error', () => {
+          const ph = document.createElement('span');
+          ph.className = 'memo-image-missing';
+          ph.setAttribute('data-src', imgEl.getAttribute('src') || '');
+          ph.innerHTML = '<i class="fa-regular fa-image"></i><span>图片已不在本机</span>';
+          if (imgEl.parentNode) imgEl.parentNode.replaceChild(ph, imgEl);
+        });
+        imagesWrap.appendChild(imgEl);
+      });
+      if (media.missing > 0) {
+        const ph = document.createElement('span');
+        ph.className = 'memo-image-missing';
+        ph.innerHTML = '<i class="fa-regular fa-image"></i><span></span>';
+        ph.querySelector('span').textContent = media.missing + ' 张图片 · 在 Q助理 App 查看';
+        imagesWrap.appendChild(ph);
+      }
+      card.appendChild(imagesWrap);
+    }
+
+    // 右上角菜单：恢复
+    const menu = document.createElement('div');
+    menu.className = 'memo-menu';
+    const restoreBtn = document.createElement('button');
+    restoreBtn.textContent = '恢复';
+    restoreBtn.dataset.action = 'restore';
+    menu.appendChild(restoreBtn);
+    card.appendChild(menu);
+
+    return card;
+  }
+
+  /** 进入回收站视图：隐藏输入区、切换标题、拉取回收站列表（导航选中态由 renderSidebar 统一） */
+  async function enterTrash() {
+    if (state.view === 'trash') return;
+    state.view = 'trash';
+    el.appTitle.textContent = '回收站';
+    el.composerZone.classList.add('hidden');
+    el.composerZone.classList.remove('collapsed');
+    state.search = '';
+    el.searchInput.value = '';
+    resetFeedTop();
+    renderAll();
+    state.trashFailed = false;
+    state.trashUnsupported = false;
+    try {
+      const res = await window.ideaNote.sync.trash();
+      const list = Array.isArray(res) ? res : (res && Array.isArray(res.list) ? res.list : []);
+      state.trash = list;
+      state.trashUnsupported = !!(res && res.unsupported);
+    } catch (err) {
+      state.trashFailed = true;
+      handleSyncError(err, '加载回收站失败');
+    }
+    renderAll();
+  }
+
+  /** 退出回收站视图：恢复主界面，回到全部笔记（导航选中态由 renderSidebar 统一） */
+  function exitTrash() {
+    if (state.view !== 'trash') return;
+    state.view = 'notes';
+    el.appTitle.textContent = '灵感笔记';
+    el.composerZone.classList.remove('hidden');
+    el.composerZone.classList.remove('collapsed');
+    resetFeedTop();
+    renderAll();
+  }
+
+  /** 后台拉取回收站并刷新侧边栏计数（启动/删除后静默调用，失败不打扰） */
+  async function refreshTrash() {
+    try {
+      const res = await window.ideaNote.sync.trash();
+      state.trash = Array.isArray(res) ? res : (res && Array.isArray(res.list) ? res.list : []);
+      renderSidebar();
+    } catch (e) { /* 静默：徽标保持旧值，进入回收站时会再次拉取 */ }
   }
 
   // ===== 图片大图查看（lightbox：按钮缩放 / 鼠标拖拽平移 / 滚轮缩放） =====
@@ -580,29 +723,38 @@
     });
     card.appendChild(content);
 
-    // 图片：卡片内只展示七牛小缩略图，点击打开 lightbox 看大图
-    // 兼容三种数据形态：新格式对象数组 / 旧格式字符串数组 / 更老的 imageUrl 单图
-    const rawImgs = Array.isArray(memo.images) && memo.images.length ? memo.images : [];
-    const imgs = rawImgs.length
-      ? rawImgs.map((img) => (typeof img === 'string'
-        ? { original: img, thumbnail: img, large: img }
-        : img))
-      : (typeof memo.imageUrl === 'string' && /^(https?:|data:image\/)/i.test(memo.imageUrl.trim())
-        ? [{ original: memo.imageUrl.trim(), thumbnail: memo.imageUrl.trim(), large: memo.imageUrl.trim() }]
-        : []);
-    if (imgs.length) {
+    // 图片：本机有副本的显示缩略图（点击 lightbox 看大图）；
+    // 只有 image_id、本机无副本的（其他设备上传）显示占位徽标，不显示破图
+    const media = memoDisplayImages(memo);
+    if (media.images.length || media.missing > 0) {
       const imagesWrap = document.createElement('div');
       imagesWrap.className = 'memo-images';
-      imgs.forEach((img) => {
-        const el = document.createElement('img');
-        el.className = 'memo-image-thumb';
-        el.loading = 'lazy';
-        el.alt = '';
-        el.src = img.thumbnail || img.original;
-        el.dataset.full = img.large || img.original;
-        el.addEventListener('click', () => openLightbox(el.dataset.full));
-        imagesWrap.appendChild(el);
+      media.images.forEach((img) => {
+        const imgEl = document.createElement('img');
+        imgEl.className = 'memo-image-thumb';
+        imgEl.loading = 'lazy';
+        imgEl.alt = '';
+        imgEl.src = img.thumbnail || img.original;
+        imgEl.dataset.full = img.large || img.original;
+        imgEl.addEventListener('click', () => openLightbox(imgEl.dataset.full));
+        // 图片加载失败（本机副本被清理 / 远端地址失效）→ 降级为占位徽标，
+        // 原始地址留在 data-src 便于排查，绝不显示破图图标
+        imgEl.addEventListener('error', () => {
+          const ph = document.createElement('span');
+          ph.className = 'memo-image-missing';
+          ph.setAttribute('data-src', imgEl.getAttribute('src') || '');
+          ph.innerHTML = '<i class="fa-regular fa-image"></i><span>图片已不在本机</span>';
+          if (imgEl.parentNode) imgEl.parentNode.replaceChild(ph, imgEl);
+        });
+        imagesWrap.appendChild(imgEl);
       });
+      if (media.missing > 0) {
+        const ph = document.createElement('span');
+        ph.className = 'memo-image-missing';
+        ph.innerHTML = '<i class="fa-regular fa-image"></i><span></span>';
+        ph.querySelector('span').textContent = media.missing + ' 张图片 · 在 Q助理 App 查看';
+        imagesWrap.appendChild(ph);
+      }
       card.appendChild(imagesWrap);
     }
 
@@ -621,11 +773,15 @@
     const editBtn = document.createElement('button');
     editBtn.textContent = '编辑';
     editBtn.dataset.action = 'edit';
+    const widgetBtn = document.createElement('button');
+    widgetBtn.textContent = '展示到桌面';
+    widgetBtn.dataset.action = 'widget';
+    widgetBtn.title = '推送到桌面小组件展示';
     const delBtn = document.createElement('button');
     delBtn.textContent = state.pendingDeleteId === String(memo.id) ? '确认删除？' : '删除';
     delBtn.dataset.action = 'delete';
     delBtn.classList.add('danger');
-    menu.appendChild(editBtn); menu.appendChild(delBtn);
+    menu.appendChild(editBtn); menu.appendChild(widgetBtn); menu.appendChild(delBtn);
     card.appendChild(menu);
 
     return card;
@@ -669,52 +825,89 @@
         '<button type="button" class="composer-send" data-edit-tool="save" title="保存"><i class="fa-solid fa-paper-plane"></i></button>' +
       '</div>';
 
+    // 图片附件条：编辑时保留原图片（image_ids），可继续加图/删图
+    const attachWrap = document.createElement('div');
+    attachWrap.className = 'composer-attachments hidden';
+    const editImages = (Array.isArray(memo.imageIds) ? memo.imageIds : []).map((id) => ({
+      key: 'img_' + id,
+      imageId: id,
+      fileName: '',
+      url: mediaIndex[id] || '',
+      status: 'done',
+      error: ''
+    }));
+    function renderEditImages() {
+      renderAttachments(attachWrap, editImages, renderEditImages);
+    }
+    renderEditImages();
+
     card.appendChild(editEl);
+    card.appendChild(attachWrap);
     card.appendChild(tb);
     inner.appendChild(card);
     wrap.appendChild(inner);
 
-    // 初始化 composer（与顶部同一套：所见即所得、⌘/⇧+Enter 提交）
-    const composer = window.MarkdownComposer(editEl, {
-      render: (text) => window.Md.renderWysiwyg(text),
-      onCommit: (text) => { saveEdit(text); }
-    });
-    composer.setValue(memo.content);
-    // 标签联想：与顶部输入框同一套交互
-    const detachSuggester = window.TagSuggester.attach(composer, {
-      getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
-    });
+    // 初始化 composer（与顶部同一套：所见即所得、⌘/⇧+Enter 提交）。
+    // 注意：buildEditor 在卡片插入 document 之前执行，此时 editEl 不在文档中，
+    // el.focus() 无效、setCaret 的 addRange 会抛错（selection 无法落到编辑器内），
+    // 导致标签联想把光标误判到内容末尾而误弹下拉。因此延迟到下一帧（DOM 已挂载）
+    // 再初始化；若期间编辑被取消/重建（editEl 已脱离文档）则跳过。
+    function initEditor() {
+      const composer = window.MarkdownComposer(editEl, {
+        render: (text) => window.Md.renderWysiwyg(text),
+        onCommit: (text) => { saveEdit(text); }
+      });
+      composer.setValue(memo.content);
+      // 标签联想：与顶部输入框同一套交互
+      const detachSuggester = window.TagSuggester.attach(composer, {
+        getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
+      });
 
-    async function saveEdit(val) {
-      if (!val || !val.trim()) return;
-      try {
-        const updated = await window.ideaNote.sync.update(memo.id, val);
+      async function saveEdit(val) {
+        // 允许纯图片笔记：没文字但有图也能保存
+        if ((!val || !val.trim()) && editImages.length === 0) return;
+        if (hasUploadingImage(editImages)) {
+          showToast('图片还在上传，请稍候再保存');
+          return;
+        }
+        try {
+          const updated = await window.ideaNote.sync.update(memo.id, val || '', uploadedImageIds(editImages));
+          detachSuggester();
+          state.editingId = null;
+          upsertLocal(updated);
+        } catch (err) {
+          handleSyncError(err, '保存失败');
+        }
+      }
+      function cancelEdit() {
         detachSuggester();
         state.editingId = null;
-        upsertLocal(updated);
-      } catch (err) {
-        handleSyncError(err, '保存失败');
+        renderList();
       }
-    }
-    function cancelEdit() {
-      detachSuggester();
-      state.editingId = null;
-      renderList();
+
+      // 工具栏：行为与顶部输入框完全一致
+      tb.querySelector('[data-edit-tool="tag"]').addEventListener('click', () => composer.insertText(' #'));
+      tb.querySelector('[data-edit-tool="image"]').addEventListener('click', () => pickAndUploadImages(editImages, renderEditImages));
+      tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
+      tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
+      tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
+      tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => showToast('提及 · 敬请期待'));
+      tb.querySelector('[data-edit-tool="save"]').addEventListener('click', () => saveEdit(composer.value()));
+      tb.querySelector('[data-edit-tool="cancel"]').addEventListener('click', cancelEdit);
+      // Esc 取消（composer 只处理 Enter，这里兜底）
+      editEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+      });
     }
 
-    // 工具栏：行为与顶部输入框完全一致
-    tb.querySelector('[data-edit-tool="tag"]').addEventListener('click', () => composer.insertText(' #'));
-    tb.querySelector('[data-edit-tool="image"]').addEventListener('click', () => showToast('图片上传 · 敬请期待'));
-    tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
-    tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
-    tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
-    tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => showToast('提及 · 敬请期待'));
-    tb.querySelector('[data-edit-tool="save"]').addEventListener('click', () => saveEdit(composer.value()));
-    tb.querySelector('[data-edit-tool="cancel"]').addEventListener('click', cancelEdit);
-    // Esc 取消（composer 只处理 Enter，这里兜底）
-    editEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
-    });
+    if (document.contains(editEl)) {
+      initEditor();
+    } else {
+      requestAnimationFrame(() => {
+        if (!document.contains(editEl)) return; // 编辑已被取消/重建
+        initEditor();
+      });
+    }
 
     return wrap;
   }
@@ -772,6 +965,8 @@
   let updateDismissedVersion = null;  // 用户忽略的版本号（不再重复提示）
   let updateShownVersion = null;      // 更新条当前展示的版本
   let updateActionMode = null;        // 'download' | 'restart'
+  let checkUpdateState = 'idle';      // 侧边栏「检查更新」链接状态：'idle' | 'downloading' | 'downloaded'
+  let downloadDismissed = false;      // 用户点 x 关闭下载进度提示后，不再刷新进度文案
 
   function showUpdateBar(text, mode) {
     el.updateBar.classList.remove('hidden');
@@ -796,7 +991,7 @@
   function handleUpdateEvent(payload) {
     const ev = payload && payload.event;
     if (ev === 'checking') {
-      if (payload.manual) showToast('正在检查更新…');
+      // 检查过程不再弹 toast，结果由下方事件与「检查更新」链接状态反馈
     } else if (ev === 'available') {
       if (payload.version && payload.version === updateDismissedVersion) return;
       if (payload.version && payload.version === updaterInfo.currentVersion) return; // 防御：版本未变
@@ -804,21 +999,28 @@
       showUpdateBar('发现新版本 v' + payload.version,
         updaterInfo.autoDownload ? null : 'download');
     } else if (ev === 'downloading') {
-      el.updateBar.classList.remove('hidden');
-      el.updateText.textContent = '正在下载更新…';
-      el.updateAction.classList.add('hidden');
-      el.updateProgress.classList.remove('hidden');
-      el.updateProgress.textContent = (payload.percent || 0) + '%';
+      // 下载进度改由侧边栏「检查更新」链接展示，隐藏顶部提示条避免重复
+      hideUpdateBar();
+      checkUpdateState = 'downloading';
+      if (!downloadDismissed) {
+        el.checkUpdateLabel.textContent = '正在下载更新… ' + (payload.percent || 0) + '%';
+        el.checkUpdateX.classList.remove('hidden');
+      }
     } else if (ev === 'downloaded') {
+      hideUpdateBar();
       updateShownVersion = payload.version;
-      el.updateBar.classList.remove('hidden');
-      el.updateText.textContent = '新版本 v' + (payload.version || '') + ' 已就绪';
-      el.updateProgress.classList.add('hidden');
-      showUpdateBar('新版本已就绪，重启后生效', 'restart');
+      downloadDismissed = false;
+      checkUpdateState = 'downloaded';
+      el.checkUpdateLabel.textContent = '重启并安装';
+      el.checkUpdateX.classList.add('hidden');
     } else if (ev === 'not-available') {
       if (payload.manual) showToast('已是最新版本');
     } else if (ev === 'error') {
       hideUpdateBar();
+      downloadDismissed = false;
+      checkUpdateState = 'idle';
+      el.checkUpdateLabel.textContent = '检查更新';
+      el.checkUpdateX.classList.add('hidden');
       showToast('更新失败：' + (payload.message || '网络异常，请稍后再试'));
     }
   }
@@ -832,6 +1034,203 @@
       el.footerVersion.textContent = 'v' + updaterInfo.currentVersion;
     } catch (e) { /* 老版本 preload 无 updater 接口时静默降级 */ }
     window.ideaNote.updater.onStatus(handleUpdateEvent);
+  }
+
+  // ---------- 图片上传与展示 ----------
+  // 平台（/open/idea_note/*）只返回 image_id，不返回图片 URL：
+  //  - 本机上传的图：主进程在 <userData>/media/ 留了副本，返回 file:// 地址直接给 <img>；
+  //  - 其他设备上传的图：本机没有副本 → 显示占位徽标，不显示破图。
+  const MAX_IMAGES = 9; // 与 qz/config.js 的 IMAGE_MAX_COUNT 保持一致
+  let mediaIndex = {};  // imageId -> 本机图片 file:// 地址
+
+  /** 拉取本地图片映射（启动、同步后调用） */
+  async function refreshMediaIndex() {
+    try {
+      const map = window.ideaNote && window.ideaNote.media ? await window.ideaNote.media.index() : {};
+      mediaIndex = (map && typeof map === 'object') ? map : {};
+    } catch (e) {
+      mediaIndex = {};
+    }
+    return mediaIndex;
+  }
+
+  /**
+   * memo -> 卡片展示用图片
+   * @returns {{images: Array<{thumbnail: string, large: string}>, missing: number}}
+   *   images：可直接展示的图（本机副本优先，其次旧 image_url）
+   *   missing：服务端有 image_id 但本机无副本的张数
+   */
+  function memoDisplayImages(memo) {
+    const ids = (memo && Array.isArray(memo.imageIds)) ? memo.imageIds : [];
+    const images = [];
+    const seen = {};
+    let missing = 0;
+    ids.forEach((id) => {
+      const url = mediaIndex[id];
+      if (url) {
+        if (!seen[url]) { seen[url] = true; images.push({ thumbnail: url, large: url }); }
+      } else {
+        missing += 1;
+      }
+    });
+    // 旧数据：服务端 image_url（有 CDN 地址时可展示）
+    const legacy = (memo && Array.isArray(memo.images)) ? memo.images : [];
+    legacy.forEach((img) => {
+      const obj = typeof img === 'string' ? { thumbnail: img, large: img } : img;
+      if (!obj || !obj.thumbnail) return;
+      if (seen[obj.thumbnail]) return;
+      seen[obj.thumbnail] = true;
+      images.push({ thumbnail: obj.thumbnail, large: obj.large || obj.thumbnail });
+    });
+    if (!images.length && typeof memo.imageUrl === 'string' && /^(https?:|data:image\/)/i.test(memo.imageUrl.trim())) {
+      const u = memo.imageUrl.trim();
+      images.push({ thumbnail: u, large: u });
+    }
+    return { images, missing };
+  }
+
+  /**
+   * 渲染附件条（顶部输入框与编辑卡片共用）
+   * @param {HTMLElement} container 容器
+   * @param {Array} items 附件数组
+   * @param {Function} onChange 变更后回调（调用方负责重绘）
+   */
+  function renderAttachments(container, items, onChange) {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!Array.isArray(items) || items.length === 0) {
+      container.classList.add('hidden');
+      return;
+    }
+    container.classList.remove('hidden');
+    items.forEach((item) => {
+      const cell = document.createElement('div');
+      cell.className = 'attach-item' + (item.status === 'error' ? ' error' : '');
+
+      if (item.status === 'done' && item.url) {
+        const img = document.createElement('img');
+        img.className = 'attach-thumb';
+        img.alt = '';
+        img.src = item.url;
+        img.addEventListener('click', () => openLightbox(item.url));
+        // 本地副本被清理/移动 → 降级为占位，不显示破图
+        img.addEventListener('error', () => {
+          img.remove();
+          const ph = document.createElement('div');
+          ph.className = 'attach-error';
+          ph.textContent = '图片';
+          cell.insertBefore(ph, cell.firstChild);
+        });
+        cell.appendChild(img);
+      } else if (item.status === 'uploading') {
+        const ph = document.createElement('div');
+        ph.className = 'attach-loading';
+        ph.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+        cell.appendChild(ph);
+      } else {
+        // 上传失败 / 本机无副本（其他设备上传）→ 占位，避免破图
+        const ph = document.createElement('div');
+        ph.className = 'attach-error';
+        ph.textContent = item.status === 'error' ? '失败' : '图片';
+        ph.title = item.error || '该图片在本机没有副本（其他设备上传）';
+        cell.appendChild(ph);
+      }
+
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'attach-remove';
+      rm.title = '移除';
+      rm.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+      rm.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const i = items.indexOf(item);
+        if (i >= 0) items.splice(i, 1);
+        onChange();
+      });
+      cell.appendChild(rm);
+      container.appendChild(cell);
+    });
+  }
+
+  /**
+   * 选图 → 逐张上传 → 追加到目标附件数组。
+   * 串行上传：并发多张容易撞七牛配额/凭证，且串行的进度反馈更稳。
+   * @param {Array} items 目标附件数组
+   * @param {Function} onChange 每张状态变化后重绘
+   */
+  async function pickAndUploadImages(items, onChange) {
+    if (!window.ideaNote || !window.ideaNote.media) {
+      showToast('当前版本不支持图片上传，请更新到最新版');
+      return;
+    }
+    if (items.length >= MAX_IMAGES) {
+      showToast('单条笔记最多 ' + MAX_IMAGES + ' 张图片');
+      return;
+    }
+    let paths = [];
+    try {
+      paths = await window.ideaNote.media.choose();
+    } catch (err) {
+      showToast('打开图片选择器失败');
+      return;
+    }
+    if (!Array.isArray(paths) || paths.length === 0) return;
+
+    const room = MAX_IMAGES - items.length;
+    if (paths.length > room) {
+      paths = paths.slice(0, room);
+      showToast('单条笔记最多 ' + MAX_IMAGES + ' 张图片，本次只上传前 ' + room + ' 张');
+    }
+
+    for (const p of paths) {
+      const item = {
+        key: 'img_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        imageId: '',
+        fileName: '',
+        url: '',
+        status: 'uploading',
+        error: ''
+      };
+      items.push(item);
+      onChange();
+      try {
+        const r = await window.ideaNote.media.upload(p);
+        item.imageId = r && r.imageId ? r.imageId : '';
+        item.fileName = r && r.fileName ? r.fileName : '';
+        item.url = r && r.url ? r.url : '';
+        if (!item.imageId) throw new Error('图片上传失败，请重试');
+        item.status = 'done';
+        if (item.url) mediaIndex[item.imageId] = item.url;
+      } catch (err) {
+        item.status = 'error';
+        item.error = (err && err.message) || '图片上传失败';
+        showToast(item.error);
+      }
+      onChange();
+    }
+  }
+
+  /** 待发送附件里已上传成功的 image_id 列表 */
+  function uploadedImageIds(items) {
+    return (items || [])
+      .filter((it) => it && it.status === 'done' && it.imageId)
+      .map((it) => it.imageId);
+  }
+
+  /** 是否有图片还在上传（提交前校验） */
+  function hasUploadingImage(items) {
+    return (items || []).some((it) => it && it.status === 'uploading');
+  }
+
+  /** 顶部输入区附件条重绘（模块级，事件与提交流程共用） */
+  function renderComposerImages() {
+    renderAttachments(el.composerImages, state.composerImages, renderComposerImages);
+  }
+
+  /** 顶部输入区附件全部清空（提交成功后调用） */
+  function clearComposerImages() {
+    state.composerImages = [];
+    renderComposerImages();
   }
 
   // ---------- 同步操作 ----------
@@ -860,6 +1259,10 @@
 
   let authRetryTimer = null;
   let authRetryAttempt = 0;
+  // 连续收到「凭证已失效」的次数：qz 层已自愈可恢复的 401（重换 H5 token 重试一次），
+  // 能到渲染层的 [AUTH] 登录凭证已失效 = 扩展端凭证被服务端判死，自动重试不可能成功，
+  // 连续确认 2 次（防网关偶发 5xx 误判）后引导用户重新扫码登录，而不是无限静默重试。
+  let authExpiredStreak = 0;
   const AUTH_RETRY_DELAYS_MS = [30000, 120000, 300000]; // 30s / 2min / 5min
 
   function cancelAuthRetry() {
@@ -868,6 +1271,13 @@
       authRetryTimer = null;
     }
     authRetryAttempt = 0;
+    authExpiredStreak = 0;
+  }
+
+  /** 服务端明确判死扩展端凭证（换取 H5 token 被拒）——必须重新扫码登录才能恢复 */
+  function isAuthExpired(err) {
+    if (!err) return false;
+    return (err.message || '').indexOf('登录凭证已失效') >= 0;
   }
 
   /** 鉴权类失败：静默排队自动重试，恢复后自动回到在线状态 */
@@ -885,9 +1295,35 @@
     }, delay);
   }
 
+  /** 服务类异常（网络失败/超时/网关 5xx）：凭证未失效，静默重试等恢复即可 */
+  function isRetryableServiceError(err) {
+    if (!err || isAuthError(err)) return false;
+    const msg = err.message || '';
+    if (msg.indexOf('网络请求失败') >= 0 || msg.indexOf('超时') >= 0 || msg.indexOf('HTTP 5') >= 0) return true;
+    return typeof err.code === 'number' && (err.code < 0 || err.code >= 500);
+  }
+
   function handleSyncError(err, fallback) {
     if (isAuthError(err)) {
+      if (isAuthExpired(err)) {
+        authExpiredStreak += 1;
+        // 连续 2 次确认凭证已失效：重试无意义，引导重新扫码登录
+        if (authExpiredStreak >= 2) {
+          cancelAuthRetry();
+          showToast('登录状态已失效，请重新扫码登录');
+          showLogin();
+          startQr();
+          return;
+        }
+        showToast('同步暂时中断，正在自动恢复…');
+        scheduleAuthRetry();
+        return;
+      }
       // 只在首次失败时提示一次；后续自动重试保持静默
+      if (authRetryAttempt === 0) showToast('同步暂时中断，正在自动恢复…');
+      scheduleAuthRetry();
+    } else if (isRetryableServiceError(err)) {
+      // 服务端瞬时故障（5xx/超时/断网）：自动重试，恢复后自动回到在线状态
       if (authRetryAttempt === 0) showToast('同步暂时中断，正在自动恢复…');
       scheduleAuthRetry();
     } else {
@@ -908,10 +1344,15 @@
     try {
       const memos = await window.ideaNote.sync.pull();
       state.memos = memos;
+      // 同步后刷新本地图片映射：上传成功的那批图才能显示缩略图
+      await refreshMediaIndex();
       renderAll();
       cancelAuthRetry(); // 同步成功：清除自动重试
+      refreshTrash();    // 后台刷新回收站计数徽标（不阻塞列表展示）
+      return true;
     } catch (err) {
       handleSyncError(err, '同步失败，正在展示本地缓存');
+      return false;
     }
   }
 
@@ -926,10 +1367,13 @@
   // ---------- 渲染入口 ----------
   function renderAll() {
     renderSidebar();
-    renderList();
+    if (state.view === 'trash') renderTrashList();
+    else renderList();
     // 内容渲染完成后刷新滚动条定位与尺寸
     positionFeedScrollbar();
     updateFeedScrollbar();
+    // 渲染可能导致 scrollTop 重置（筛选/搜索等），同步输入区压缩态
+    updateComposerCollapsed();
   }
 
   // ---------- 事件 ----------
@@ -943,18 +1387,28 @@
     window.TagSuggester.attach(state.composer, {
       getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
     });
+    // @联系人联想：输入 @ 或点击工具栏 @ 后弹出 Q助理联系人（数据来自本机 qz CLI）
+    window.AtSuggester.attach(state.composer, {
+      loadContacts: () => window.ideaNote.mentions.contacts().then((r) => (r && r.ok ? r.contacts : []))
+    });
     el.composer.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !e.isComposing) {
         state.composer.clear();
       }
     });
     el.composerSend.addEventListener('click', async () => { await saveMemo(); });
+    // 输入区附件条：上传中 → 缩略图；可逐张移除
+    renderComposerImages();
 
     el.memoList.addEventListener('click', async (e) => {
       const tagBtn = e.target.closest('.tag-inline, .memo-tag');
       if (tagBtn) {
+        // 回收站卡片上的标签：退出回收站并筛选该标签
+        exitTrash();
         state.filter = 'tag';
         state.tag = tagBtn.dataset.tag;
+        state.day = null; // 标签与热力图日期互斥：只看标签，不再叠加某一天
+        resetFeedTop();
         renderAll();
         return;
       }
@@ -979,6 +1433,19 @@
         closeMenus();
         state.editingId = id;
         renderList();
+      } else if (action === 'widget') {
+        // 展示到桌面：把这条笔记推送到桌面小组件
+        const memo = state.memos.find((m) => String(m.id) === String(id));
+        if (memo) {
+          closeMenus();
+          try {
+            await window.ideaNote.widget.push(memo);
+            showToast('已推送到桌面小组件');
+          } catch (err) {
+            console.error('widget push failed', err);
+            showToast('推送失败');
+          }
+        }
       } else if (action === 'delete') {
         if (state.pendingDeleteId === id) {
           // 二次确认：真正删除
@@ -987,6 +1454,7 @@
             state.pendingDeleteId = null;
             closeMenus();
             removeLocal(id);
+            refreshTrash(); // 后台刷新回收站计数
           } catch (err) {
             handleSyncError(err, '删除失败');
           }
@@ -1000,6 +1468,18 @@
               if (actionBtn.isConnected) actionBtn.textContent = '删除';
             }
           }, 2500);
+        }
+      } else if (action === 'restore') {
+        // 回收站：恢复笔记（可逆操作，直接执行）
+        try {
+          await window.ideaNote.sync.restore(id);
+          state.trash = state.trash.filter((m) => String(m.id) !== String(id));
+          showToast('已恢复到全部笔记');
+          renderAll();
+          // 刷新主列表与本地缓存：恢复后笔记按原排序位置回归（串行等待，避免并发刷新互相覆盖）
+          await loadData(false);
+        } catch (err) {
+          handleSyncError(err, '恢复失败');
         }
       }
     });
@@ -1016,6 +1496,9 @@
     el.tagList.addEventListener('click', (e) => {
       const btn = e.target.closest('.tag-item');
       if (!btn) return;
+      exitTrash(); // 标签筛选只作用于全部笔记
+      // 标签与热力图日期互斥：点标签时清掉按天筛选，避免出现「标签 ∩ 某天」的交集
+      state.day = null;
       if (state.filter === 'tag' && state.tag === btn.dataset.tag) {
         state.filter = 'all';
         state.tag = null;
@@ -1023,16 +1506,22 @@
         state.filter = 'tag';
         state.tag = btn.dataset.tag;
       }
+      resetFeedTop();
       renderAll();
     });
 
     // 导航
     el.navAll.addEventListener('click', () => {
+      exitTrash();
       state.filter = 'all'; state.tag = null; state.day = null; state.search = '';
       el.searchInput.value = '';
+      resetFeedTop();
       renderAll();
     });
-    el.navDaily.addEventListener('click', openRoam);
+    el.navDaily.addEventListener('click', () => {
+      exitTrash();
+      openRoam();
+    });
 
     // 热力图：hover 提示（日期 + 条数）+ 点击按天筛选
     el.heatmapGrid.addEventListener('mouseover', (e) => {
@@ -1058,7 +1547,13 @@
     el.heatmapGrid.addEventListener('click', (e) => {
       const cell = e.target.closest('.heatmap-cell.has-data');
       if (!cell) return;
+      exitTrash(); // 按天筛选只作用于全部笔记
       const key = cell.dataset.key;
+      // 热力图是独立视图：点格子只看当天内容，不叠加标签筛选
+      if (state.filter !== 'all' || state.tag !== null) {
+        state.filter = 'all';
+        state.tag = null;
+      }
       // 再次点击同一天：取消筛选
       state.day = (state.day === key) ? null : key;
       const feed = document.querySelector('.feed');
@@ -1076,6 +1571,7 @@
           state.filter = 'all';
           state.tag = null;
         }
+        resetFeedTop();
         renderAll();
       }, 200);
     });
@@ -1083,6 +1579,7 @@
       if (e.key === 'Escape') {
         el.searchInput.value = '';
         state.search = '';
+        resetFeedTop();
         renderAll();
       }
     });
@@ -1144,13 +1641,26 @@
       startQr();
     });
 
-    // 刷新同步
+    // 刷新同步：全部笔记视图拉主列表；回收站视图重新拉回收站
     el.syncRefresh.addEventListener('click', async () => {
       el.syncRefresh.classList.add('spinning');
       try {
-        await loadData(false);
-        showToast('已同步');
-      } catch (e) { /* loadData 已处理错误 */ }
+        if (state.view === 'trash') {
+          state.trashFailed = false;
+          try {
+            const list = await window.ideaNote.sync.trash();
+            state.trash = list;
+            showToast('已同步');
+          } catch (err) {
+            state.trashFailed = true;
+            handleSyncError(err, '加载回收站失败');
+          }
+          renderAll();
+        } else {
+          const ok = await loadData(false);
+          if (ok) showToast('已同步');
+        }
+      } catch (e) { /* 错误已由 handleSyncError 提示 */ }
       setTimeout(() => el.syncRefresh.classList.remove('spinning'), 600);
     });
 
@@ -1160,16 +1670,19 @@
       el.searchInput.select();
     });
 
-    // 回收站
-    el.btnTrash.addEventListener('click', () => showToast('回收站 · 敬请期待'));
+    // 回收站：进入/退出回收站视图
+    el.btnTrash.addEventListener('click', () => {
+      if (state.view === 'trash') exitTrash();
+      else enterTrash();
+    });
 
     // 输入工具条：插入 markdown 语法；列表按钮按"行首起列表"语义插入
     el.tbTag.addEventListener('click', () => state.composer.insertText(' #'));
     el.tbUl.addEventListener('click', () => state.composer.beginList('- '));
     el.tbOl.addEventListener('click', () => state.composer.beginList('1. '));
-    el.tbImage.addEventListener('click', () => showToast('图片上传 · 敬请期待'));
+    el.tbImage.addEventListener('click', () => pickAndUploadImages(state.composerImages, renderComposerImages));
     el.tbFont.addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
-    el.tbAt.addEventListener('click', () => showToast('提及 · 敬请期待'));
+    el.tbAt.addEventListener('click', () => state.composer.insertText(' @'));
 
     // 旧数据导入
     el.legacyImport.addEventListener('click', async () => {
@@ -1191,15 +1704,32 @@
     // 数据目录
     el.openDataPath.addEventListener('click', () => window.ideaNote.app.openDataPath());
 
-    // 检查更新（手动）
+    // 检查更新（手动）：空闲 → 检查；下载中 → 忽略；已就绪 → 重启安装
     el.checkUpdate.addEventListener('click', async () => {
+      if (checkUpdateState === 'downloading') return;
+      if (checkUpdateState === 'downloaded') {
+        try {
+          const r = await window.ideaNote.updater.install();
+          if (!r || !r.ok) showToast((r && r.message) || '安装失败，请重试');
+        } catch (e) {
+          showToast('安装失败，请重试');
+        }
+        return;
+      }
       try {
         const r = await window.ideaNote.updater.check();
         if (!r || !r.ok) showToast((r && r.message) || '检查更新失败');
-        else if (r.message) showToast(r.message);
       } catch (e) {
         showToast('检查更新失败');
       }
+    });
+    // 关闭下载进度提示（下载在后台继续，完成后链接自动变为「重启并安装」）
+    el.checkUpdateX.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadDismissed = true;
+      checkUpdateState = 'idle';
+      el.checkUpdateLabel.textContent = '检查更新';
+      el.checkUpdateX.classList.add('hidden');
     });
     // 更新条操作：下载更新 / 重启并安装
     el.updateAction.addEventListener('click', async () => {
@@ -1258,10 +1788,24 @@
     if (!sbFeed || !sbBar || !sbThumb) return;
     sbFeed.addEventListener('mouseenter', function () { sbFeed.classList.add('scroll-hover'); updateFeedScrollbar(); });
     sbFeed.addEventListener('mouseleave', function () { sbFeed.classList.remove('scroll-hover'); });
-    sbFeed.addEventListener('scroll', updateFeedScrollbar, { passive: true });
+    sbFeed.addEventListener('scroll', function () {
+      updateFeedScrollbar();
+      updateComposerCollapsed();
+      updateFeedTopBtn();
+    }, { passive: true });
     window.addEventListener('resize', function () { positionFeedScrollbar(); updateFeedScrollbar(); });
     positionFeedScrollbar();
     updateFeedScrollbar();
+    lastFeedTop = sbFeed.getBoundingClientRect().top;
+
+    // 回到顶部：向下滚动超过阈值显示按钮，点击平滑回顶
+    var btnFeedTop = el.btnFeedTop;
+    if (btnFeedTop) {
+      btnFeedTop.addEventListener('click', function () {
+        if (sbFeed) sbFeed.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+      updateFeedTopBtn();
+    }
 
     // 拖拽滚动条滚动内容
     var dragging = false, dragStartY = 0, dragStartScroll = 0;
@@ -1289,13 +1833,110 @@
     });
   }
 
+  // ---------- 导航/筛选切换时右侧列表回到顶部 ----------
+  // 点击「全部笔记」、标签、inline 标签或搜索时，内容重排前先把滚动位置归零；
+  // scroll 事件会自动同步输入框压缩态（恢复原样）与回到顶部按钮（隐藏）
+  function resetFeedTop() {
+    const feed = document.querySelector('.feed');
+    if (feed) feed.scrollTop = 0;
+  }
+
+  // ---------- 回到顶部浮动按钮显隐 ----------
+  // 向下滚动超过 280px 显示（避开输入区压缩阈值 100px，避免刚压缩就闪现）；回到顶部附近隐藏
+  function updateFeedTopBtn() {
+    var btn = el.btnFeedTop;
+    if (!btn || !sbFeed) return;
+    btn.classList.toggle('show', sbFeed.scrollTop > 280);
+  }
+
+  // ---------- 顶部输入区滚动联动压缩（第二屏离开顶部压缩、回到顶部恢复） ----------
+  // 输入区高度变化会移动 feed 视口位置（flex 布局联动）；ResizeObserver 感知尺寸变化后
+  // 反向补偿 scrollTop，让视口内内容保持在屏幕原位（配合 CSS overflow-anchor:none），
+  // 滚动时页面不抖动。压缩态下：输入框空 → 一行 + 工具栏；非空 → 内容行数 + 工具栏。
+  var composerZone = document.querySelector('.composer-zone');
+  var lastFeedTop = null;
+
+  function updateComposerCollapsed() {
+    if (!sbFeed || !composerZone) return;
+    if (composerZone.classList.contains('collapsed')) {
+      // 已压缩：只有真正滚回顶部（scrollTop <= 0）才恢复。
+      // 阈值带滞后（压缩 2px / 恢复 0px），避免向上微滚时输入框反复回弹。
+      if (sbFeed.scrollTop <= 0) {
+        composerZone.classList.remove('collapsed');
+        // 输入区高度变化后 feed 尺寸变化，刷新自绘滚动条定位与尺寸
+        positionFeedScrollbar();
+        updateFeedScrollbar();
+      }
+    } else if (sbFeed.scrollTop > 100) {
+      // 未压缩：离开顶部足够远才压缩。阈值（100px）大于输入区压缩高度差（约 94px），
+      // 保证压缩动画期间 ResizeObserver 补偿不会把 scrollTop 拉回 0（否则立即触发恢复，
+      // 造成「压缩→补偿归零→恢复」的抖动循环）；同时顶部附近微滚不触发压缩，
+      // 上滑一点点（未真正回顶）输入框保持压缩不回弹。
+      composerZone.classList.add('collapsed');
+      positionFeedScrollbar();
+      updateFeedScrollbar();
+    }
+  }
+
+  if (composerZone && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(function () {
+      if (!sbFeed) return;
+      var top = sbFeed.getBoundingClientRect().top;
+      if (lastFeedTop !== null && composerZone.classList.contains('collapsed')) {
+        var d = top - lastFeedTop;   // 视口移动量（压缩上移为负，输入增高下移为正）
+        if (d !== 0 && sbFeed.scrollTop > 0) {
+          // 反向补偿：视口移动 d 时 scrollTop 同步移动 d，内容保持在屏幕原位。
+          // 补偿后若 <= 0（滚动位置不足时压缩），放弃本次补偿，避免触发恢复误判造成抖动
+          var ns = sbFeed.scrollTop + d;
+          if (ns > 0) sbFeed.scrollTop = ns;
+        }
+      }
+      lastFeedTop = top;
+    }).observe(composerZone);
+  }
+
   async function saveMemo() {
+    if (state.view === 'trash') return; // 回收站视图下输入区已隐藏，防御
     const val = state.composer.value();
-    if (!val.trim()) return;
+    const hasImages = state.composerImages.length > 0;
+    if (!hasImages && !val.trim()) return;
+    if (hasUploadingImage(state.composerImages)) {
+      showToast('图片还在上传，请稍候再发送');
+      return;
+    }
     try {
-      const memo = await window.ideaNote.sync.create(val);
+      const memo = await window.ideaNote.sync.create(val, uploadedImageIds(state.composerImages));
       state.composer.clear();
+      clearComposerImages();
       upsertLocal(memo);
+      // 标签视图下发无标签（或不含当前标签）的笔记：该笔记在当前视图被过滤不可见，
+      // 自动跳回「全部笔记」并定位到新笔记（新笔记按时间排序恒为列表第一条 → 回到顶部即可）
+      if (state.filter === 'tag' && state.tag && !(memo.tags || []).includes(state.tag)) {
+        state.filter = 'all';
+        state.tag = null;
+        state.day = null;
+        renderAll();
+        sbFeed.scrollTop = 0;
+        positionFeedScrollbar();
+        updateFeedScrollbar();
+      }
+      // @ 提及通知：想法已发布，通知失败/不可用不阻塞（qz CLI 仅本机可用）
+      if (/@[^\s@#]/.test(val)) {
+        try {
+          const notify = await window.ideaNote.mentions.notify(val);
+          if (notify && notify.ok && Array.isArray(notify.sent) && notify.sent.length) {
+            const sent = notify.sent.filter((s) => s.ok);
+            const failed = notify.sent.filter((s) => !s.ok);
+            if (sent.length && !failed.length) showToast('已通知 ' + sent.length + ' 位联系人');
+            else if (sent.length && failed.length) showToast('已通知 ' + sent.length + ' 位，' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、') + ' 未送达', 4000);
+            else showToast('@通知未送达：' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、'), 4000);
+          } else if (notify && notify.error) {
+            showToast('想法已发布，但 @通知不可用：' + notify.error, 4000);
+          }
+        } catch (e) {
+          console.warn('[mentions] 通知失败: ' + ((e && e.message) || e));
+        }
+      }
       state.composer.focus();
     } catch (err) {
       handleSyncError(err, '保存失败');
@@ -1306,6 +1947,13 @@
   async function init() {
     bindEvents();
     initUpdaterUi();
+    await refreshMediaIndex(); // 本地图片映射：决定卡片能否显示本机缩略图
+    // 旧版内部接口登录态无法续期到开放平台：提示重新扫码一次
+    try {
+      const legacy = await window.ideaNote.auth.legacyNotice();
+      if (legacy) showToast('登录方式已升级，请重新扫码登录一次', 6000);
+    } catch (e) { /* noop */ }
+
     let user = null;
     try {
       user = await window.ideaNote.auth.get();

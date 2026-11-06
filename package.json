@@ -1,6 +1,6 @@
 {
   "name": "idea-note-local",
-  "version": "1.1.1",
+  "version": "1.2.3",
   "description": "本地版 灵感笔记 —— 极简卡片式记录桌面应用",
   "main": "main.js",
   "scripts": {
@@ -52,7 +52,31 @@
         }
       ],
       "category": "public.app-category.productivity",
-      "identity": null
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": true
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 270,
+          "y": 330,
+          "type": "file",
+          "path": "build/卸载灵感笔记.command",
+          "name": "卸载灵感笔记.command"
+        }
+      ]
     },
     "win": {
       "icon": "build/icon.ico",
@@ -76,7 +100,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "灵感笔记",
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "deleteAppDataOnUninstall": true,
+      "include": "build/uninstall-win.nsh"
     },
     "linux": {
       "icon": "assets/icon-win.png"

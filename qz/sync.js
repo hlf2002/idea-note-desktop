@@ -14,14 +14,22 @@ const path = require('path');
 const { PAGE_SIZE } = require('./config');
 const { extractServerTags, textToContentJson, extractImageUrls, thumbnailUrl, largeImageUrl } = require('./content');
 
-/** 服务端条目 -> 本地 memo 结构 */
+/** 服务端条目 -> 本地 memo 结构
+ * 开放平台列表只返回 image_id 数组（没有图片 URL），因此本地保留 imageIds；
+ * image_url/images 字段仅用于兼容旧缓存与后续平台补齐图片访问规则。
+ */
 function mapServerMemo(item) {
+  const imageIds = Array.isArray(item.images)
+    ? item.images.filter((x) => typeof x === 'string' && x)
+    : [];
+  const legacyUrls = extractImageUrls(item.image_url);
   return {
     id: item.id,
     content: item.plain_text || '',
     tags: Array.isArray(item.tags) ? item.tags : [],
+    imageIds,
     imageUrl: item.image_url || '',
-    images: extractImageUrls(item.image_url).map((url) => ({
+    images: legacyUrls.map((url) => ({
       original: url,
       thumbnail: thumbnailUrl(url),
       large: largeImageUrl(url)
@@ -29,6 +37,11 @@ function mapServerMemo(item) {
     createdAt: (item.create_time || 0) * 1000,
     updatedAt: (item.update_time || item.create_time || 0) * 1000
   };
+}
+
+/** 回收站条目 -> 本地结构：普通 memo 字段 + deletedAt（删除时间，毫秒） */
+function mapTrashMemo(item) {
+  return { ...mapServerMemo(item), deletedAt: (item.delete_time || 0) * 1000 };
 }
 
 class IdeaSync {
@@ -48,7 +61,7 @@ class IdeaSync {
     let page = 1;
     let hasMore = true;
     while (hasMore) {
-      const data = await this.api.getIdeaList({ page, pageSize: PAGE_SIZE });
+      const data = await this.api.listNotes({ page, pageSize: PAGE_SIZE });
       const list = (data && Array.isArray(data.list)) ? data.list : [];
       list.forEach((item) => all.push(mapServerMemo(item)));
       hasMore = !!(data && data.has_more);
@@ -62,38 +75,76 @@ class IdeaSync {
     return all;
   }
 
-  /** 新建：文本 -> 灵感笔记，返回本地 memo 结构 */
-  async createFromText(text, imageUrl = '') {
-    const saved = await this.api.saveIdea({
-      content_json: textToContentJson(text),
-      plain_text: text,
-      tags: extractServerTags(text),
-      image_url: imageUrl
-    });
+  /**
+   * 新建：文本 + 已上传的 image_id 数组 -> 灵感笔记，返回本地 memo 结构
+   * （标签由平台从 content_json 提取；纯图片笔记允许 text 为空）
+   */
+  async createFromText(text, imageIds) {
+    const images = Array.isArray(imageIds)
+      ? imageIds.filter((x) => typeof x === 'string' && x)
+      : [];
+    const content = String(text == null ? '' : text);
+    if (!content.trim() && images.length === 0) {
+      // 服务端要求有效正文，空也无图时直接拒绝，避免产生空笔记
+      const err = new Error('笔记内容不能为空');
+      err.code = -2;
+      throw err;
+    }
+    const payload = { content_json: textToContentJson(content) };
+    if (images.length) payload.images = images;
+    const saved = await this.api.createNote(payload);
     const memo = mapServerMemo(saved);
     this._upsertCache(memo);
     return memo;
   }
 
-  /** 编辑：按服务端 id 更新，返回更新后的 memo */
-  async update(id, text, imageUrl = '') {
-    const saved = await this.api.saveIdea({
+  /**
+   * 编辑：按服务端 id 更新，返回更新后的 memo。
+   * 开放平台 update 必须整组传 images（不传=清空），因此要带上原图片：
+   *  - 显式传入 imageIds 时直接用；
+   *  - 未传时优先取本地缓存；缓存里没有该条则拉一次详情，避免编辑文本把图片清空。
+   */
+  async update(id, text, imageIds) {
+    let images = imageIds;
+    if (!Array.isArray(images)) {
+      const cached = this.loadCache().find((m) => m.id === id);
+      if (cached) {
+        images = Array.isArray(cached.imageIds) ? cached.imageIds : [];
+      } else {
+        const detail = await this.api.getNote(id);
+        images = detail && Array.isArray(detail.images) ? detail.images : [];
+      }
+    }
+    const saved = await this.api.updateNote({
       id,
       content_json: textToContentJson(text),
-      plain_text: text,
-      tags: extractServerTags(text),
-      image_url: imageUrl
+      images
     });
     const memo = mapServerMemo(saved);
     this._upsertCache(memo);
     return memo;
   }
 
-  /** 删除：按服务端 id 删除，并移除缓存 */
+  /** 删除：按服务端 id 删除（平台为软删除），并移除缓存 */
   async remove(id) {
-    await this.api.deleteIdea(id);
+    await this.api.deleteNote(id);
     this._removeFromCache(id);
     return true;
+  }
+
+  /**
+   * 回收站：开放平台首版未提供回收站/恢复接口，这里返回空列表。
+   * 上层据 unsupported 标记提示用户（删除的笔记可在 Q助理 App 内找回）。
+   */
+  async pullTrash() {
+    return { list: [], unsupported: true };
+  }
+
+  /** 恢复：平台无对应接口 */
+  async restore(id) {
+    const err = new Error('当前平台暂未开放笔记恢复接口');
+    err.code = -9;
+    throw err;
   }
 
   /** 读取缓存（不访问网络）；不存在返回 [] */
@@ -138,4 +189,4 @@ class IdeaSync {
   }
 }
 
-module.exports = { IdeaSync, mapServerMemo };
+module.exports = { IdeaSync, mapServerMemo, mapTrashMemo };

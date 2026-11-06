@@ -39,7 +39,7 @@ html, body {
   flex-shrink: 0;
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 40;   /* 高于侧边栏内全部内容（用户按钮 26、遮罩 25、下拉菜单 30），滚动时始终遮住经过的内容 */
   background: var(--bg-side);   /* 底色与侧边栏一致，滚动内容从下方经过时被遮住 */
   -webkit-app-region: drag;     /* 红黄绿交通灯区域，可拖动窗口 */
 }
@@ -238,19 +238,16 @@ html, body {
 .tag-item:hover .tag-count { background: #e3d2af; }
 .tag-item.active .tag-count { background: rgba(255,255,255,.22); color: #fff; }
 
-.tag-bottom {
-  margin-top: 10px; padding-top: 10px;
-  border-top: 1px solid #efe3c9;
+/* 导航选中态互斥 + 回收站计数徽标 */
+.nav-count {
+  margin-left: auto;
+  font-size: 11px; font-weight: 500;
+  line-height: 18px; padding: 0 6px;
+  border-radius: 9999px;
+  background: #ecdfc4; color: #8a7358;
+  font-variant-numeric: tabular-nums;
 }
-.tag-bottom-link {
-  display: flex; align-items: center; gap: 10px;
-  width: 100%; padding: 6px 16px;
-  border: none; border-radius: 6px; background: transparent;
-  font-size: 14px; color: #6b5942; cursor: pointer; text-align: left;
-  transition: background .12s;
-}
-.tag-bottom-link:hover { background: #ecdfc4; }
-.tag-bottom-link i { color: var(--muted); }
+.nav-item.active .nav-count { background: rgba(255,255,255,.22); color: #fff; }
 
 /* 侧边栏底部 */
 .sidebar-footer { padding-top: 8px; }
@@ -322,6 +319,8 @@ html, body {
   position: relative;
   /* 原生滚动条隐藏（不占布局宽度，卡片宽度稳定）；滚动仍可用 */
   scrollbar-width: none;
+  /* 顶部输入区高度变化时，禁用浏览器滚动锚点自动修正，避免视口内容跳动（防抖动） */
+  overflow-anchor: none;
 }
 .feed::-webkit-scrollbar { display: none; }
 /* 自绘 overlay 滚动条：位于滚动容器外，由 JS 定位到内容区右侧，不随内容滚动 */
@@ -346,12 +345,37 @@ html, body {
   display: flex; flex-direction: column; gap: 16px;
 }
 
+/* 回到顶部按钮（第二屏右下角浮动） */
+.feed-top {
+  position: absolute;
+  right: 26px;          /* 避开右侧自绘滚动条（right 3px + 宽 6px） */
+  bottom: 30px;
+  width: 44px; height: 44px;
+  border: none; border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.28);
+  z-index: 19;
+  opacity: 0; visibility: hidden;
+  transform: translateY(10px);
+  transition: opacity .18s ease, transform .18s ease, visibility .18s;
+  -webkit-app-region: no-drag;
+}
+.feed-top.show { opacity: 1; visibility: visible; transform: translateY(0); }
+.feed-top:hover { background: var(--green-hover); }
+.feed-top:active { transform: translateY(0) scale(0.94); }
+
 /* 输入卡片 */
 /* 固定输入区（第二栏顶部，不参与滚动）：背景与主区其他部分保持一致 */
 .composer-zone {
   flex-shrink: 0;
   background: var(--bg-side);
   padding: 24px 20px 16px;
+  /* 滚动联动压缩（collapsed）时平滑过渡高度，配合 JS 的 scrollTop 补偿，页面不抖动 */
+  transition: padding .12s ease;
 }
 .composer-inner { max-width: 720px; margin: 0 auto; }
 
@@ -362,6 +386,7 @@ html, body {
   box-shadow: var(--shadow);
   border: 1px solid var(--card-border);
   padding: 16px;
+  transition: padding .12s ease;
 }
 .composer-toolbar { transition: opacity .15s ease, height .15s ease; }
 .composer {
@@ -373,12 +398,19 @@ html, body {
   min-height: 80px;
   word-break: break-word;
   white-space: pre-wrap;
+  transition: min-height .12s ease;
 }
 /* 第二栏顶部输入框：自动增高，最多 15 行（15 × 行高 1.7em），超出显示滚动条 */
 .composer-zone .composer {
   max-height: calc(15 * 1.7em);
   overflow-y: auto;
 }
+/* 滚动联动压缩态：第二屏离开顶部时输入区整体压扁。
+   空输入框 → 只留一行 + 底部工具栏；非空 → 压缩到内容行数高度 + 底部工具栏。
+   回到顶部时移除 collapsed 恢复原样。 */
+.composer-zone.collapsed { padding: 8px 20px 8px; }
+.composer-zone.collapsed .composer-card { padding: 8px 14px; }
+.composer-zone.collapsed .composer { min-height: 0; }
 .composer:empty::before {
   content: attr(data-placeholder);
   color: #a08a70;
@@ -432,6 +464,12 @@ html, body {
 .tag-suggest-item .tag-hash { color: var(--green); flex-shrink: 0; }
 .tag-suggest-item.active { background: #f3e6cf; }
 .tag-suggest-item:hover { background: #f7eeda; }
+/* @联系人联想：与标签联想同浮层样式，@ 前缀与备注区分色 */
+.at-suggest .at-sign { color: var(--blue, #4a90d9); flex-shrink: 0; }
+.at-suggest .at-agent { margin-left: 6px; font-size: 11px; line-height: 1.4; color: #6b8fbd; background: #eef3fa; border-radius: 4px; padding: 1px 6px; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.at-suggest .at-agent i { font-size: 10px; }
+.at-suggest .at-remark { margin-left: 8px; font-size: 12px; color: #a08a70; }
+.at-suggest .at-relation { margin-left: auto; font-size: 11px; color: #b8a488; background: #f5ecd9; border-radius: 4px; padding: 1px 6px; flex-shrink: 0; }
 .tag-suggest-empty {
   padding: 10px;
   font-size: 12.5px;
@@ -558,8 +596,10 @@ html, body {
 .memo-menu button.danger { color: var(--red); }
 .memo-menu button.danger:hover { background: var(--red-soft); }
 
-.memo-content { color: #5d4430; font-size: 15px; line-height: 1.7; white-space: pre-wrap; }
-.memo-content p { margin: 0 0 6px; }
+/* 注意：pre-wrap 只放在段落/引用上，不能放容器——md.js 渲染输出在块级元素间插入 \n，
+   容器级 pre-wrap 会把块间换行渲染成空白行，导致卡片内容块之间出现大空隙 */
+.memo-content { color: #5d4430; font-size: 15px; line-height: 1.7; }
+.memo-content p { margin: 0 0 6px; white-space: pre-wrap; }
 .memo-content p:last-child { margin-bottom: 0; }
 .memo-content a { color: var(--green); text-decoration: none; }
 .memo-content a:hover { text-decoration: underline; }
@@ -731,8 +771,8 @@ html, body {
   to { opacity: 1; transform: none; }
 }
 .roam-date { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
-.roam-content { font-size: 19px; line-height: 1.85; color: #5d4430; white-space: pre-wrap; }
-.roam-content p { margin: 0 0 10px; }
+.roam-content { font-size: 19px; line-height: 1.85; color: #5d4430; }
+.roam-content p { margin: 0 0 10px; white-space: pre-wrap; }
 .roam-content a { color: var(--green); }
 .roam-content code { background: #efe3c9; padding: 1px 5px; border-radius: 5px; font-size: 15px; }
 .roam-content pre { background: #efe3c9; border-radius: 10px; padding: 10px; margin: 8px 0; font-size: 14px; }
@@ -835,6 +875,14 @@ html, body {
 }
 .update-close:hover { background: #efe3c9; color: #5d4430; }
 
+/* 侧边栏「检查更新」链接：下载进度后的关闭按钮 */
+.check-update-x {
+  margin-left: 7px; cursor: pointer; font-size: 13px; line-height: 1;
+  color: var(--muted); border-radius: 50%; padding: 1px 5px;
+  transition: color .12s, background .12s;
+}
+.check-update-x:hover { background: #efe3c9; color: #5d4430; }
+
 /* 轻提示 */
 .toast {
   position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
@@ -870,3 +918,53 @@ html, body {
   opacity: 1;
   transform: translateY(0);
 }
+
+/* ===== 图片附件（输入区 / 编辑区 / 卡片占位） ===== */
+/* 输入区与编辑卡片共用：选图后先出「上传中」占位，成功后换成缩略图 */
+.composer-attachments {
+  margin-top: 10px;
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.attach-item {
+  position: relative;
+  width: 82px; height: 82px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #efe3c9;
+  border: 1px solid #e2d3b6;
+  flex: 0 0 auto;
+}
+.attach-item.error { border-color: #d9534f; background: #fbeceb; }
+.attach-thumb {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+  cursor: zoom-in;
+}
+.attach-loading,
+.attach-error {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: #a08a70; font-size: 12px;
+}
+.attach-error { color: #c0392b; }
+.attach-remove {
+  position: absolute; top: 2px; right: 2px;
+  width: 18px; height: 18px; border-radius: 50%;
+  border: none; padding: 0; cursor: pointer;
+  background: rgba(0,0,0,.55); color: #fff;
+  font-size: 10px; line-height: 18px; text-align: center;
+  display: flex; align-items: center; justify-content: center;
+}
+.attach-remove:hover { background: rgba(0,0,0,.8); }
+
+/* 服务端有图但本机无副本（其他设备上传）：降级为占位徽标，不显示破图 */
+.memo-image-missing {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #efe3c9;
+  color: #8a7358;
+  font-size: 12px;
+  cursor: default;
+}
+.memo-image-missing i { font-size: 12px; }

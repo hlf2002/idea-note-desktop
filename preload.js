@@ -9,22 +9,44 @@ contextBridge.exposeInMainWorld('ideaNote', {
   // 登录态
   auth: {
     get: () => ipcRenderer.invoke('auth:get'),
-    logout: () => ipcRenderer.invoke('auth:logout')
-  },
-  // 扫码登录
-  qr: {
-    create: () => ipcRenderer.invoke('qr:create'),
-    status: (sceneId) => ipcRenderer.invoke('qr:status', sceneId)
+    logout: () => ipcRenderer.invoke('auth:logout'),
+    // 打开授权窗口并开始轮询（结果由主进程通过 onEvent 推送）
+    start: () => ipcRenderer.invoke('auth:start'),
+    cancel: () => ipcRenderer.invoke('auth:cancel'),
+    probe: () => ipcRenderer.invoke('auth:probe'),
+    // 旧版内部接口登录态无法迁移时的提示（只返回一次 true）
+    legacyNotice: () => ipcRenderer.invoke('auth:legacyNotice'),
+    // 订阅登录事件：{ type: 'success'|'error'|'expired', message? }
+    onEvent: (cb) => {
+      ipcRenderer.on('auth:event', (_e, payload) => cb(payload));
+    }
   },
   // 灵感笔记同步
   sync: {
     pull: () => ipcRenderer.invoke('sync:pull'),
-    create: (text) => ipcRenderer.invoke('sync:create', text),
-    update: (id, text) => ipcRenderer.invoke('sync:update', id, text),
+    create: (text, imageIds) => ipcRenderer.invoke('sync:create', text, imageIds),
+    update: (id, text, imageIds) => ipcRenderer.invoke('sync:update', id, text, imageIds),
     remove: (id) => ipcRenderer.invoke('sync:delete', id),
+    trash: () => ipcRenderer.invoke('sync:trash'),
+    restore: (id) => ipcRenderer.invoke('sync:restore', id),
     cache: () => ipcRenderer.invoke('sync:cache'),
     importLegacy: () => ipcRenderer.invoke('sync:importLegacy'),
     hasLegacy: () => ipcRenderer.invoke('sync:hasLegacy')
+  },
+  // 图片：选图 → 上传 → 本地映射（平台只给 image_id，本机展示靠本地缓存）
+  media: {
+    choose: () => ipcRenderer.invoke('dialog:openImages'),
+    upload: (filePath) => ipcRenderer.invoke('media:upload', filePath),
+    index: () => ipcRenderer.invoke('media:index')
+  },
+  // 桌面小组件：推送某条笔记内容到桌面小组件
+  widget: {
+    push: (memo) => ipcRenderer.invoke('widget:push', memo)
+  },
+  // @ 提及通知：本机 qz CLI 联系人 + 发布后通知
+  mentions: {
+    contacts: () => ipcRenderer.invoke('mentions:contacts'),
+    notify: (text) => ipcRenderer.invoke('mentions:notify', text)
   },
   // 应用
   app: {

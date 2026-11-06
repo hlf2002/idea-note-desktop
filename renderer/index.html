@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://client.qzhuli.com https://test.client.qzhuli.com;" />
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https: idenote-media:; font-src 'self'; connect-src 'self' https://client.qzhuli.com https://test.client.qzhuli.com;" />
   <title>灵感笔记 · Q助理</title>
   <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css" />
   <link rel="stylesheet" href="styles.css" />
@@ -16,19 +16,19 @@
         <span class="brand-dot"></span>
         <span class="brand-name">灵感笔记</span>
       </div>
-      <h1 class="login-title">使用 Q助理 App 扫码登录</h1>
-      <p class="login-sub">连接你的灵感笔记，记录自动同步到手机</p>
+      <h1 class="login-title">使用 Q助理 扫码登录</h1>
+      <p class="login-sub">登录后灵感笔记自动同步到手机，账号长期保持登录</p>
       <div class="qr-box">
-        <img id="qr-image" class="qr-image" alt="登录二维码" />
-        <div id="qr-loading" class="qr-loading">正在生成二维码…</div>
+        <img id="qr-image" class="qr-image" alt="登录二维码" style="display:none" />
+        <div id="qr-loading" class="qr-loading">点击下方按钮，用 Q助理 App 扫码授权</div>
       </div>
-      <div id="qr-status" class="qr-status">等待扫码…</div>
+      <div id="qr-status" class="qr-status"></div>
       <div id="qr-expire" class="qr-expire"></div>
-      <button id="qr-refresh" class="qr-refresh">刷新二维码</button>
+      <button id="qr-refresh" class="qr-refresh">打开扫码授权</button>
       <ol class="login-steps">
-        <li>打开 <b>Q助理</b> App</li>
-        <li>点击右上角「扫一扫」</li>
-        <li>扫描二维码并确认登录</li>
+        <li>点击「打开扫码授权」</li>
+        <li>在弹出窗口用 <b>Q助理</b> App 扫一扫</li>
+        <li>手机上确认后自动完成登录</li>
       </ol>
     </div>
   </div>
@@ -83,20 +83,24 @@
         <button id="nav-daily" class="nav-item">
           <i class="fa-solid fa-rotate-left nav-ico"></i><span>每日回顾</span>
         </button>
+        <button id="btn-trash" class="nav-item" data-tip="回收站">
+          <i class="fa-regular fa-trash-can nav-ico"></i><span>回收站</span>
+          <span id="trash-count" class="nav-count">0</span>
+        </button>
       </nav>
 
       <!-- 全部标签 -->
       <div class="tag-section">
         <div class="tag-title">全部标签</div>
         <ul id="tag-list" class="tag-list"></ul>
-        <div class="tag-bottom">
-          <button id="btn-trash" class="tag-bottom-link"><i class="fa-regular fa-trash-can"></i><span>回收站</span></button>
-        </div>
       </div>
 
       <div class="sidebar-footer">
         <button id="open-data-path" class="footer-link" title="打开数据目录">数据文件 · 打开目录</button>
-        <button id="check-update" class="footer-link" title="检查更新">检查更新</button>
+        <button id="check-update" class="footer-link" title="检查更新">
+          <span id="check-update-label">检查更新</span>
+          <span id="check-update-x" class="check-update-x hidden" title="关闭下载进度提示">×</span>
+        </button>
         <span id="footer-version" class="footer-version"></span>
         <a id="open-website" class="footer-link" href="https://ideanote.7373.com.cn/" target="_blank" data-tip="灵感笔记官网">笔记数据存在Q助理，AI可调用</a>
       </div>
@@ -105,7 +109,7 @@
     <main class="main">
       <header class="main-header">
         <div class="app-title-row">
-          <h1 class="app-title">灵感笔记</h1>
+          <h1 class="app-title" id="app-title">灵感笔记</h1>
           <i class="fa-solid fa-chevron-down title-chevron"></i>
         </div>
         <div class="header-right">
@@ -124,6 +128,7 @@
           <div class="composer-card">
             <div class="composer" id="composer" contenteditable="true" spellcheck="false"
                  data-placeholder="现在的想法是…"></div>
+            <div class="composer-attachments hidden" id="composer-images"></div>
             <div class="composer-toolbar">
               <div class="toolbar-left">
                 <button id="tb-tag" class="tool-btn" data-tip="标签"><i class="fa-solid fa-hashtag"></i></button>
@@ -159,6 +164,9 @@
 
       <!-- 自绘滚动条：放在滚动容器外（main 直接子级），不随内容滚动 -->
       <div class="feed-scrollbar" id="feed-scrollbar"><div class="feed-scrollbar-thumb"></div></div>
+
+      <!-- 回到顶部按钮：第二屏右下角浮动，向下滚动后出现，点击平滑回顶 -->
+      <button id="feed-top" class="feed-top" data-tip="回到顶部"><i class="fa-solid fa-arrow-up"></i></button>
     </main>
   </div>
 
@@ -193,6 +201,7 @@
 
   <script src="tags.js"></script>
   <script src="tagsuggest.js"></script>
+  <script src="atsuggest.js"></script>
   <script src="md.js"></script>
   <script src="editor.js"></script>
   <script src="app.js"></script>

@@ -1,5 +1,12 @@
 /**
  * qz/auth.js —— 登录态持久化（userData/auth.json，原子写入）
+ *
+ * 开放平台登录态字段：
+ *   q_uid / nickname / avatar / access_token / refresh_token
+ *   expires_at（access_token 过期，毫秒）/ refresh_expires_at（毫秒）/ authorized_at
+ *
+ * 旧版（内部接口）登录态只有 uid/token/tk，没有 access_token，无法迁移到开放平台，
+ * load() 会把它标记为 legacy，由 app-core 提示用户重新扫码一次。
  */
 'use strict';
 
@@ -15,23 +22,43 @@ class AuthStore {
     this.auth = null;
   }
 
+  /**
+   * 读取登录态。
+   * @returns {object|null} 有效登录态；旧版登录态返回 { legacy: true, ... } 供上层提示
+   */
   load() {
+    let data;
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8');
-      const data = JSON.parse(raw);
-      if (data && data.uid && data.token) {
-        this.auth = data;
-      } else {
-        this.auth = null;
-      }
+      data = JSON.parse(raw);
     } catch (err) {
       if (err.code !== 'ENOENT') {
-        // 损坏的认证文件：忽略并重建，不影响使用
+        // 损坏的认证文件：备份后忽略，不影响使用
         try { fs.renameSync(this.filePath, this.filePath + '.corrupt-' + Date.now()); } catch (e) { /* noop */ }
       }
       this.auth = null;
+      return null;
     }
-    return this.auth;
+
+    if (!data || typeof data !== 'object') {
+      this.auth = null;
+      return null;
+    }
+
+    // 开放平台登录态
+    if (data.q_uid && data.access_token) {
+      this.auth = data;
+      return data;
+    }
+
+    // 旧版内部接口登录态（uid + token）：无法续期到开放平台，需重新授权一次
+    if (data.uid && data.token) {
+      this.auth = null;
+      return { legacy: true, nickname: data.nickname || '', uid: data.uid };
+    }
+
+    this.auth = null;
+    return null;
   }
 
   /** 保存登录态并返回 */

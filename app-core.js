@@ -1,34 +1,58 @@
 /**
- * app-core.js —— 应用核心装配
- *  - AuthStore / QzApi / IdeaSync 实例化
- *  - 注册全部 IPC（登录态、扫码、灵感笔记同步）
+ * app-core.js —— 应用核心装配（Q助理开放平台版）
+ *
+ *  - AuthStore / QzOpenApi / IdeaSync 实例化
+ *  - 注册全部 IPC（登录态、扫码授权、灵感笔记同步、图片上传）
  * 供 main.js（真实运行）与 smoke-test.js（集成测试）复用
+ *
+ * 登录链路：
+ *   auth:start → 中转服务 /oauth/start 拿 state + 授权地址 → 内嵌窗口打开授权页
+ *              → 用户用 Q助理 App 扫码确认 → 平台回调中转服务 → 主进程轮询 /oauth/poll
+ *              → 拿到 access_token / refresh_token → 落盘 → 通知渲染层
+ * 永续登录：refresh_token 90 天滚动，运行期每 30 分钟检查，快过期就换新并立即落盘。
  */
 'use strict';
 
-const { ipcMain, shell, dialog } = require('electron');
+const { ipcMain, shell, dialog, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
-const QRCode = require('qrcode');
+const { pathToFileURL } = require('url');
 const { AuthStore } = require('./qz/auth');
-const { QzApi } = require('./qz/api');
+const { QzOpenApi } = require('./qz/openapi');
 const { IdeaSync } = require('./qz/sync');
-const { API_CLIENT_TYPE_PC } = require('./qz/config');
+const { MediaStore, validateImage } = require('./qz/media');
+const { QzCli } = require('./qz/cli');
+const {
+  RELAY_BASE_URL,
+  QZ_APP_KEY,
+  RELAY_CLIENT_PIN,
+  LOGIN_POLL_INTERVAL_MS,
+  LOGIN_POLL_TIMEOUT_MS,
+  IMAGE_MAX_COUNT
+} = require('./qz/config');
 
-function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
+/** 已知数据目录名：flomo-local → idea-note-local → 灵感笔记（应用改名/打包导致 userData 路径变化） */
+const KNOWN_DIR_NAMES = ['flomo-local', 'idea-note-local', '灵感笔记'];
+
+function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliOverride }) {
   const authStore = new AuthStore(authFile);
-  const auth = authStore.load();
+  const loaded = authStore.load();
+  let legacyNotice = false;
 
-  const api = apiOverride || new QzApi();
-  if (auth) api.setAuth(auth);
+  if (loaded && loaded.legacy) {
+    // 旧版内部接口登录态无法续期到开放平台：备份后要求重新扫码一次
+    legacyNotice = true;
+    try { fs.renameSync(authFile, authFile + '.legacy-' + Date.now()); } catch (e) { /* noop */ }
+  }
 
-  const sync = new IdeaSync({ api, cacheFile });
+  /** 登录态落盘 + 镜像到其它已知数据目录（保证任何入口打开都不用重新登录） */
+  function persistAuth(auth) {
+    const saved = authStore.save(auth);
+    mirrorAuthFile(authFile);
+    return saved;
+  }
 
-  // 已知数据目录名：flomo-local → idea-note-local → 灵感笔记（应用改名/打包导致 userData 路径变化）
-  const KNOWN_DIR_NAMES = ['flomo-local', 'idea-note-local', '灵感笔记'];
-
-  /** 登录成功后把 auth.json 镜像到所有已知数据目录，保证任何入口打开都不需要重新登录 */
+  /** 把 auth.json 镜像到所有已知数据目录 */
   function mirrorAuthFile(authFilePath) {
     const base = path.dirname(authFilePath);
     // 仅当当前数据目录是已知目录名时才镜像（临时测试目录等不处理）
@@ -47,17 +71,47 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     }
   }
 
+  const api = apiOverride || new QzOpenApi({
+    relayUrl: RELAY_BASE_URL,
+    appKey: QZ_APP_KEY,
+    clientPin: RELAY_CLIENT_PIN,
+    // token 轮换必须立即落盘：否则旧 refresh_token 已失效，会导致掉登录
+    onTokens: (auth) => persistAuth(auth)
+  });
+  if (loaded && !loaded.legacy && loaded.access_token) api.setAuth(loaded);
+
+  const sync = new IdeaSync({ api, cacheFile });
+  // 本地图片缓存：平台只给 image_id，不给 URL，本机展示靠这份副本
+  const baseDir = dataDir || path.dirname(cacheFile);
+  const mediaStore = new MediaStore({
+    dir: path.join(baseDir, 'media'),
+    indexFile: path.join(baseDir, 'media-index.json')
+  });
+  // 本机 qz CLI（@ 提及通知用；spawn 子进程，不可用时不阻塞发布）
+  const cli = qzCliOverride || new QzCli();
+
   // ---------- 登录态 ----------
   ipcMain.handle('auth:get', () => {
-    // 不把 token 完整回传（避免渲染层冗余）；返回展示信息 + 是否已登录
+    // 不把 token 回传渲染层；只返回展示信息
     const a = authStore.auth;
     if (!a) return null;
-    return { uid: a.uid, nickname: a.nickname, avatar: a.avatar, cid: a.cid, id: a.id };
+    return {
+      q_uid: a.q_uid,
+      nickname: a.nickname,
+      avatar: a.avatar,
+      authorized_at: a.authorized_at
+    };
   });
-  ipcMain.handle('auth:logout', () => {
+  ipcMain.handle('auth:legacyNotice', () => {
+    const v = legacyNotice;
+    legacyNotice = false; // 只提示一次
+    return v;
+  });
+  ipcMain.handle('auth:logout', async () => {
+    cancelLogin();
     authStore.clear();
     api.setAuth(null);
-    api.stopH5KeepAlive && api.stopH5KeepAlive();
+    if (api.stopKeepAlive) api.stopKeepAlive();
     return true;
   });
   // 鉴权探测：判断当前持久化登录态是否还能通过服务端校验（不破坏登录态）
@@ -70,10 +124,8 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
   // Electron IPC 序列化错误时只保留 message（自定义 code 属性会丢失），
   // 因此鉴权类错误统一用 [AUTH] 前缀标记，渲染层据此识别而不会误判/强制登出。
   function toRendererError(err) {
-    if (err && err.code === 401) {
-      const e = new Error('[AUTH] ' + (err.message || '登录状态异常'));
-      e.code = undefined;
-      return e;
+    if (err && (err.code === 401 || err.authExpired)) {
+      return new Error('[AUTH] ' + (err.message || '登录状态异常'));
     }
     return err;
   }
@@ -85,39 +137,89 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     }
   }
 
-  // ---------- 扫码登录 ----------
-  ipcMain.handle('qr:create', async () => {
-    const data = await api.qrLoginCreate(API_CLIENT_TYPE_PC);
-    // 关键：二维码内容必须是登录创建响应的完整 JSON（Q助理 app 扫一扫解析 JSON 提取 scene_id）
-    // 参考 q-flow 实现：qr_str = JSON.stringify(data)，而非纯 scene_id
-    const qrContent = JSON.stringify(data);
-    const qrDataUrl = await QRCode.toDataURL(qrContent, { width: 240, margin: 1 });
-    console.log('[qr] 会话创建 scene_id=' + data.scene_id + ' expires=' + data.expires_in + ' 二维码内容=' + qrContent);
-    return { sceneId: data.scene_id, qrDataUrl, expiresIn: data.expires_in, qrContent };
-  });
-  ipcMain.handle('qr:status', async (_e, sceneId) => {
-    const data = await api.qrLoginStatus(sceneId);
-    console.log('[qr] 轮询 scene_id=' + sceneId + ' -> status=' + (data && data.status));
-    if (data && data.status === 'confirmed' && data.login_data) {
-      // 仅一次：直接持久化登录态
-      const login = data.login_data;
-      console.log('[qr] 登录确认 uid=' + login.uid + ' nickname=' + (login.nickname || ''));
-      const saved = authStore.save({
-        id: login.id,
-        uid: login.uid,
-        cid: login.cid,
-        nickname: login.nickname || '',
-        realName: login.real_name || '',
-        avatar: login.avatar || '',
-        token: login.token,
-        tk: login.tk || ''
-      });
-      api.setAuth(saved);
-      // 登录成功后把登录态镜像到其它已知数据目录，避免换应用入口（打包版/开发版）后要求重新登录
-      mirrorAuthFile(authFile);
-    }
-    return data;
-  });
+  // ---------- 扫码授权（内嵌窗口 + 主进程轮询） ----------
+  let loginSession = null;
+  let authWin = null;
+
+  function notifyAuthEvent(getWindow, payload) {
+    const win = getWindow && getWindow();
+    if (win && !win.isDestroyed()) win.webContents.send('auth:event', payload);
+  }
+
+  function cancelLogin() {
+    if (loginSession && loginSession.timer) clearInterval(loginSession.timer);
+    loginSession = null;
+    if (authWin && !authWin.isDestroyed()) authWin.destroy();
+    authWin = null;
+  }
+
+  /** 开始登录：拿 state + 授权地址 → 打开内嵌授权窗口 → 轮询结果 */
+  async function startLogin(getWindow) {
+    cancelLogin();
+    const { state, authorizeUrl } = await api.startLogin();
+
+    const parent = getWindow ? getWindow() : undefined;
+    authWin = new BrowserWindow({
+      width: 430,
+      height: 640,
+      title: '使用 Q助理 扫码登录',
+      autoHideMenuBar: true,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      show: false,
+      parent: parent || undefined,
+      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true }
+    });
+    authWin.once('ready-to-show', () => { if (authWin) authWin.show(); });
+    authWin.loadURL(authorizeUrl);
+
+    const session = { state, timer: null, startedAt: Date.now() };
+    loginSession = session;
+
+    session.timer = setInterval(async () => {
+      if (!loginSession || loginSession.state !== state) return;
+      if (Date.now() - session.startedAt > LOGIN_POLL_TIMEOUT_MS) {
+        cancelLogin();
+        notifyAuthEvent(getWindow, { type: 'expired', message: '授权超时，请重新发起登录' });
+        return;
+      }
+      try {
+        const res = await api.pollLogin(state);
+        if (!loginSession || loginSession.state !== state) return;
+        if (res.status === 'pending') return;
+        if (res.status === 'ok') {
+          const savedAuth = await api.acceptLoginResult(res);
+          // onTokens 已在真实 api 里落盘；这里用返回值再兜一次，保证注入 mock api 时同样持久化
+          if (savedAuth) persistAuth(savedAuth);
+          else if (api.auth) persistAuth(api.auth);
+          cancelLogin();
+          notifyAuthEvent(getWindow, { type: 'success' });
+        } else if (res.status === 'error') {
+          cancelLogin();
+          notifyAuthEvent(getWindow, {
+            type: 'error',
+            message: res.error === 'access_denied' ? '你已取消授权' : '授权失败，请重试'
+          });
+        } else {
+          cancelLogin();
+          notifyAuthEvent(getWindow, { type: 'expired', message: '授权会话已过期，请重新发起登录' });
+        }
+      } catch (err) {
+        // 单次轮询失败不致命（网络抖动），继续等下一次
+        console.warn('[auth] 轮询失败: ' + (err && err.message));
+      }
+    }, LOGIN_POLL_INTERVAL_MS);
+    if (session.timer.unref) session.timer.unref();
+
+    return { state };
+  }
+
+  /** 注册登录相关 IPC（需要主窗口句柄） */
+  function registerAuthIpc(getWindow) {
+    ipcMain.handle('auth:start', () => guard(() => startLogin(getWindow)));
+    ipcMain.handle('auth:cancel', () => { cancelLogin(); return true; });
+  }
 
   // ---------- 灵感笔记同步（需登录） ----------
   function requireAuth() {
@@ -128,15 +230,16 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     }
   }
   ipcMain.handle('sync:pull', () => guard(() => { requireAuth(); return sync.pullAll(); }));
-  ipcMain.handle('sync:create', (_e, text) => guard(() => { requireAuth(); return sync.createFromText(text); }));
-  ipcMain.handle('sync:update', (_e, id, text) => guard(() => { requireAuth(); return sync.update(id, text); }));
+  ipcMain.handle('sync:create', (_e, text, imageIds) => guard(() => { requireAuth(); return sync.createFromText(text, imageIds); }));
+  ipcMain.handle('sync:update', (_e, id, text, imageIds) => guard(() => { requireAuth(); return sync.update(id, text, imageIds); }));
   ipcMain.handle('sync:delete', (_e, id) => guard(() => { requireAuth(); return sync.remove(id); }));
+  ipcMain.handle('sync:trash', () => guard(() => { requireAuth(); return sync.pullTrash(); }));
+  ipcMain.handle('sync:restore', (_e, id) => guard(() => { requireAuth(); return sync.restore(id); }));
   ipcMain.handle('sync:cache', () => sync.loadCache());
 
   // 旧本地数据一次性导入（登录后可用）
   ipcMain.handle('sync:importLegacy', () => guard(async () => {
     requireAuth();
-    const fs = require('fs');
     if (!legacyFile || !fs.existsSync(legacyFile)) return { imported: 0, skipped: true };
     const raw = JSON.parse(fs.readFileSync(legacyFile, 'utf8'));
     const memos = Array.isArray(raw) ? raw : [];
@@ -153,7 +256,6 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     return { imported };
   }));
   ipcMain.handle('sync:hasLegacy', () => {
-    const fs = require('fs');
     if (!legacyFile || !fs.existsSync(legacyFile)) return false;
     try {
       const memos = JSON.parse(fs.readFileSync(legacyFile, 'utf8'));
@@ -163,59 +265,115 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride }) {
     }
   });
 
-  // ---------- 七牛图片上传 ----------
-  ipcMain.handle('dialog:openImage', async () => {
+  // ---------- 图片上传（申请凭证 → 客户端直传七牛 → 拿 image_id） ----------
+  // 多选：返回文件绝对路径数组；用户取消返回空数组
+  ipcMain.handle('dialog:openImages', async () => {
     const result = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'] }]
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'webp'] }]
     });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    return result.filePaths[0];
+    if (result.canceled || !Array.isArray(result.filePaths)) return [];
+    return result.filePaths.slice(0, IMAGE_MAX_COUNT);
   });
 
-  ipcMain.handle('qiniu:upload', (_e, filePath) => guard(async () => {
+  // 单张上传：校验 → 申请凭证 → 直传七牛 → 本地缓存原图（供本机展示）
+  ipcMain.handle('media:upload', (_e, filePath) => guard(async () => {
     requireAuth();
-    if (!filePath || !fs.existsSync(filePath)) {
-      throw new Error('文件不存在');
+    if (!filePath || typeof filePath !== 'string' || !fs.existsSync(filePath)) {
+      throw new Error('图片文件不存在或已被移动');
     }
-    // 1. 获取七牛上传凭证
-    const cred = await api.getQiniuUploadToken();
-    if (!cred || !cred.token) throw new Error('获取七牛上传凭证失败');
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) throw new Error('请选择图片文件');
+    const { mime, ext } = validateImage(filePath, stat.size);
 
-    // 2. 生成 key：idea_note/YYYY_MM_DD/random20.ext
-    const ext = (path.extname(filePath) || '.jpg').toLowerCase();
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, '0')}_${String(now.getDate()).padStart(2, '0')}`;
-    const random = crypto.randomBytes(10).toString('hex');
-    const key = `idea_note/${dateStr}/${random}${ext}`;
+    // 1. 申请上传凭证（返回 image_id，是后续写入笔记的唯一凭据）
+    const ticket = await api.requestUpload({ mime_type: mime, size: stat.size });
+    if (!ticket || !ticket.upload_url || !ticket.token || !ticket.image_id) {
+      throw new Error('获取图片上传凭证失败');
+    }
 
-    // 3. 表单上传到七牛（华东 bucket qzhuli）
+    // 2. 直传七牛（不要传 key，也不要手动设置 Content-Type）
     const form = new FormData();
-    form.append('token', cred.token);
-    form.append('key', key);
-    const fileBuffer = fs.readFileSync(filePath);
-    form.append('file', new Blob([fileBuffer]), path.basename(filePath));
-
-    const res = await fetch('https://upload.qiniup.com', { method: 'POST', body: form });
+    form.append('token', ticket.token);
+    form.append('file', new Blob([fs.readFileSync(filePath)]), path.basename(filePath));
+    let res;
+    try {
+      res = await fetch(ticket.upload_url, { method: 'POST', body: form });
+    } catch (err) {
+      throw new Error('图片上传网络失败，请检查网络后重试');
+    }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data || !data.key) {
-      throw new Error('七牛上传失败: ' + (data && data.error ? data.error : JSON.stringify(data)));
+    if (!res.ok || !data || data.image_id !== ticket.image_id) {
+      throw new Error('图片上传失败' + (data && data.error ? ': ' + data.error : ''));
     }
 
-    const domain = cred.domain.endsWith('/') ? cred.domain : cred.domain + '/';
-    return { url: domain + data.key, key: data.key, domain: cred.domain };
+    // 3. 本机留一份原图：平台不返回图片 URL，桌面端要靠这份副本展示
+    let fileName = '';
+    let url = '';
+    try {
+      fileName = mediaStore.save(ticket.image_id, filePath, ext);
+      const saved = mediaStore.filePath(fileName);
+      if (saved) url = pathToFileURL(saved).toString();
+    } catch (err) {
+      // 缓存失败不影响笔记写入（服务端已收到图片），只是本机看不到缩略图
+      console.warn('[media] 本地缓存失败: ' + ((err && err.message) || err));
+    }
+    return { imageId: ticket.image_id, fileName, url };
   }));
+
+  // 本地图片映射：image_id -> file:// 绝对地址（渲染层直接给 <img src>）
+  // 平台不返回图片 URL，本机副本是唯一可展示来源；文件被清理时 img 会 onerror 降级为占位
+  ipcMain.handle('media:index', () => {
+    const map = mediaStore.map();
+    const out = {};
+    for (const id of Object.keys(map)) {
+      const p = mediaStore.filePath(map[id]);
+      if (p) out[id] = pathToFileURL(p).toString();
+    }
+    return out;
+  });
 
   // ---------- 其它 ----------
   ipcMain.handle('app:getDataPath', () => path.join(dataDir, 'idea-cache.json'));
   ipcMain.handle('app:openDataPath', () => shell.openPath(dataDir));
 
-  // 后台保鲜：应用运行期间每 12h 主动刷新一次 Vue H5 token，保持同步随时可用
-  if (typeof api.startH5KeepAlive === 'function') {
-    api.startH5KeepAlive();
+  // 桌面小组件：把某条笔记推送到桌面小组件（写入 widget.json，原生宿主 App 监听后刷新 WidgetKit）
+  ipcMain.handle('widget:push', (_e, memo) => {
+    const widgetFile = path.join(dataDir, 'widget.json');
+    const payload = {
+      updatedAt: Date.now(),
+      memo: {
+        id: String((memo && memo.id) || ''),
+        content: String((memo && memo.content) || ''),
+        createdAt: String((memo && memo.createdAt) || ''),
+        tags: Array.isArray(memo && memo.tags) ? memo.tags.map(String) : []
+      }
+    };
+    fs.writeFileSync(widgetFile, JSON.stringify(payload, null, 2), 'utf-8');
+    return { ok: true, path: widgetFile };
+  });
+
+  // ---------- @ 提及通知（本机 qz CLI；不可用/失败不阻塞发布） ----------
+  // 联系人列表：@ 联想下拉的数据源（qz friend list）
+  ipcMain.handle('mentions:contacts', () => guard(async () => {
+    const av = await cli.isAvailable();
+    if (!av.ok) return { ok: false, error: av.message || 'qz CLI 不可用' };
+    return { ok: true, contacts: await cli.listContacts() };
+  }));
+  // 发布后通知 @ 的联系人：解析正文 @昵称 → 匹配联系人 → 逐人发私信
+  ipcMain.handle('mentions:notify', (_e, text) => guard(async () => {
+    const sender = (authStore.auth && authStore.auth.nickname) || '';
+    return cli.notifyMentions(text, sender);
+  }));
+
+  // 后台保鲜：每 30 分钟检查，access_token 快过期或 refresh_token 需滚动时自动续期
+  if (typeof api.startKeepAlive === 'function') api.startKeepAlive();
+  // 启动即尝试续期一次（失败不影响使用，界面按缓存展示，绝不因此登出）
+  if (api.isAuthed && typeof api.ensureFresh === 'function') {
+    api.ensureFresh().catch((err) => console.warn('[auth] 启动续期失败: ' + (err && err.message)));
   }
 
-  return { authStore, api, sync };
+  return { authStore, api, sync, registerAuthIpc, cancelLogin };
 }
 
 module.exports = { initApp };
