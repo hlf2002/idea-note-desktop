@@ -128,7 +128,9 @@ class QzCli {
     return { ok: false, reason: r.code || 'auth_failed', message: r.message || 'qz CLI 未登录' };
   }
 
-  /** 联系人列表（qz friend list），按最后沟通时间倒序（越新越靠前）；读不到时间则保持原顺序 */
+  /** 联系人列表（qz friend list），按最后沟通时间倒序（越新越靠前）；读不到时间则保持原顺序。
+   * 每个联系人附带 agentTitle：我与该联系人最近一次会话归属的数字员工名（我的哪个助理与他有对话，
+   * 例如「李青蓝」）；无会话/读不到缓存时为空串。 */
   async listContacts() {
     const r = await this.run(['friend', 'list', '--jq', '.data.links']);
     if (r.status !== 'success' || !Array.isArray(r.data)) return [];
@@ -139,11 +141,14 @@ class QzCli {
         nickname: l.nickname || '',
         remark: l.friend_name || '',
         linkType: l.link_type,
-        avatar: l.avatar || ''
+        avatar: l.avatar || '',
+        agentTitle: ''
       }));
     const lastActiveByUid = await this._lastActiveByUid();
-    if (lastActiveByUid) return sortContactsByLastActive(contacts, lastActiveByUid);
-    return contacts;
+    const agentByUid = await this._agentTitleByUid();
+    const withAgent = attachAgentTitles(contacts, agentByUid);
+    if (lastActiveByUid) return sortContactsByLastActive(withAgent, lastActiveByUid);
+    return withAgent;
   }
 
   /**
@@ -208,6 +213,77 @@ class QzCli {
     return '';
   }
 
+  /**
+   * 每个联系人最近一次会话归属的「我方助理名」（我的哪个数字员工与他有对话）。
+   * 链路与 _lastActiveByUid 相同：必要时 cache sync → 直读 cache-<ownerUid>.db 的
+   * messages_cache / conversation_profiles → 对每个会话取 owner 侧 agent.title，
+   * 归到会话对端 uid，每个 uid 保留最新消息会话的 agent。
+   * 任何一步失败返回 null（调用方降级为不附加 agentTitle）。
+   * @returns {Promise<Map<string, {title: string, ts: string}>|null>} uid → {title, ts}
+   */
+  async _agentTitleByUid() {
+    try {
+      const ownerUid = await this._ownerUid();
+      if (!ownerUid) return null;
+      const dbFile = path.join(this.cwd, '.qzhuli-cli', 'cache-' + ownerUid + '.db');
+      if (!fs.existsSync(dbFile) || !fs.existsSync(SQLITE3_BIN)) return null;
+
+      const mtimeMs = fs.statSync(dbFile).mtimeMs;
+      if (Date.now() - mtimeMs > SYNC_FRESH_MS) {
+        await this.run(['cache', 'sync'], 30000);
+      }
+
+      // 每行输出一个 JSON 数组 [user_ids, ts, data]，避免 data JSON 内含 | 分隔符歧义
+      const sql = [
+        'SELECT json_array(cp.user_ids, m.ts, cp.data) FROM (',
+        "  SELECT conversation_id, MAX(json_extract(data, '$.timestamp')) AS ts",
+        '  FROM messages_cache GROUP BY conversation_id',
+        ') m JOIN conversation_profiles cp ON cp.conversation_id = m.conversation_id;'
+      ].join(' ');
+      const out = execFileSync(SQLITE3_BIN, [dbFile, sql], {
+        encoding: 'utf8',
+        timeout: 10000,
+        maxBuffer: 32 * 1024 * 1024
+      });
+      const map = new Map();
+      for (const line of out.split('\n')) {
+        if (!line) continue;
+        let arr;
+        try { arr = JSON.parse(line); } catch (e) { continue; }
+        if (!Array.isArray(arr) || arr.length < 3) continue;
+        const uids = String(arr[0] || '').split(',');
+        const ts = String(arr[1] || '').trim();
+        if (!ts) continue;
+        // json_array 把 cp.data（TEXT）作为字符串输出，需二次 JSON.parse
+        const raw = arr[2];
+        let users = null;
+        if (raw && typeof raw === 'object') {
+          users = raw.users || [];
+        } else if (typeof raw === 'string') {
+          try { users = (JSON.parse(raw) || {}).users || []; } catch (e) { continue; }
+        }
+        if (!users) continue;
+        let title = '';
+        for (const u of users) {
+          if (String(u.uid) === String(ownerUid) && u.agent && u.agent.title) {
+            title = String(u.agent.title);
+            break;
+          }
+        }
+        if (!title) continue;
+        for (const u of uids) {
+          if (!u || String(u) === String(ownerUid)) continue;
+          const prev = map.get(u);
+          if (!prev || ts > prev.ts) map.set(u, { title: title, ts: ts });
+        }
+      }
+      return map.size ? map : null;
+    } catch (err) {
+      console.warn('[qz-cli] 读取会话归属助理失败，联系人不带 agentTitle: ' + ((err && err.message) || err));
+      return null;
+    }
+  }
+
   /** 某 uid 的既有会话（单聊优先由调用方 pick） */
   async findConversation(uid) {
     if (!uid) return [];
@@ -219,10 +295,10 @@ class QzCli {
       .map((c) => ({ conversationId: c.conversationId, isGroup: c.isGroup || 0 }));
   }
 
-  /** 发一条私信 */
+  /** 发一条私信（固定以本人名义 --role 1 发出，不以助理/数字员工身份） */
   async sendMessage(conversationId, content) {
     if (!conversationId) return { ok: false, error: '缺少会话ID' };
-    const r = await this.run(['message', 'send', conversationId, content]);
+    const r = await this.run(['message', 'send', conversationId, content, '--role', '1']);
     if (r.status === 'success') return { ok: true, code: r.code, error: null };
     return { ok: false, code: r.code, error: r.message || '发送失败' };
   }
@@ -275,7 +351,19 @@ class QzCli {
 // ---------- 纯函数（单测覆盖） ----------
 
 /**
- * 按最后沟通时间倒序排列联系人（越新越靠前）。
+ * 把「会话归属助理」附加到联系人：agentByUid 为 Map/对象 uid → {title, ts}；
+ * 命中则复制一份并加 agentTitle 字段，未命中保持原对象不变。
+ */
+function attachAgentTitles(contacts, agentByUid) {
+   if (!Array.isArray(contacts)) return [];
+   const map = agentByUid instanceof Map ? agentByUid : new Map(Object.entries(agentByUid || {}));
+   return contacts.map((c) => {
+     const a = map.get(String(c && c.uid));
+     return a && a.title ? { ...c, agentTitle: a.title } : c;
+   });
+ }
+
+ /** 按最后沟通时间倒序排列联系人（越新越靠前）。
  * @param {object[]} contacts [{uid, nickname, ...}]
  * @param {Map<string,string>|object|null} lastActiveByUid uid → 时间戳字符串（19 位微秒）
  * @returns {object[]} 有记录者按 ts 降序，无记录者保持原顺序排在最后
@@ -350,5 +438,6 @@ module.exports = {
   resolveMentions,
   pickConversation,
   makeNotifyText,
-  sortContactsByLastActive
+  sortContactsByLastActive,
+  attachAgentTitles
 };

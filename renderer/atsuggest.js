@@ -183,6 +183,19 @@
         name.textContent = c.nickname || c.remark || '';
         item.appendChild(at);
         item.appendChild(name);
+        if (c.agentTitle) {
+          // 「有对话」提示：双向箭头图标 + 归属助理名（只显示我的助理名字）
+          var agent = document.createElement('span');
+          agent.className = 'at-agent';
+          var arrow = document.createElement('i');
+          arrow.className = 'fa-solid fa-arrow-right-arrow-left';
+          arrow.setAttribute('aria-hidden', 'true');
+          var agentName = document.createElement('span');
+          agentName.textContent = c.agentTitle;
+          agent.appendChild(arrow);
+          agent.appendChild(agentName);
+          item.appendChild(agent);
+        }
         if (c.remark && c.remark !== c.nickname) {
           var remark = document.createElement('span');
           remark.className = 'at-remark';

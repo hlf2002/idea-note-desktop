@@ -11,7 +11,8 @@ const {
   resolveMentions,
   pickConversation,
   makeNotifyText,
-  sortContactsByLastActive
+  sortContactsByLastActive,
+  attachAgentTitles
 } = require('../qz/cli');
 
 // ============ extractMentions ============
@@ -190,4 +191,28 @@ test('sortContactsByLastActive: 超大时间戳按字符串比较（超出 JS �
   const sorted = sortContactsByLastActive(contacts, map);
   // 末位差 1 的微秒时间戳，Number 会丢精度，字符串比较仍能正确区分
   assert.deepStrictEqual(sorted.map((c) => c.uid), ['b', 'a']);
+});
+
+// ============ attachAgentTitles ============
+test('attachAgentTitles: 命中 Map 附加 agentTitle', () => {
+  const contacts = [{ uid: 'u1', nickname: '李世祥' }, { uid: 'u2', nickname: '黄捷' }];
+  const map = new Map([['u1', { title: '李青蓝', ts: '1' }]]);
+  const r = attachAgentTitles(contacts, map);
+  assert.strictEqual(r[0].agentTitle, '李青蓝');
+  assert.strictEqual(r[1].agentTitle, undefined);
+  // 原数组不被修改
+  assert.strictEqual(contacts[0].agentTitle, undefined);
+});
+
+test('attachAgentTitles: 支持对象形式 map 与无会话联系人', () => {
+  const contacts = [{ uid: 'a', nickname: '甲' }];
+  assert.strictEqual(attachAgentTitles(contacts, { a: { title: '李青蓝', ts: '1' } })[0].agentTitle, '李青蓝');
+  assert.strictEqual(attachAgentTitles(contacts, {})[0].agentTitle, undefined);
+  assert.strictEqual(attachAgentTitles(contacts, null)[0].agentTitle, undefined);
+});
+
+test('attachAgentTitles: 非法输入返回空数组', () => {
+  assert.deepStrictEqual(attachAgentTitles(null, {}), []);
+  assert.deepStrictEqual(attachAgentTitles(undefined, {}), []);
+  assert.deepStrictEqual(attachAgentTitles('x', {}), []);
 });
