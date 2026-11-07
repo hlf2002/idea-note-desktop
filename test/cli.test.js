@@ -102,44 +102,61 @@ test('resolveMentions: 昵称与备注指向同一人时按昵称命中', () => 
   assert.strictEqual(r[0].uid, 'u3');
 });
 
-// ============ pickConversation（@ 通知：必须是自己的默认助理会话） ============
-test('pickConversation: 优先 owner 侧是我的默认助理的单聊', () => {
+// ============ pickConversation（@ 通知：必须是「我+我的默认助理+对方+对方的默认助理」双人会话） ============
+test('pickConversation: 双方默认助理都在的双人会话命中', () => {
   const convs = [
-    { conversationId: 'g1', isGroup: 1, ownerAgentId: '1' },
-    { conversationId: 's1', isGroup: 0, ownerAgentId: '1' },
-    { conversationId: 's2', isGroup: 0, ownerAgentId: '9' }
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '1', friendAgentId: '9' },
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '1', friendAgentId: '9' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '1', friendAgentId: '3' }
   ];
-  assert.strictEqual(pickConversation(convs, '1').conversationId, 's1');
+  assert.strictEqual(pickConversation(convs, '1', '9').conversationId, 's1');
 });
 
-test('pickConversation: 没有单聊时用匹配的群聊', () => {
+test('pickConversation: 对方侧不是对方的默认助理（数字员工）不选', () => {
   const convs = [
-    { conversationId: 'g1', isGroup: 1, ownerAgentId: '1' },
-    { conversationId: 'g2', isGroup: 1, ownerAgentId: '1' }
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '1', friendAgentId: '3' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '1', friendAgentId: '9' }
   ];
-  assert.strictEqual(pickConversation(convs, '1').conversationId, 'g1');
+  assert.strictEqual(pickConversation(convs, '1', '9').conversationId, 's2');
 });
 
-test('pickConversation: 全部不是我的默认助理会话返回 null（触发创建）', () => {
+test('pickConversation: owner 侧不是我的默认助理不选', () => {
   const convs = [
-    { conversationId: 'g1', isGroup: 1, ownerAgentId: '9' },
-    { conversationId: 's1', isGroup: 0, ownerAgentId: '9' }
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '2', friendAgentId: '9' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '3', friendAgentId: '9' }
   ];
-  assert.strictEqual(pickConversation(convs, '1'), null);
+  assert.strictEqual(pickConversation(convs, '1', '9'), null);
+});
+
+test('pickConversation: 群聊即使双方默认助理都在也不选（必须双人会话）', () => {
+  const convs = [
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '1', friendAgentId: '9' },
+    { conversationId: 'g2', isGroup: 1, ownerAgentId: '1', friendAgentId: '9' }
+  ];
+  assert.strictEqual(pickConversation(convs, '1', '9'), null);
+});
+
+test('pickConversation: 全部不匹配返回 null（触发创建）', () => {
+  const convs = [
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '9', friendAgentId: '1' },
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '9', friendAgentId: '9' }
+  ];
+  assert.strictEqual(pickConversation(convs, '1', '9'), null);
 });
 
 test('pickConversation: 空数组 / null / undefined 返回 null', () => {
-  assert.strictEqual(pickConversation([], '1'), null);
-  assert.strictEqual(pickConversation(null, '1'), null);
-  assert.strictEqual(pickConversation(undefined, '1'), null);
+  assert.strictEqual(pickConversation([], '1', '9'), null);
+  assert.strictEqual(pickConversation(null, '1', '9'), null);
+  assert.strictEqual(pickConversation(undefined, '1', '9'), null);
 });
 
-test('pickConversation: 缺 ownerAgentId 的会话不算我的默认助理会话', () => {
+test('pickConversation: 缺 ownerAgentId / friendAgentId 的会话不算双人双助理会话', () => {
   const convs = [
-    { conversationId: 's1', isGroup: 0, ownerAgentId: null },
-    { conversationId: 's2', isGroup: 0, ownerAgentId: undefined }
+    { conversationId: 's1', isGroup: 0, ownerAgentId: null, friendAgentId: '9' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '1', friendAgentId: undefined },
+    { conversationId: 's3', isGroup: 0, ownerAgentId: undefined, friendAgentId: undefined }
   ];
-  assert.strictEqual(pickConversation(convs, '1'), null);
+  assert.strictEqual(pickConversation(convs, '1', '9'), null);
 });
 
 // ============ bundledCliEntry（应用捆绑 qzhuliCLI 探测） ============

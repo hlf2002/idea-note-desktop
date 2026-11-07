@@ -7,10 +7,12 @@
  * → message send 发私信。
  *
  * @ 通知规则（用户拍板，通用产品全量生效）：
- *  - 消息必须发在「和自己的私人助理（默认助理）的会话」中：即会话里 owner 侧
- *    agent.id === 我的默认助理 agent.id（user search 自己的 uid 返回 agent）。
+ *  - 消息必须发在「我 + 我的默认助理 + 对方 + 对方的默认助理」的双人会话中：
+ *    owner 侧 agent.id === 我的默认助理 agent.id（user search 自己的 uid 返回 agent），
+ *    且对方侧 agent.id === 对方的默认助理 agent.id（user search 对方 uid 返回 agent）；
+ *    只有双方默认助理都在的双人会话才发，群聊/数字员工会话一律不选。
  *  - 没有这样的会话时自动创建：conversation create <对方uid> --agent-id <对方agent.id>
- *    （create 的 agent-id 是 friend_agent_id，即对方的 agent；owner 侧默认就是自己的默认助理）。
+ *    （create 的 agent-id 是 friend_agent_id，即对方的默认助理；owner 侧默认就是自己的默认助理）。
  *  - 始终以本人名义发出（--role 1）。
  *  - 所有用户安装产品都捆绑 qzhuliCLI；用户已装 qz CLI 时优先用用户自己的（探测顺序：
  *    固定路径 / PATH / 应用捆绑目录）。
@@ -230,7 +232,7 @@ class QzCli {
     return '';
   }
 
-  /** 某 uid 的既有会话（含 owner 侧 agent.id，供「私人助理会话」判定） */
+  /** 某 uid 的既有会话（带出 owner 侧与对方侧 agent.id，供「双人双助理会话」判定） */
   async findConversation(uid) {
     if (!uid) return [];
     const ownerUid = await this._ownerUid();
@@ -241,11 +243,19 @@ class QzCli {
       .filter((c) => c && c.conversationId)
       .map((c) => {
         let ownerAgentId = null;
-        if (ownerUid && Array.isArray(c.users)) {
-          const me = c.users.find((u) => u && String(u.uid) === String(ownerUid));
-          if (me && me.agent && me.agent.id != null) ownerAgentId = String(me.agent.id);
+        let friendAgentId = null;
+        if (Array.isArray(c.users)) {
+          for (const u of c.users) {
+            if (!u || !u.uid) continue;
+            const agentId = u.agent && u.agent.id != null ? String(u.agent.id) : null;
+            if (ownerUid && String(u.uid) === String(ownerUid)) {
+              ownerAgentId = agentId;
+            } else if (String(u.uid) === String(uid)) {
+              friendAgentId = agentId;
+            }
+          }
         }
-        return { conversationId: c.conversationId, isGroup: c.isGroup || 0, ownerAgentId };
+        return { conversationId: c.conversationId, isGroup: c.isGroup || 0, ownerAgentId, friendAgentId };
       });
   }
 
@@ -330,15 +340,17 @@ class QzCli {
     const body = makeNotifyText(senderName, text, pageUrl);
     const sent = [];
     for (const t of targets) {
+      // 对方默认助理 agent.id：会话必须同时有「我的默认助理」和「对方的默认助理」才发
+      const friendAgent = await this.friendAgentId(t.uid);
+      if (!friendAgent) {
+        sent.push({ name: t.name, nickname: t.contact.nickname || t.name, uid: t.uid, ok: false, error: '无法获取对方默认助理信息', conversationId: '' });
+        continue;
+      }
       const convs = await this.findConversation(t.uid);
-      const conv = pickConversation(convs, myAgentId);
+      const conv = pickConversation(convs, myAgentId, friendAgent);
       if (!conv) {
-        // 没有私人助理会话 → 自动创建（create 的 agent-id 是对方 agent；owner 侧默认即我的默认助理）
-        const friendAgent = await this.friendAgentId(t.uid);
-        if (!friendAgent) {
-          sent.push({ name: t.name, nickname: t.contact.nickname || t.name, uid: t.uid, ok: false, error: '无法获取对方助理信息', conversationId: '' });
-          continue;
-        }
+        // 没有「我 + 我的默认助理 + 对方 + 对方的默认助理」的双人会话 → 自动创建
+        // （create 的 agent-id 是对方默认助理；owner 侧默认即我的默认助理）
         const cr = await this.createConversation(t.uid, friendAgent);
         if (!cr.ok) {
           sent.push({ name: t.name, nickname: t.contact.nickname || t.name, uid: t.uid, ok: false, error: cr.error || '创建会话失败', conversationId: '' });
@@ -445,17 +457,21 @@ function resolveMentions(mentions, contacts) {
 }
 
 /**
- * 选会话（@ 通知规则）：必须是「和自己的私人助理（默认助理）的会话」——
- * 即会话里 owner 侧 agent.id === myAgentId（user search 自己的 uid 拿到的默认助理）。
- * 没有匹配的会话返回 null（调用方走创建会话分支）。匹配内优先单聊，其次任意。
- * @param {object[]} convs [{conversationId, isGroup, ownerAgentId}]
+ * 选会话（@ 通知规则）：必须是「我 + 我的默认助理 + 对方 + 对方的默认助理」的双人会话——
+ * 即会话里 owner 侧 agent.id === myAgentId（我的默认助理），且对方侧 agent.id === friendAgentId
+ * （对方的默认助理），且是单聊（isGroup=0）。群聊/数字员工会话一律不选；
+ * 没有匹配的会话返回 null（调用方走创建会话分支）。
+ * @param {object[]} convs [{conversationId, isGroup, ownerAgentId, friendAgentId}]
  * @param {string} myAgentId 我的默认助理 agent.id
+ * @param {string} friendAgentId 对方的默认助理 agent.id
  */
-function pickConversation(convs, myAgentId) {
+function pickConversation(convs, myAgentId, friendAgentId) {
   if (!Array.isArray(convs) || !convs.length) return null;
-  const mine = convs.filter((c) => String(c.ownerAgentId) === String(myAgentId));
-  if (!mine.length) return null;
-  return mine.find((c) => !c.isGroup) || mine[0];
+  return convs.find((c) =>
+    !c.isGroup &&
+    String(c.ownerAgentId) === String(myAgentId) &&
+    String(c.friendAgentId) === String(friendAgentId)
+  ) || null;
 }
 
 /** 通知文案：发送者昵称 + 想法全文 + 分享页链接（有则附在末尾） */
