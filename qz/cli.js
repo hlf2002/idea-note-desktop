@@ -150,15 +150,10 @@ class QzCli {
     return { ok: false, reason: r.code || 'auth_failed', message: r.message || 'qz CLI 未登录' };
   }
 
-  /** 联系人列表（qz friend list），按最后沟通时间倒序（越新越靠前）；读不到时间则保持原顺序。
-   * 每个联系人附带 agentTitle：我的默认助理（私人助理）名——用户拍板「私人助理=默认助理」，
-   * @ 通知统一发到默认助理会话，故下拉里显示的名字统一是默认助理名（如「李青蓝」），
-   * 而不是各自会话归属的数字员工（曾按会话归属显示「易发版/战争：世界征服」等，用户指正为错）。 */
+  /** 联系人列表（qz friend list），按最后沟通时间倒序（越新越靠前）；读不到时间则保持原顺序。 */
   async listContacts() {
     const r = await this.run(['friend', 'list', '--jq', '.data.links']);
     if (r.status !== 'success' || !Array.isArray(r.data)) return [];
-    const agent = await this.myDefaultAgent();
-    const agentTitle = (agent && agent.title) || '';
     const contacts = r.data
       .filter((l) => l && l.uid)
       .map((l) => ({
@@ -166,8 +161,7 @@ class QzCli {
         nickname: l.nickname || '',
         remark: l.friend_name || '',
         linkType: l.link_type,
-        avatar: l.avatar || '',
-        agentTitle
+        avatar: l.avatar || ''
       }));
     const lastActiveByUid = await this._lastActiveByUid();
     if (lastActiveByUid) return sortContactsByLastActive(contacts, lastActiveByUid);
