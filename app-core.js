@@ -13,7 +13,7 @@
  */
 'use strict';
 
-const { ipcMain, shell, dialog, BrowserWindow } = require('electron');
+const { ipcMain, shell, dialog, BrowserWindow, app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -88,7 +88,11 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
     indexFile: path.join(baseDir, 'media-index.json')
   });
   // 本机 qz CLI（@ 提及通知用；spawn 子进程，不可用时不阻塞发布）
-  const cli = qzCliOverride || new QzCli();
+  // appPath 用于探测应用捆绑的 qzhuliCLI（asar 内 dist/cmd.js，ELECTRON_RUN_AS_NODE 运行）；
+  // 开发态（npm start / smoke）app.getAppPath() 即项目根，node --test 不加载本模块。
+  const cli = qzCliOverride || new QzCli({
+    appPath: (app && typeof app.getAppPath === 'function') ? app.getAppPath() : process.cwd()
+  });
 
   // ---------- 登录态 ----------
   ipcMain.handle('auth:get', () => {

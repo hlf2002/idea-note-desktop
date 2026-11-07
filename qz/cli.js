@@ -1,16 +1,19 @@
 /**
  * qz/cli.js —— 本机 qz CLI 封装（@ 提及通知用）
  *
- * 思路：灵感笔记开放平台没有「给联系人发消息」的接口，而用户本机装了 qz CLI
- * （内部网关 client.qzhuli.com 的登录态，~/.qzhuli-cli/），因此 @ 提及通知
- * 通过 spawn 本机 qz CLI 完成：friend list 拿联系人 → conversation search 找会话
+ * 思路：灵感笔记开放平台没有「给联系人发消息」的接口，而 qz CLI
+ * （内部网关 client.qzhuli.com 的登录态，~/.qzhuli-cli/）可以发私信，因此 @ 提及通知
+ * 通过 spawn qz CLI 完成：friend list 拿联系人 → conversation search 找会话
  * → message send 发私信。
  *
- * 适用边界（有意为之）：
- *  - 仅本机装有 qz CLI 且已登录时可用（GUI 启动 PATH 不含 /opt/homebrew/bin，
- *    必须按固定路径探测，不能只靠 which）；
- *  - 目标联系人没有会话时无法自动建会话（create 需要 friend_agent_id，
- *    friend list 不返回该字段），跳过并标记 error。
+ * @ 通知规则（用户拍板，通用产品全量生效）：
+ *  - 消息必须发在「和自己的私人助理（默认助理）的会话」中：即会话里 owner 侧
+ *    agent.id === 我的默认助理 agent.id（user search 自己的 uid 返回 agent）。
+ *  - 没有这样的会话时自动创建：conversation create <对方uid> --agent-id <对方agent.id>
+ *    （create 的 agent-id 是 friend_agent_id，即对方的 agent；owner 侧默认就是自己的默认助理）。
+ *  - 始终以本人名义发出（--role 1）。
+ *  - 所有用户安装产品都捆绑 qzhuliCLI；用户已装 qz CLI 时优先用用户自己的（探测顺序：
+ *    固定路径 / PATH / 应用捆绑目录）。
  *
  * 对外暴露：
  *  - isAvailable()            qz CLI 是否存在且已登录
@@ -34,26 +37,38 @@ const SQLITE3_BIN = '/usr/bin/sqlite3';
 /** 缓存同步新鲜度：12 小时内同步过就不再 cache sync（避免每次 @ 都等几秒） */
 const SYNC_FRESH_MS = 12 * 3600 * 1000;
 
+/** 应用捆绑 qzhuliCLI 的入口（electron-builder 把 dependencies 打进 asar，此处探测 dist/cmd.js） */
+function bundledCliEntry(appPath) {
+  if (!appPath) return '';
+  const p = path.join(appPath, 'node_modules', '@qzhuli', 'qzhuli-cli', 'dist', 'cmd.js');
+  return fs.existsSync(p) ? p : '';
+}
+
 class QzCli {
   /**
    * @param {object} opts
    * @param {string} [opts.binPath] qz 可执行文件绝对路径（测试/特殊安装场景）
    * @param {string} [opts.cwd] 子进程工作目录（默认主目录，确保读生产 ~/.qzhuli-cli/）
    * @param {number} [opts.timeoutMs] 单条命令超时
+   * @param {string} [opts.appPath] 应用根目录（Electron app.getAppPath()），用于探测捆绑 qzhuliCLI
    */
   constructor(opts = {}) {
     this.binPath = opts.binPath || '';
     this.cwd = opts.cwd || os.homedir();
     this.timeoutMs = opts.timeoutMs || 15000;
+    this.appPath = opts.appPath || '';
   }
 
-  /** 探测 qz 可执行文件：固定路径 > PATH（GUI 启动 PATH 不全，固定路径优先） */
+  /**
+   * 探测 qz CLI：固定路径 > PATH（用户已装的优先）> 应用捆绑（asar 内 dist/cmd.js，走 ELECTRON_RUN_AS_NODE）。
+   * @returns {{bin: string, bundled: boolean}|null} null 表示完全找不到
+   */
   resolveBin() {
-    if (this.binPath && fs.existsSync(this.binPath)) return this.binPath;
+    if (this.binPath && fs.existsSync(this.binPath)) return { bin: this.binPath, bundled: false };
     for (const p of CANDIDATE_BINS) {
       try {
         fs.accessSync(p, fs.constants.X_OK);
-        return p;
+        return { bin: p, bundled: false };
       } catch (e) { /* continue */ }
     }
     for (const dir of (process.env.PATH || '').split(':')) {
@@ -62,26 +77,33 @@ class QzCli {
       if (fs.existsSync(p)) {
         try {
           fs.accessSync(p, fs.constants.X_OK);
-          return p;
+          return { bin: p, bundled: false };
         } catch (e) { /* continue */ }
       }
     }
-    return '';
+    const entry = bundledCliEntry(this.appPath);
+    if (entry) return { bin: entry, bundled: true };
+    return null;
   }
 
   /** 执行一条 qz 命令，解析 stdout JSON；任何异常都返回 { status:'error', ... } 不 throw */
   run(args, timeoutMs) {
-    const bin = this.resolveBin();
-    if (!bin) return Promise.resolve({ status: 'error', code: 'CLI_NOT_FOUND', message: '未找到 qz CLI', data: null });
+    const found = this.resolveBin();
+    if (!found) return Promise.resolve({ status: 'error', code: 'CLI_NOT_FOUND', message: '未找到 qz CLI', data: null });
+    const env = {
+      ...process.env,
+      PATH: [process.env.PATH, ...EXTRA_PATH].filter(Boolean).join(':')
+    };
+    // 捆绑版：cmd.js 是 Node 脚本，用当前 Electron 可执行文件以纯 Node 模式运行
+    const bin = found.bundled ? process.execPath : found.bin;
+    const runArgs = found.bundled ? [found.bin, ...args] : args;
+    if (found.bundled) env.ELECTRON_RUN_AS_NODE = '1';
     return new Promise((resolve) => {
       let child;
       try {
-        child = spawn(bin, args, {
+        child = spawn(bin, runArgs, {
           cwd: this.cwd,
-          env: {
-            ...process.env,
-            PATH: [process.env.PATH, ...EXTRA_PATH].filter(Boolean).join(':')
-          }
+          env
         });
       } catch (err) {
         resolve({ status: 'error', code: 'CLI_SPAWN', message: (err && err.message) || String(err), data: null });
@@ -119,11 +141,11 @@ class QzCli {
 
   /** qz CLI 是否可用（存在 + 已登录） */
   async isAvailable() {
-    const bin = this.resolveBin();
-    if (!bin) return { ok: false, reason: 'cli_not_found', binPath: '' };
+    const found = this.resolveBin();
+    if (!found) return { ok: false, reason: 'cli_not_found', binPath: '' };
     const r = await this.run(['auth', 'status']);
     if (r.status === 'success' && r.data && r.data.uid) {
-      return { ok: true, binPath: bin };
+      return { ok: true, binPath: found.bin };
     }
     return { ok: false, reason: r.code || 'auth_failed', message: r.message || 'qz CLI 未登录' };
   }
@@ -284,15 +306,51 @@ class QzCli {
     }
   }
 
-  /** 某 uid 的既有会话（单聊优先由调用方 pick） */
+  /** 某 uid 的既有会话（含 owner 侧 agent.id，供「私人助理会话」判定） */
   async findConversation(uid) {
     if (!uid) return [];
+    const ownerUid = await this._ownerUid();
     const r = await this.run(['conversation', 'search', uid, '--uid', '--jq', '.data']);
     if (r.status !== 'success' || !r.data) return [];
     const convs = Array.isArray(r.data.conversations) ? r.data.conversations : [];
     return convs
       .filter((c) => c && c.conversationId)
-      .map((c) => ({ conversationId: c.conversationId, isGroup: c.isGroup || 0 }));
+      .map((c) => {
+        let ownerAgentId = null;
+        if (ownerUid && Array.isArray(c.users)) {
+          const me = c.users.find((u) => u && String(u.uid) === String(ownerUid));
+          if (me && me.agent && me.agent.id != null) ownerAgentId = String(me.agent.id);
+        }
+        return { conversationId: c.conversationId, isGroup: c.isGroup || 0, ownerAgentId };
+      });
+  }
+
+  /** 我的默认助理（私人助理）agent.id：user search 自己的 uid → data.agent.id；进程内缓存 */
+  async myDefaultAgentId() {
+    if (this._defaultAgentId) return this._defaultAgentId;
+    const ownerUid = await this._ownerUid();
+    if (!ownerUid) return '';
+    const r = await this.run(['user', 'search', ownerUid, '--uid', '--jq', '.data.agent']);
+    const id = r.status === 'success' && r.data && r.data.id != null ? String(r.data.id) : '';
+    if (id) this._defaultAgentId = id;
+    return id;
+  }
+
+  /** 某 uid 的默认助理 agent.id（user search 对方 uid）——创建会话时作为 friend_agent_id */
+  async friendAgentId(uid) {
+    if (!uid) return '';
+    const r = await this.run(['user', 'search', uid, '--uid', '--jq', '.data.agent']);
+    return r.status === 'success' && r.data && r.data.id != null ? String(r.data.id) : '';
+  }
+
+  /** 创建与某 uid 的会话（owner 侧自动是调用者的默认助理），返回 conversationId */
+  async createConversation(uid, friendAgentId) {
+    if (!uid || !friendAgentId) return { ok: false, code: 'NO_AGENT', error: '缺少联系人助理信息' };
+    const r = await this.run(['conversation', 'create', uid, '--agent-id', friendAgentId, '--jq', '.data']);
+    if (r.status === 'success' && r.data && r.data.conversationId) {
+      return { ok: true, conversationId: String(r.data.conversationId), error: null };
+    }
+    return { ok: false, code: r.code, error: r.message || '创建会话失败' };
   }
 
   /** 发一条私信（固定以本人名义 --role 1 发出，不以助理/数字员工身份） */
@@ -325,13 +383,39 @@ class QzCli {
     const targets = resolveMentions(mentions, contacts);
     if (!targets.length) return { ok: true, sent: [], skipped: 'no_matched_contact' };
 
+    // 我的默认助理（私人助理）：所有目标都发在「owner 侧 = 我的默认助理」的会话里
+    const myAgentId = await this.myDefaultAgentId();
+    if (!myAgentId) {
+      return { ok: false, sent: [], error: '无法获取默认助理信息' };
+    }
+
     const body = makeNotifyText(senderName, text);
     const sent = [];
     for (const t of targets) {
       const convs = await this.findConversation(t.uid);
-      const conv = pickConversation(convs);
+      const conv = pickConversation(convs, myAgentId);
       if (!conv) {
-        sent.push({ name: t.name, nickname: t.contact.nickname || t.name, uid: t.uid, ok: false, error: '该联系人暂无会话', conversationId: '' });
+        // 没有私人助理会话 → 自动创建（create 的 agent-id 是对方 agent；owner 侧默认即我的默认助理）
+        const friendAgent = await this.friendAgentId(t.uid);
+        if (!friendAgent) {
+          sent.push({ name: t.name, nickname: t.contact.nickname || t.name, uid: t.uid, ok: false, error: '无法获取对方助理信息', conversationId: '' });
+          continue;
+        }
+        const cr = await this.createConversation(t.uid, friendAgent);
+        if (!cr.ok) {
+          sent.push({ name: t.name, nickname: t.contact.nickname || t.name, uid: t.uid, ok: false, error: cr.error || '创建会话失败', conversationId: '' });
+          continue;
+        }
+        const r = await this.sendMessage(cr.conversationId, body);
+        sent.push({
+          name: t.name,
+          nickname: t.contact.nickname || t.name,
+          uid: t.uid,
+          ok: r.ok,
+          error: r.error,
+          conversationId: cr.conversationId,
+          created: true
+        });
         continue;
       }
       const r = await this.sendMessage(conv.conversationId, body);
@@ -341,7 +425,8 @@ class QzCli {
         uid: t.uid,
         ok: r.ok,
         error: r.error,
-        conversationId: conv.conversationId
+        conversationId: conv.conversationId,
+        created: false
       });
     }
     return { ok: sent.some((s) => s.ok), sent };
@@ -420,10 +505,18 @@ function resolveMentions(mentions, contacts) {
   return out;
 }
 
-/** 选会话：优先单聊，否则第一个（可能是群聊，对方同样能收到通知） */
-function pickConversation(convs) {
+/**
+ * 选会话（@ 通知规则）：必须是「和自己的私人助理（默认助理）的会话」——
+ * 即会话里 owner 侧 agent.id === myAgentId（user search 自己的 uid 拿到的默认助理）。
+ * 没有匹配的会话返回 null（调用方走创建会话分支）。匹配内优先单聊，其次任意。
+ * @param {object[]} convs [{conversationId, isGroup, ownerAgentId}]
+ * @param {string} myAgentId 我的默认助理 agent.id
+ */
+function pickConversation(convs, myAgentId) {
   if (!Array.isArray(convs) || !convs.length) return null;
-  return convs.find((c) => !c.isGroup) || convs[0];
+  const mine = convs.filter((c) => String(c.ownerAgentId) === String(myAgentId));
+  if (!mine.length) return null;
+  return mine.find((c) => !c.isGroup) || mine[0];
 }
 
 /** 通知文案：发送者昵称 + 想法全文 */
@@ -439,5 +532,6 @@ module.exports = {
   pickConversation,
   makeNotifyText,
   sortContactsByLastActive,
-  attachAgentTitles
+  attachAgentTitles,
+  bundledCliEntry
 };

@@ -12,7 +12,8 @@ const {
   pickConversation,
   makeNotifyText,
   sortContactsByLastActive,
-  attachAgentTitles
+  attachAgentTitles,
+  bundledCliEntry
 } = require('../qz/cli');
 
 // ============ extractMentions ============
@@ -101,30 +102,65 @@ test('resolveMentions: 昵称与备注指向同一人时按昵称命中', () => 
   assert.strictEqual(r[0].uid, 'u3');
 });
 
-// ============ pickConversation ============
-test('pickConversation: 优先单聊', () => {
+// ============ pickConversation（@ 通知：必须是自己的默认助理会话） ============
+test('pickConversation: 优先 owner 侧是我的默认助理的单聊', () => {
   const convs = [
-    { conversationId: 'g1', isGroup: 1 },
-    { conversationId: 's1', isGroup: 0 }
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '1' },
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '1' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '9' }
   ];
-  assert.strictEqual(pickConversation(convs).conversationId, 's1');
+  assert.strictEqual(pickConversation(convs, '1').conversationId, 's1');
 });
 
-test('pickConversation: 只有群聊时用第一个', () => {
+test('pickConversation: 没有单聊时用匹配的群聊', () => {
   const convs = [
-    { conversationId: 'g1', isGroup: 1 },
-    { conversationId: 'g2', isGroup: 1 }
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '1' },
+    { conversationId: 'g2', isGroup: 1, ownerAgentId: '1' }
   ];
-  assert.strictEqual(pickConversation(convs).conversationId, 'g1');
+  assert.strictEqual(pickConversation(convs, '1').conversationId, 'g1');
 });
 
-test('pickConversation: 空数组返回 null', () => {
-  assert.strictEqual(pickConversation([]), null);
-  assert.strictEqual(pickConversation(null), null);
-  assert.strictEqual(pickConversation(undefined), null);
+test('pickConversation: 全部不是我的默认助理会话返回 null（触发创建）', () => {
+  const convs = [
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '9' },
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '9' }
+  ];
+  assert.strictEqual(pickConversation(convs, '1'), null);
 });
 
-// ============ makeNotifyText ============
+test('pickConversation: 空数组 / null / undefined 返回 null', () => {
+  assert.strictEqual(pickConversation([], '1'), null);
+  assert.strictEqual(pickConversation(null, '1'), null);
+  assert.strictEqual(pickConversation(undefined, '1'), null);
+});
+
+test('pickConversation: 缺 ownerAgentId 的会话不算我的默认助理会话', () => {
+  const convs = [
+    { conversationId: 's1', isGroup: 0, ownerAgentId: null },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: undefined }
+  ];
+  assert.strictEqual(pickConversation(convs, '1'), null);
+});
+
+// ============ bundledCliEntry（应用捆绑 qzhuliCLI 探测） ============
+test('bundledCliEntry: 找到捆绑 cmd.js', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bundled-cli-test-'));
+  const pkgDir = path.join(tmp, 'node_modules', '@qzhuli', 'qzhuli-cli', 'dist');
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, 'cmd.js'), '#!/usr/bin/env node\n');
+  assert.strictEqual(bundledCliEntry(tmp), path.join(pkgDir, 'cmd.js'));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('bundledCliEntry: 无捆绑返回空串', () => {
+  assert.strictEqual(bundledCliEntry('/nonexistent-app-dir'), '');
+  assert.strictEqual(bundledCliEntry(''), '');
+  assert.strictEqual(bundledCliEntry(null), '');
+});
+
 test('makeNotifyText: 含发送者与全文', () => {
   const text = makeNotifyText('疯狐狸', '今天 #想法\n第二行');
   assert.ok(text.indexOf('疯狐狸') >= 0);
