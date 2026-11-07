@@ -22,6 +22,7 @@ const { QzOpenApi } = require('./qz/openapi');
 const { IdeaSync } = require('./qz/sync');
 const { MediaStore, validateImage } = require('./qz/media');
 const { QzCli } = require('./qz/cli');
+const { publishNotePage } = require('./qz/notes-page');
 const {
   RELAY_BASE_URL,
   QZ_APP_KEY,
@@ -34,7 +35,7 @@ const {
 /** 已知数据目录名：flomo-local → idea-note-local → 灵感笔记（应用改名/打包导致 userData 路径变化） */
 const KNOWN_DIR_NAMES = ['flomo-local', 'idea-note-local', '灵感笔记'];
 
-function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliOverride }) {
+function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliOverride, notesPageOverride }) {
   const authStore = new AuthStore(authFile);
   const loaded = authStore.load();
   let legacyNotice = false;
@@ -365,9 +366,18 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
     return { ok: true, contacts: await cli.listContacts() };
   }));
   // 发布后通知 @ 的联系人：解析正文 @昵称 → 匹配联系人 → 逐人发私信
+  // 通知内容附上网站分享页链接（先生成分享页；失败则降级为不带链接的普通通知）
   ipcMain.handle('mentions:notify', (_e, text) => guard(async () => {
     const sender = (authStore.auth && authStore.auth.nickname) || '';
-    return cli.notifyMentions(text, sender);
+    let pageUrl = '';
+    try {
+      // 测试可注入 notesPageOverride 拦截真实发布；默认走 qz/notes-page.js
+      const pub = notesPageOverride || publishNotePage;
+      pageUrl = await pub({ text, author: sender }) || '';
+    } catch (err) {
+      console.warn('[mentions] 生成分享页失败，本次通知不带链接: ' + ((err && err.message) || err));
+    }
+    return cli.notifyMentions(text, sender, pageUrl);
   }));
 
   // 后台保鲜：每 30 分钟检查，access_token 快过期或 refresh_token 需滚动时自动续期

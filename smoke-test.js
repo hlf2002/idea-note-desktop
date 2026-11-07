@@ -134,6 +134,7 @@ function makeMockApi() {
 
 // ---- mock QzCli（@ 提及通知：不真发消息，验证链路与渲染） ----
 function makeMockCli() {
+  const sentMessages = [];
   return {
     async isAvailable() { return { ok: true, binPath: '/mock/qz' }; },
     async listContacts() {
@@ -150,14 +151,16 @@ function makeMockCli() {
         ...extra
       ];
     },
-    async notifyMentions() {
+    async notifyMentions(text, senderName, pageUrl) {
+      sentMessages.push({ text, senderName, pageUrl });
       return {
         ok: true,
         sent: [
           { name: '测试联系人', nickname: '测试联系人', uid: 'u_smoke_1', ok: true, error: null, conversationId: 'c_smoke_1' }
         ]
       };
-    }
+    },
+    sentMessages
   };
 }
 
@@ -178,8 +181,10 @@ app.whenReady().then(async () => {
     const legacyFile = path.join(tmpDir, 'flomo-local.json');
     const mockApi = makeMockApi();
     const mockCli = makeMockCli();
+    // @ 分享页：smoke 不真发 HTTP，注入固定 URL 验证「生成→传入 cli」链路
+    const mockNotesPage = async () => 'https://ideanote.7373.com.cn/notes/smoke_abc123';
 
-    const core = initApp({ authFile, cacheFile, legacyFile, dataDir: tmpDir, apiOverride: mockApi, qzCliOverride: mockCli });
+    const core = initApp({ authFile, cacheFile, legacyFile, dataDir: tmpDir, apiOverride: mockApi, qzCliOverride: mockCli, notesPageOverride: mockNotesPage });
 
     const win = new BrowserWindow({
       width: 1040,
@@ -450,6 +455,12 @@ app.whenReady().then(async () => {
     })()`);
     console.log('SMOKE_AT_RESULT=' + JSON.stringify(atResult));
 
+    // @ 分享页链路：mock 生成的 URL 必须传入 cli.notifyMentions 的第三参
+    const cliMessages = mockCli.sentMessages || [];
+    const lastMsg = cliMessages[cliMessages.length - 1] || {};
+    const pageUrlPassedToCli = /^https:\/\/ideanote\.7373\.com\.cn\/notes\/smoke_abc123$/.test(lastMsg.pageUrl || '');
+    console.log('SMOKE_PAGEURL=' + JSON.stringify({ sentCount: cliMessages.length, pageUrl: lastMsg.pageUrl || '', pageUrlPassedToCli }));
+
     const image = await win.webContents.capturePage();
     fs.writeFileSync(path.join(__dirname, 'screenshot.png'), image.toPNG());
 
@@ -517,6 +528,7 @@ app.whenReady().then(async () => {
       atResult.notifyOk === true &&
       atResult.notifySentCount === 1 &&
       atResult.notifySentName === '测试联系人' &&
+      pageUrlPassedToCli === true &&
       !atResult.atErr;
 
     console.log('SMOKE_PASS=' + pass);

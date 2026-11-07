@@ -298,10 +298,13 @@ class QzCli {
 
   /**
    * 通知文本中的全部 @联系人。
+   * @param {string} text 想法全文（含 @昵称）
+   * @param {string} senderName 发送者昵称
+   * @param {string} [pageUrl] 该想法对应的网站分享页 URL（有则附在私信末尾）
    * @returns {Promise<{ok:boolean, sent:Array, skipped?:string, error?:string}>}
    *   sent 每项 { name, nickname, uid, ok, error, conversationId }
    */
-  async notifyMentions(text, senderName) {
+  async notifyMentions(text, senderName, pageUrl) {
     const mentions = extractMentions(String(text == null ? '' : text));
     if (!mentions.length) return { ok: true, sent: [], skipped: 'no_mentions' };
 
@@ -324,7 +327,7 @@ class QzCli {
       return { ok: false, sent: [], error: '无法获取默认助理信息' };
     }
 
-    const body = makeNotifyText(senderName, text);
+    const body = makeNotifyText(senderName, text, pageUrl);
     const sent = [];
     for (const t of targets) {
       const convs = await this.findConversation(t.uid);
@@ -455,10 +458,13 @@ function pickConversation(convs, myAgentId) {
   return mine.find((c) => !c.isGroup) || mine[0];
 }
 
-/** 通知文案：发送者昵称 + 想法全文 */
-function makeNotifyText(senderName, text) {
+/** 通知文案：发送者昵称 + 想法全文 + 分享页链接（有则附在末尾） */
+function makeNotifyText(senderName, text, pageUrl) {
   const from = (senderName && String(senderName).trim()) || '你的朋友';
-  return '【灵感笔记】' + from + ' 在灵感笔记 @了你：\n\n' + String(text == null ? '' : text);
+  const base = '【灵感笔记】' + from + ' 在灵感笔记 @了你：\n\n' + String(text == null ? '' : text);
+  const url = pageUrl && String(pageUrl).trim();
+  if (!url) return base;
+  return base + '\n\n查看完整笔记：' + url;
 }
 
 module.exports = {

@@ -179,6 +179,22 @@ test('makeNotifyText: null 正文不抛错', () => {
   assert.ok(makeNotifyText('某人', null).indexOf('') >= 0);
 });
 
+test('makeNotifyText: 带分享页 URL 附在末尾', () => {
+  const text = makeNotifyText('疯狐狸', '正文', 'https://ideanote.7373.com.cn/notes/abc123');
+  assert.ok(text.indexOf('查看完整笔记：https://ideanote.7373.com.cn/notes/abc123') >= 0);
+});
+
+test('makeNotifyText: URL 为空/空白时不带链接', () => {
+  const text = makeNotifyText('疯狐狸', '正文', '');
+  assert.ok(text.indexOf('查看完整笔记') < 0);
+  const text2 = makeNotifyText('疯狐狸', '正文', '   ');
+  assert.ok(text2.indexOf('查看完整笔记') < 0);
+  const text3 = makeNotifyText('疯狐狸', '正文', null);
+  assert.ok(text3.indexOf('查看完整笔记') < 0);
+  const text4 = makeNotifyText('疯狐狸', '正文', undefined);
+  assert.ok(text4.indexOf('查看完整笔记') < 0);
+});
+
 // ============ sortContactsByLastActive ============
 test('sortContactsByLastActive: 按最后沟通时间倒序', () => {
   const contacts = [
