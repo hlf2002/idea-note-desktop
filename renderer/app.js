@@ -1923,7 +1923,7 @@
       // @ 提及通知：想法已发布，通知失败/不可用不阻塞（qz CLI 仅本机可用）
       if (/@[^\s@#]/.test(val)) {
         try {
-          const notify = await window.ideaNote.mentions.notify(val);
+          const notify = await window.ideaNote.mentions.notify(val, memo.id);
           if (notify && notify.ok && Array.isArray(notify.sent) && notify.sent.length) {
             const sent = notify.sent.filter((s) => s.ok);
             const failed = notify.sent.filter((s) => !s.ok);

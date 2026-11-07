@@ -183,8 +183,14 @@ app.whenReady().then(async () => {
     const mockCli = makeMockCli();
     // @ 分享页：smoke 不真发 HTTP，注入固定 URL 验证「生成→传入 cli」链路
     const mockNotesPage = async () => 'https://ideanote.7373.com.cn/notes/smoke_abc123';
+    // @ 分享页删除：记录调用，验证「删除笔记 → 联动删分享页」链路（不真发 HTTP）
+    const unpublishCalls = [];
+    const mockNotesUnpublish = async ({ ideaId }) => {
+      unpublishCalls.push(String(ideaId));
+      return { ok: true, removed: 1 };
+    };
 
-    const core = initApp({ authFile, cacheFile, legacyFile, dataDir: tmpDir, apiOverride: mockApi, qzCliOverride: mockCli, notesPageOverride: mockNotesPage });
+    const core = initApp({ authFile, cacheFile, legacyFile, dataDir: tmpDir, apiOverride: mockApi, qzCliOverride: mockCli, notesPageOverride: mockNotesPage, notesUnpublishOverride: mockNotesUnpublish });
 
     const win = new BrowserWindow({
       width: 1040,
@@ -455,6 +461,9 @@ app.whenReady().then(async () => {
     })()`);
     console.log('SMOKE_AT_RESULT=' + JSON.stringify(atResult));
 
+    // @ 分享页删除联动：删除含 @ 的笔记后，unpublish 必须收到该笔记 id
+    console.log('SMOKE_UNPUBLISH=' + JSON.stringify({ calls: unpublishCalls, deletedId: atResult.mentionsCreatedId || '' }));
+
     // @ 分享页链路：mock 生成的 URL 必须传入 cli.notifyMentions 的第三参
     const cliMessages = mockCli.sentMessages || [];
     const lastMsg = cliMessages[cliMessages.length - 1] || {};
@@ -529,6 +538,8 @@ app.whenReady().then(async () => {
       atResult.notifySentCount === 1 &&
       atResult.notifySentName === '测试联系人' &&
       pageUrlPassedToCli === true &&
+      // @ 分享页删除联动：删除含 @ 笔记时 unpublish 收到对应 id
+      unpublishCalls.includes(String(atResult.mentionsCreatedId || '')) &&
       !atResult.atErr;
 
     console.log('SMOKE_PASS=' + pass);
