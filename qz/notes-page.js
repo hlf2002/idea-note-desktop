@@ -23,6 +23,7 @@ const TEXT_MAX_LEN = 20000;
  * @param {object} opts
  * @param {string} opts.text 想法正文
  * @param {string} [opts.author] 作者昵称（展示用）
+ * @param {string} [opts.avatar] 作者头像 URL（展示用；无则回退首字母）
  * @param {string[]} [opts.tags] 标签名数组（不含 #）
  * @param {number} [opts.createdAt] 记录时间（毫秒）
  * @param {string} [opts.relayUrl] 中转服务基址（默认 RELAY_BASE_URL）
@@ -41,6 +42,7 @@ async function publishNotePage(opts = {}) {
   const body = {
     text: text.slice(0, TEXT_MAX_LEN),
     author: String(opts.author == null ? '' : opts.author).slice(0, 64),
+    avatar: String(opts.avatar == null ? '' : opts.avatar).slice(0, 500),
     tags: Array.isArray(opts.tags) ? opts.tags.map((t) => String(t)).filter((t) => t).slice(0, 20) : [],
     createdAt: Number(opts.createdAt || Date.now())
   };

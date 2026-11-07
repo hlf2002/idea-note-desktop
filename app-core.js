@@ -369,11 +369,12 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
   // 通知内容附上网站分享页链接（先生成分享页；失败则降级为不带链接的普通通知）
   ipcMain.handle('mentions:notify', (_e, text) => guard(async () => {
     const sender = (authStore.auth && authStore.auth.nickname) || '';
+    const avatar = (authStore.auth && authStore.auth.avatar) || '';
     let pageUrl = '';
     try {
       // 测试可注入 notesPageOverride 拦截真实发布；默认走 qz/notes-page.js
       const pub = notesPageOverride || publishNotePage;
-      pageUrl = await pub({ text, author: sender }) || '';
+      pageUrl = await pub({ text, author: sender, avatar }) || '';
     } catch (err) {
       console.warn('[mentions] 生成分享页失败，本次通知不带链接: ' + ((err && err.message) || err));
     }

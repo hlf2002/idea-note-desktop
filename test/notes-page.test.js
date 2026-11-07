@@ -27,6 +27,7 @@ test('publishNotePage: 发布成功返回 URL，请求体与头正确', async ()
   const url = await publishNotePage({
     text: '今天 @施展 讨论 #方案',
     author: '疯狐狸',
+    avatar: 'https://cdn.qzhuli.com/avatar/a1.png',
     tags: ['方案'],
     createdAt: 1700000000000,
     relayUrl: 'https://ideanote.7373.com.cn',
@@ -40,7 +41,14 @@ test('publishNotePage: 发布成功返回 URL，请求体与头正确', async ()
   assert.strictEqual(calls[0].init.headers['X-Ideanote-Pin'], 'pin_x');
   assert.strictEqual(calls[0].body.text, '今天 @施展 讨论 #方案');
   assert.strictEqual(calls[0].body.author, '疯狐狸');
+  assert.strictEqual(calls[0].body.avatar, 'https://cdn.qzhuli.com/avatar/a1.png');
   assert.deepStrictEqual(calls[0].body.tags, ['方案']);
+});
+
+test('publishNotePage: 无头像时 avatar 传空串', async () => {
+  const { impl, calls } = makeFetchImpl();
+  await publishNotePage({ text: 'x', fetchImpl: impl });
+  assert.strictEqual(calls[0].body.avatar, '');
 });
 
 test('publishNotePage: 无正文返回 null 且不发请求', async () => {
