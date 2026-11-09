@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld('ideaNote', {
   // @ 提及通知：本机 qz CLI 联系人 + 发布后通知
   mentions: {
     contacts: () => ipcRenderer.invoke('mentions:contacts'),
-    notify: (text) => ipcRenderer.invoke('mentions:notify', text)
+    notify: (text, ideaId) => ipcRenderer.invoke('mentions:notify', text, ideaId)
   },
   // 应用
   app: {

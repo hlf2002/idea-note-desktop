@@ -13,7 +13,7 @@
  */
 'use strict';
 
-const { ipcMain, shell, dialog, BrowserWindow } = require('electron');
+const { ipcMain, shell, dialog, BrowserWindow, app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -22,6 +22,7 @@ const { QzOpenApi } = require('./qz/openapi');
 const { IdeaSync } = require('./qz/sync');
 const { MediaStore, validateImage } = require('./qz/media');
 const { QzCli } = require('./qz/cli');
+const { publishNotePage, unpublishNotePages } = require('./qz/notes-page');
 const {
   RELAY_BASE_URL,
   QZ_APP_KEY,
@@ -34,7 +35,7 @@ const {
 /** 已知数据目录名：flomo-local → idea-note-local → 灵感笔记（应用改名/打包导致 userData 路径变化） */
 const KNOWN_DIR_NAMES = ['flomo-local', 'idea-note-local', '灵感笔记'];
 
-function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliOverride }) {
+function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliOverride, notesPageOverride, notesUnpublishOverride }) {
   const authStore = new AuthStore(authFile);
   const loaded = authStore.load();
   let legacyNotice = false;
@@ -88,7 +89,11 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
     indexFile: path.join(baseDir, 'media-index.json')
   });
   // 本机 qz CLI（@ 提及通知用；spawn 子进程，不可用时不阻塞发布）
-  const cli = qzCliOverride || new QzCli();
+  // appPath 用于探测应用捆绑的 qzhuliCLI（asar 内 dist/cmd.js，ELECTRON_RUN_AS_NODE 运行）；
+  // 开发态（npm start / smoke）app.getAppPath() 即项目根，node --test 不加载本模块。
+  const cli = qzCliOverride || new QzCli({
+    appPath: (app && typeof app.getAppPath === 'function') ? app.getAppPath() : process.cwd()
+  });
 
   // ---------- 登录态 ----------
   ipcMain.handle('auth:get', () => {
@@ -232,7 +237,20 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
   ipcMain.handle('sync:pull', () => guard(() => { requireAuth(); return sync.pullAll(); }));
   ipcMain.handle('sync:create', (_e, text, imageIds) => guard(() => { requireAuth(); return sync.createFromText(text, imageIds); }));
   ipcMain.handle('sync:update', (_e, id, text, imageIds) => guard(() => { requireAuth(); return sync.update(id, text, imageIds); }));
-  ipcMain.handle('sync:delete', (_e, id) => guard(() => { requireAuth(); return sync.remove(id); }));
+  ipcMain.handle('sync:delete', (_e, id) => guard(async () => {
+    requireAuth();
+    // 先删关联分享页（失败不阻塞笔记删除；服务端幂等，重复调用无副作用）
+    try {
+      const unpub = notesUnpublishOverride || unpublishNotePages;
+      const r = await unpub({ ideaId: String(id) });
+      if (!r || r.ok !== true) {
+        console.warn('[notes] 删除笔记时清理分享页失败（不阻塞）: ' + ((r && r.error) || 'unknown'));
+      }
+    } catch (err) {
+      console.warn('[notes] 删除笔记时清理分享页异常（不阻塞）: ' + ((err && err.message) || err));
+    }
+    return sync.remove(id);
+  }));
   ipcMain.handle('sync:trash', () => guard(() => { requireAuth(); return sync.pullTrash(); }));
   ipcMain.handle('sync:restore', (_e, id) => guard(() => { requireAuth(); return sync.restore(id); }));
   ipcMain.handle('sync:cache', () => sync.loadCache());
@@ -361,9 +379,20 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
     return { ok: true, contacts: await cli.listContacts() };
   }));
   // 发布后通知 @ 的联系人：解析正文 @昵称 → 匹配联系人 → 逐人发私信
-  ipcMain.handle('mentions:notify', (_e, text) => guard(async () => {
+  // 通知内容附上网站分享页链接（先生成分享页；失败则降级为不带链接的普通通知）
+  // 生成分享页时绑定笔记 id（ideaId）：删除笔记时按 ideaId 联动删除分享页
+  ipcMain.handle('mentions:notify', (_e, text, ideaId) => guard(async () => {
     const sender = (authStore.auth && authStore.auth.nickname) || '';
-    return cli.notifyMentions(text, sender);
+    const avatar = (authStore.auth && authStore.auth.avatar) || '';
+    let pageUrl = '';
+    try {
+      // 测试可注入 notesPageOverride 拦截真实发布；默认走 qz/notes-page.js
+      const pub = notesPageOverride || publishNotePage;
+      pageUrl = await pub({ text, author: sender, avatar, ideaId: String(ideaId || '') }) || '';
+    } catch (err) {
+      console.warn('[mentions] 生成分享页失败，本次通知不带链接: ' + ((err && err.message) || err));
+    }
+    return cli.notifyMentions(text, sender, pageUrl);
   }));
 
   // 后台保鲜：每 30 分钟检查，access_token 快过期或 refresh_token 需滚动时自动续期

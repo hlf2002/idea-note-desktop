@@ -12,7 +12,8 @@ const {
   pickConversation,
   makeNotifyText,
   sortContactsByLastActive,
-  attachAgentTitles
+  attachAgentTitles,
+  bundledCliEntry
 } = require('../qz/cli');
 
 // ============ extractMentions ============
@@ -101,30 +102,82 @@ test('resolveMentions: 昵称与备注指向同一人时按昵称命中', () => 
   assert.strictEqual(r[0].uid, 'u3');
 });
 
-// ============ pickConversation ============
-test('pickConversation: 优先单聊', () => {
+// ============ pickConversation（@ 通知：必须是「我+我的默认助理+对方+对方的默认助理」双人会话） ============
+test('pickConversation: 双方默认助理都在的双人会话命中', () => {
   const convs = [
-    { conversationId: 'g1', isGroup: 1 },
-    { conversationId: 's1', isGroup: 0 }
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '1', friendAgentId: '9' },
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '1', friendAgentId: '9' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '1', friendAgentId: '3' }
   ];
-  assert.strictEqual(pickConversation(convs).conversationId, 's1');
+  assert.strictEqual(pickConversation(convs, '1', '9').conversationId, 's1');
 });
 
-test('pickConversation: 只有群聊时用第一个', () => {
+test('pickConversation: 对方侧不是对方的默认助理（数字员工）不选', () => {
   const convs = [
-    { conversationId: 'g1', isGroup: 1 },
-    { conversationId: 'g2', isGroup: 1 }
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '1', friendAgentId: '3' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '1', friendAgentId: '9' }
   ];
-  assert.strictEqual(pickConversation(convs).conversationId, 'g1');
+  assert.strictEqual(pickConversation(convs, '1', '9').conversationId, 's2');
 });
 
-test('pickConversation: 空数组返回 null', () => {
-  assert.strictEqual(pickConversation([]), null);
-  assert.strictEqual(pickConversation(null), null);
-  assert.strictEqual(pickConversation(undefined), null);
+test('pickConversation: owner 侧不是我的默认助理不选', () => {
+  const convs = [
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '2', friendAgentId: '9' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '3', friendAgentId: '9' }
+  ];
+  assert.strictEqual(pickConversation(convs, '1', '9'), null);
 });
 
-// ============ makeNotifyText ============
+test('pickConversation: 群聊即使双方默认助理都在也不选（必须双人会话）', () => {
+  const convs = [
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '1', friendAgentId: '9' },
+    { conversationId: 'g2', isGroup: 1, ownerAgentId: '1', friendAgentId: '9' }
+  ];
+  assert.strictEqual(pickConversation(convs, '1', '9'), null);
+});
+
+test('pickConversation: 全部不匹配返回 null（触发创建）', () => {
+  const convs = [
+    { conversationId: 'g1', isGroup: 1, ownerAgentId: '9', friendAgentId: '1' },
+    { conversationId: 's1', isGroup: 0, ownerAgentId: '9', friendAgentId: '9' }
+  ];
+  assert.strictEqual(pickConversation(convs, '1', '9'), null);
+});
+
+test('pickConversation: 空数组 / null / undefined 返回 null', () => {
+  assert.strictEqual(pickConversation([], '1', '9'), null);
+  assert.strictEqual(pickConversation(null, '1', '9'), null);
+  assert.strictEqual(pickConversation(undefined, '1', '9'), null);
+});
+
+test('pickConversation: 缺 ownerAgentId / friendAgentId 的会话不算双人双助理会话', () => {
+  const convs = [
+    { conversationId: 's1', isGroup: 0, ownerAgentId: null, friendAgentId: '9' },
+    { conversationId: 's2', isGroup: 0, ownerAgentId: '1', friendAgentId: undefined },
+    { conversationId: 's3', isGroup: 0, ownerAgentId: undefined, friendAgentId: undefined }
+  ];
+  assert.strictEqual(pickConversation(convs, '1', '9'), null);
+});
+
+// ============ bundledCliEntry（应用捆绑 qzhuliCLI 探测） ============
+test('bundledCliEntry: 找到捆绑 cmd.js', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bundled-cli-test-'));
+  const pkgDir = path.join(tmp, 'node_modules', '@qzhuli', 'qzhuli-cli', 'dist');
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, 'cmd.js'), '#!/usr/bin/env node\n');
+  assert.strictEqual(bundledCliEntry(tmp), path.join(pkgDir, 'cmd.js'));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('bundledCliEntry: 无捆绑返回空串', () => {
+  assert.strictEqual(bundledCliEntry('/nonexistent-app-dir'), '');
+  assert.strictEqual(bundledCliEntry(''), '');
+  assert.strictEqual(bundledCliEntry(null), '');
+});
+
 test('makeNotifyText: 含发送者与全文', () => {
   const text = makeNotifyText('疯狐狸', '今天 #想法\n第二行');
   assert.ok(text.indexOf('疯狐狸') >= 0);
@@ -141,6 +194,22 @@ test('makeNotifyText: 无发送者用默认称谓', () => {
 
 test('makeNotifyText: null 正文不抛错', () => {
   assert.ok(makeNotifyText('某人', null).indexOf('') >= 0);
+});
+
+test('makeNotifyText: 带分享页 URL 附在末尾', () => {
+  const text = makeNotifyText('疯狐狸', '正文', 'https://ideanote.7373.com.cn/notes/abc123');
+  assert.ok(text.indexOf('查看完整笔记：https://ideanote.7373.com.cn/notes/abc123') >= 0);
+});
+
+test('makeNotifyText: URL 为空/空白时不带链接', () => {
+  const text = makeNotifyText('疯狐狸', '正文', '');
+  assert.ok(text.indexOf('查看完整笔记') < 0);
+  const text2 = makeNotifyText('疯狐狸', '正文', '   ');
+  assert.ok(text2.indexOf('查看完整笔记') < 0);
+  const text3 = makeNotifyText('疯狐狸', '正文', null);
+  assert.ok(text3.indexOf('查看完整笔记') < 0);
+  const text4 = makeNotifyText('疯狐狸', '正文', undefined);
+  assert.ok(text4.indexOf('查看完整笔记') < 0);
 });
 
 // ============ sortContactsByLastActive ============
