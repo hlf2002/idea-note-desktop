@@ -27,6 +27,8 @@ const RELAY_BASE_URL = 'https://ideanote.7373.com.cn';
 const REFRESH_AHEAD_MS = 5 * 60 * 1000;
 /** refresh_token 剩余不足 7 天时也强制刷新（滚动续期） */
 const REFRESH_ROTATE_AHEAD_MS = 7 * 24 * 3600 * 1000;
+/** refresh_token 兜底 TTL：平台实测不返回 refresh_expires_in，缺省按 90 天滚动，否则 90 天整点必掉登录 */
+const REFRESH_TOKEN_TTL_MS = 90 * 24 * 3600 * 1000;
 /** 单请求超时 */
 const REQUEST_TIMEOUT_MS = 20000;
 
@@ -134,7 +136,7 @@ class QzOpenApi {
       expires_at: nowMs() + (Number(result.expires_in) || 7200) * 1000,
       refresh_expires_at: result.refresh_expires_in
         ? nowMs() + Number(result.refresh_expires_in) * 1000
-        : 0,
+        : nowMs() + REFRESH_TOKEN_TTL_MS,
       authorized_at: nowMs()
     };
     this.setAuth(auth);
@@ -154,6 +156,16 @@ class QzOpenApi {
       err.authExpired = true;
       throw err;
     }
+    // 并发互斥：多个调用者共享同一个在途刷新（keepAlive 与业务 ensureFresh 可能同时触发，
+    // 平台对轮换前的旧 refresh_token 二次使用会报「重放」，第二个请求必失败）
+    if (!this._refreshPromise) {
+      this._refreshPromise = this._doRefresh().finally(() => { this._refreshPromise = null; });
+    }
+    return this._refreshPromise;
+  }
+
+  /** 实际执行 refresh 请求（由 refresh() 互斥保护，不单独调用） */
+  async _doRefresh() {
     const res = await this._rawRelay('POST', '/oauth/refresh', { refresh_token: this.auth.refresh_token });
     let json = null;
     try {
@@ -171,7 +183,7 @@ class QzOpenApi {
         expires_at: nowMs() + (Number(d.expires_in) || 7200) * 1000,
         refresh_expires_at: d.refresh_expires_in
           ? nowMs() + Number(d.refresh_expires_in) * 1000
-          : this.auth.refresh_expires_at
+          : nowMs() + REFRESH_TOKEN_TTL_MS
       };
       if (this.onTokens) await this.onTokens(this.auth);
       return this.auth;

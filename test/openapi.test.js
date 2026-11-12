@@ -149,6 +149,53 @@ test('refresh: 缺少 refresh_token → authExpired', async () => {
   await assert.rejects(() => api.refresh(), (err) => err.authExpired === true);
 });
 
+test('refresh: 平台不返回 refresh_expires_in → 按 90 天兜底滚动（否则 90 天整点必掉登录）', async () => {
+  const { api } = makeApi(() => res({ code: 0, data: { access_token: 'ou_3', refresh_token: 'or_3', expires_in: 7200 } }));
+  api.setAuth({ ...AUTH, refresh_expires_at: Date.now() + 30 * 24 * 3600 * 1000 });
+  const a = await api.refresh();
+  assert.strictEqual(a.access_token, 'ou_3');
+  assert.ok(a.refresh_expires_at > Date.now() + 89 * 24 * 3600 * 1000, '缺省时必须按轮换时刻滚动 90 天');
+});
+
+test('refresh: 并发调用只发一次请求（防平台判 refresh_token 重放）', async () => {
+  let n = 0;
+  const { api, calls } = makeApi(async () => {
+    n += 1;
+    await new Promise((r) => setTimeout(r, 30));
+    return res({ code: 0, data: { access_token: 'ou_c', refresh_token: 'or_c', expires_in: 7200 } });
+  });
+  api.setAuth(AUTH);
+  const [a, b] = await Promise.all([api.refresh(), api.refresh()]);
+  assert.strictEqual(n, 1, '并发 refresh 必须共享同一个在途请求');
+  assert.strictEqual(a.access_token, 'ou_c');
+  assert.strictEqual(b.access_token, 'ou_c');
+  assert.strictEqual(calls.length, 1);
+});
+
+test('refresh: 并发调用共享失败结果，失败后下次可重试', async () => {
+  let n = 0;
+  const { api } = makeApi(async () => {
+    n += 1;
+    await new Promise((r) => setTimeout(r, 10));
+    if (n === 1) return res({ code: 1, invalid: false, message: 'boom' }, 502);
+    return res({ code: 0, data: { access_token: 'ou_ok', refresh_token: 'or_ok', expires_in: 7200 } });
+  });
+  api.setAuth(AUTH);
+  await assert.rejects(() => Promise.all([api.refresh(), api.refresh()]), /boom/);
+  const a = await api.refresh();
+  assert.strictEqual(a.access_token, 'ou_ok', '失败清锁后必须能再次刷新');
+  assert.strictEqual(n, 2);
+});
+
+test('acceptLoginResult: 平台不返回 refresh_expires_in → 兜底 90 天', async () => {
+  const { api } = makeApi(() => res({}));
+  await api.acceptLoginResult({
+    status: 'ok', q_uid: 'q_9', nickname: 'n', avatar: 'a',
+    access_token: 'ou_new', refresh_token: 'or_new', expires_in: 7200
+  });
+  assert.ok(api.auth.refresh_expires_at > Date.now() + 89 * 24 * 3600 * 1000);
+});
+
 test('ensureFresh: token 都足够新时不发请求', async () => {
   const { api, calls } = makeApi(() => res({}));
   api.setAuth(AUTH);
