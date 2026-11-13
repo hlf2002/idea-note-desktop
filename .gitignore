@@ -8,3 +8,4 @@ out/
 .vscode/
 .idea/
 .release.config.json
+.workbuddy/

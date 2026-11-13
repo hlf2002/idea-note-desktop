@@ -14,7 +14,7 @@
 ## 常用命令
 
 - 启动：`npm start`（Electron 后台运行）
-- 单元测试：`npm test`（`node --test test/*.test.js`，Node 20 需 shell 展开 glob）
+- 单元测试：`npm test`（`node --test "test/**/*.test.js"`，glob 由测试运行器展开，跨平台一致；要求 Node ≥ 21）
 - 集成冒烟：`npx electron smoke-test.js`（通过时输出 SMOKE_PASS=true，覆盖项目根 screenshot.png）
 - 构建：`npm run build` / `build:mac` / `build:win`
 
