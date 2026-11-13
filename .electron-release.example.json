@@ -1,0 +1,87 @@
+{
+  "_说明": "项目级打包发布配置模板。复制为 .electron-release.json 放在项目根目录后生效（electron-release 技能的 probe/build 会读取）；不提交到 git（已在 .gitignore）。certificateSha1 属机器相关值，填本机证书存储里的指纹。",
+
+  "project": {
+    "repo": "hlf2002/idea-note-desktop",
+    "defaultBranch": "main"
+  },
+
+  "version": {
+    "bumpDefault": "patch",
+    "tagPrefix": "v"
+  },
+
+  "build": {
+    "command": null,
+    "outputDir": "dist",
+    "targets": {
+      "mac": ["dmg", "zip"],
+      "win": ["nsis", "zip"],
+      "linux": null
+    }
+  },
+
+  "release": {
+    "mode": "generic",
+    "ghRelease": true,
+    "feedManifest": true,
+    "ssh": {
+      "_说明": "mode=generic 时必填。域名 ideanote.7373.com.cn 被本地代理劫持时 host 填真实 IP",
+      "host": null,
+      "user": "root",
+      "port": 22,
+      "identity": "~/.ssh/id_ed25519",
+      "dir": "/var/www/ideanote/autoupdates/"
+    }
+  },
+
+  "signing": {
+    "_说明": "本机钥匙串已有 Developer ID Application: Shooter Technology (Zhuhai) Co., Ltd (FY4X5PTS6Q)；另有两张 Apple Development 不能用于分发。多证书并存时建议 export CSC_NAME='Developer ID Application: Shooter Technology (Zhuhai) Co., Ltd' 显式指定，避免自动发现选错。",
+    "macIdentity": null,
+    "notarize": true,
+    "hardenedRuntime": true,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+
+    "windows": {
+      "_说明": "证书三选一：证书存储(certificateSha1/certificateSubjectName) / PFX(certificateFile) / 云签名器。无证书时置 method=none 明确不签名（或在 CI 用 --allow-unsigned），未签名包会被 SmartScreen 拦截，需手动'仍要运行'。publisherName 必须与证书 Subject 完全一致（建议完整 DN）。",
+      "method": null,
+      "_method取值": ["certificateSha1", "certificateSubjectName", "certificateFile", "none"],
+      "certificateSha1": null,
+      "certificateSubjectName": null,
+      "certificateFile": null,
+      "publisherName": null,
+      "timestampServer": "http://timestamp.digicert.com",
+      "cloudSigner": {
+        "enabled": false,
+        "requireLoggedIn": true,
+        "prewarm": true,
+        "pinCacheMinutes": 180,
+        "expectedHasPrivateKey": true
+      }
+    },
+
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true
+    }
+  },
+
+  "manualGates": {
+    "confirmVersionBump": true,
+    "confirmRemoteWrite": true,
+    "confirmCertificateSubject": true
+  },
+
+  "verify": {
+    "requireE2EUpgradeTest": true
+  },
+
+  "notes": [
+    "mac 公证需 APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD（可选 APPLE_TEAM_ID）；公证只作用于 .app，dmg 需额外 npm run staple",
+    "win 收尾与校验：npm run package:win（内含 scripts/finalize-win.js 三断言 + PE 载荷架构 + Authenticode）",
+    "win 必须在 Windows 宿主构建：依赖含 better-sqlite3 等原生模块（经 @qzhuli/qzhuli-cli 传入），交叉构建不可用"
+  ]
+}

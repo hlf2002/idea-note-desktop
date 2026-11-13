@@ -10,10 +10,13 @@
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
     "package": "bash scripts/release.sh --package",
+    "package:win": "electron-builder --win && node scripts/finalize-win.js",
+    "staple": "bash scripts/staple-dmg.sh",
     "release": "bash scripts/release.sh",
     "release:dry": "bash scripts/release.sh --dry-run"
   },
   "license": "MIT",
+  "author": "射手科技（珠海）有限公司",
   "build": {
     "appId": "com.ideanote.desktop",
     "productName": "灵感笔记",
@@ -55,7 +58,8 @@
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
-      "notarize": true
+      "notarize": true,
+      "gatekeeperAssess": false
     },
     "dmg": {
       "contents": [

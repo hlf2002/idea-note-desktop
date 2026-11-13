@@ -8,4 +8,5 @@ out/
 .vscode/
 .idea/
 .release.config.json
+.electron-release.json
 .workbuddy/

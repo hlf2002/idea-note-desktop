@@ -16,7 +16,10 @@
 - 启动：`npm start`（Electron 后台运行）
 - 单元测试：`npm test`（`node --test "test/**/*.test.js"`，glob 由测试运行器展开，跨平台一致；要求 Node ≥ 21）
 - 集成冒烟：`npx electron smoke-test.js`（通过时输出 SMOKE_PASS=true，覆盖项目根 screenshot.png）
-- 构建：`npm run build` / `build:mac` / `build:win`
+- 构建（裸，无收尾）：`npm run build` / `build:mac` / `build:win`
+- 打包 mac：`npm run package`（测试 → electron-builder → ASCII 改名 → 清单 sha512 校验）
+- 打包 win：`npm run package:win`（构建 → 收尾 + 三断言/PE 架构/Authenticode 校验，须 Windows 宿主）
+- dmg 装订：`npm run staple`（公证成功后执行；electron-builder 的 notarize 不覆盖 dmg）
 
 ## 架构速览
 
