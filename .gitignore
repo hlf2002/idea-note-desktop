@@ -10,3 +10,4 @@ out/
 .release.config.json
 .electron-release.json
 .workbuddy/
+deploy/artifacts-*/
