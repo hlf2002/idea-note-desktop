@@ -21,8 +21,8 @@
  * 签名失败/未登录的处理：默认停止（退出码 2），给出排查清单；要产出未签名包必须显式
  * --allow-unsigned（或 method:"none" / --no-sign），finalize 阶段会记录 SmartScreen 后果。
  *
- * PIN 预热（SimplySign）：自动签名前先对 1KB 临时文件真签一次，把 OTP/PIN 交互前置；
- * 超过 120s 视为预热失败并停止（对应技能 M7：卡在 Submitting digest for signing 的预防）。
+ * PIN 预热（SimplySign）：自动签名前先对 makecab 现做的全新 CAB（合法未签名）真签一次，
+ * 把 OTP/PIN 交互前置；超过 120s 视为预热失败并停止（对应技能 M7：卡在 Submitting digest for signing 的预防）。
  * --warmup 仅预热不构建。
  *
  * 用法：
@@ -190,19 +190,31 @@ function findSigntool() {
   return null;
 }
 
-/** SimplySign PIN 预热：对临时文件真签一次，把 OTP/PIN 交互前置。成功返回 true */
+/** SimplySign PIN 预热：对全新 CAB 真签一次，把 OTP/PIN 交互前置。成功返回 true
+ *  预热目标必须是「结构合法且未签名」的文件：手造字节流不是合法 PE 会被拒签
+ *  （file format cannot be signed），微软签名文件又涉及重复签语义——
+ *  makecab.exe（系统自带）现做的新 CAB 两个坑都避开 */
 function prewarm(resolution, timestampServer) {
   if (process.platform !== 'win32') return true;
   if (!resolution.sha1) return true;
   const signtool = findSigntool();
-  const scratch = path.join(os.tmpdir(), 'win-sign-prewarm-' + process.pid + '.exe');
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'win-sign-prewarm-'));
+  const dummy = path.join(scratchDir, 'dummy.txt');
+  const scratch = path.join(scratchDir, 'prewarm.cab');
   try {
     if (!signtool) {
       console.log('▸ 未找到 Windows SDK signtool.exe，跳过预热（真实签名由 electron-builder 完成；' +
         '若卡在 Submitting digest for signing 请先在 SimplySign 客户端完成 OTP/PIN）');
       return true;
     }
-    fs.writeFileSync(scratch, Buffer.alloc(1024, 0x4d));
+    fs.writeFileSync(dummy, 'SimplySign PIN prewarm payload\n');
+    const makecab = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'makecab.exe');
+    const mk = spawnSync(makecab, [dummy, scratch], { encoding: 'utf8', timeout: 30000 });
+    if (mk.status !== 0 || !fs.existsSync(scratch)) {
+      console.log('▸ makecab 生成预热文件失败，跳过预热（真实签名由 electron-builder 完成；' +
+        '若卡在 Submitting digest for signing 请先在 SimplySign 客户端完成 OTP/PIN）');
+      return true;
+    }
     console.log('▸ SimplySign PIN 预热（最多 120s）：' + signtool);
     const r = spawnSync(signtool, [
       'sign', '/sha1', resolution.sha1, '/fd', 'SHA256',
@@ -216,7 +228,7 @@ function prewarm(resolution, timestampServer) {
     console.log('✓ 预热成功：PIN/OTP 已缓存（约 3h），真实签名不会再卡在 Submitting digest');
     return true;
   } finally {
-    try { fs.unlinkSync(scratch); } catch (e) { /* ignore */ }
+    try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch (e) { /* 清理失败不阻断 */ }
   }
 }
 
