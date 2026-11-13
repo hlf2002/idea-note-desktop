@@ -44,7 +44,7 @@
     "entitlementsInherit": "build/entitlements.mac.inherit.plist",
 
     "windows": {
-      "_说明": "证书三选一：证书存储(certificateSha1/certificateSubjectName) / PFX(certificateFile) / 云签名器。无证书时置 method=none 明确不签名（或在 CI 用 --allow-unsigned），未签名包会被 SmartScreen 拦截，需手动'仍要运行'。publisherName 必须与证书 Subject 完全一致（建议完整 DN）。",
+      "_说明": "签名来源五级解析：命令行/环境变量(Win_SIGN_SHA1) > 本文件 > package.json > 证书存储自动发现。自动发现=win32 上 Cert:\\CurrentUser\\My 恰好一张有效含私钥的代码签名证书——SimplySign 登录后挂载的即此类，npm run package:win 会自动注入指纹+RFC3161 时间戳并先做 PIN 预热。未登录（零张证书）或多张证书时默认停止（退出码 2）并给排查清单；要出未签名包必须显式 --allow-unsigned 或置 method=none（SmartScreen 会拦截）。publisherName 自动取证书 Subject（满足与证书主体一致的硬约束）。",
       "method": null,
       "_method取值": ["certificateSha1", "certificateSubjectName", "certificateFile", "none"],
       "certificateSha1": null,

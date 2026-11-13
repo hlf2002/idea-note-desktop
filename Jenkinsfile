@@ -34,8 +34,9 @@ pipeline {
         choice(name: 'TARGET', choices: ['all', 'win', 'mac'], description: '目标平台安装包')
         booleanParam(name: 'RUN_TESTS', defaultValue: true, description: '打包前先跑单元测试')
         booleanParam(name: 'NOTARIZE', defaultValue: false, description: 'mac 构建是否做 Apple 公证（需证书与凭据就绪）')
-        string(name: 'WIN_SIGN_SHA1', defaultValue: '', description: 'Windows 代码签名证书 SHA1 指纹（留空 = 不签名，SmartScreen 会拦截）')
-        string(name: 'WIN_PUBLISHER_NAME', defaultValue: '', description: 'signtool publisherName（可选，须与证书 Subject 完全一致）')
+        string(name: 'WIN_SIGN_SHA1', defaultValue: '', description: 'Windows 代码签名证书 SHA1 指纹（留空 = 自动发现：证书存储唯一可用证书即 SimplySign 登录后自动签名）')
+        string(name: 'WIN_PUBLISHER_NAME', defaultValue: '', description: 'signtool publisherName（可选，自动模式下取证书 Subject）')
+        booleanParam(name: 'WIN_ALLOW_UNSIGNED', defaultValue: false, description: '证书不可用时仍继续出未签名包（SmartScreen 会拦截）')
     }
 
     environment {
@@ -47,7 +48,7 @@ pipeline {
     }
 
     stages {
-        stage('Windows 安装包（NSIS + zip）') {
+        stage('Windows 安装包（NSIS + zip，SimplySign 自动签名）') {
             when { expression { params.TARGET == 'all' || params.TARGET == 'win' } }
             agent { label 'windows' }
             steps {
@@ -57,23 +58,15 @@ pipeline {
                     if (params.RUN_TESTS) {
                         bat 'npm test'
                     }
-                    // 签名注入与 electron-release 技能 build.mjs 同款：不改 package.json，
-                    // 经 CLI 参数传入证书指纹 + RFC3161 时间戳；publisherName 须与证书 Subject 一致
-                    def signArgs = ''
-                    if (params.WIN_SIGN_SHA1?.trim()) {
-                        signArgs = "--c.win.signtoolOptions.certificateSha1=${params.WIN_SIGN_SHA1.trim()} " +
-                            "--c.win.signtoolOptions.rfc3161TimeStampServer=${WIN_TIMESTAMP_URL}"
-                        if (params.WIN_PUBLISHER_NAME?.trim()) {
-                            signArgs += " --c.win.signtoolOptions.publisherName=${params.WIN_PUBLISHER_NAME.trim()}"
-                        }
-                        bat "npx electron-builder --win ${signArgs}"
-                    } else {
-                        bat 'npm run build:win'
+                    // win-sign.js 统一入口：显式参数 > 环境变量 > .electron-release.json >
+                    // package.json > 证书存储自动发现（SimplySign 登录后唯一可用证书即自动签名，
+                    // 并先做 PIN 预热防止卡在 Submitting digest）。未登录/多证书默认停止，
+                    // WIN_ALLOW_UNSIGNED=true 显式放行未签名包。
+                    withEnv(["WIN_SIGN_SHA1=${params.WIN_SIGN_SHA1 ?: ''}",
+                             "WIN_PUBLISHER_NAME=${params.WIN_PUBLISHER_NAME ?: ''}"]) {
+                        def flags = params.WIN_ALLOW_UNSIGNED ? ' --allow-unsigned' : ''
+                        bat "node scripts/win-sign.js${flags}"
                     }
-                    // 收尾 + 三断言（清单存在/版本一致/sha512 配对）+ PE 载荷架构 + Authenticode；
-                    // 未签名路径必须显式 --allow-unsigned 才放行（记 SKIP 并明示 SmartScreen 后果）
-                    def unsignedFlag = params.WIN_SIGN_SHA1?.trim() ? '' : '--allow-unsigned'
-                    bat "node scripts/finalize-win.js ${unsignedFlag}".trim()
                 }
             }
             post {

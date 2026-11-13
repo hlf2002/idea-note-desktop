@@ -10,7 +10,7 @@
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
     "package": "bash scripts/release.sh --package",
-    "package:win": "electron-builder --win && node scripts/finalize-win.js",
+    "package:win": "node scripts/win-sign.js",
     "staple": "bash scripts/staple-dmg.sh",
     "release": "bash scripts/release.sh",
     "release:dry": "bash scripts/release.sh --dry-run"

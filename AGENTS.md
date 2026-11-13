@@ -18,7 +18,7 @@
 - 集成冒烟：`npx electron smoke-test.js`（通过时输出 SMOKE_PASS=true，覆盖项目根 screenshot.png）
 - 构建（裸，无收尾）：`npm run build` / `build:mac` / `build:win`
 - 打包 mac：`npm run package`（测试 → electron-builder → ASCII 改名 → 清单 sha512 校验）
-- 打包 win：`npm run package:win`（构建 → 收尾 + 三断言/PE 架构/Authenticode 校验，须 Windows 宿主）
+- 打包 win：`npm run package:win`（win-sign.js 解析签名来源：显式 > env > 配置 > 证书存储自动发现，SimplySign 登录即自动签名+PIN 预热；构建 → 收尾三断言校验；须 Windows 宿主；`--dry-run` 可预演决策）
 - dmg 装订：`npm run staple`（公证成功后执行；electron-builder 的 notarize 不覆盖 dmg）
 
 ## 架构速览
