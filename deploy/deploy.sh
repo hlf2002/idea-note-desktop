@@ -141,7 +141,7 @@ run_task() {
   else
     echo "✗ $platform 远程打包失败（SSH 退出码 $?）。" >&2
     echo "  提示：win 失败先看是否 SimplySign 未登录/PIN 未预热（脚本会打印排查清单）。" >&2
-    eval "STATUS_${platform}=FAIL"
+    eval "STATUS_${status_key}=FAIL"
     return 1
   fi
 
