@@ -72,6 +72,13 @@ if [[ ! "$REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] ||
   printf '请选择 main 或有效的 tag，当前 REF=%s\n' "$REF" >&2
   exit 2
 fi
+# 非 main 一律按 tag 检出：本地须先见到该 tag，否则远程按 refs/tags/<分支> fetch
+# 才失败，报错位置误导排障
+if [ "$REF" != "main" ] &&
+   ! git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/$REF" >/dev/null; then
+  printf 'REF=%s 不是本仓库已知 tag（先 git fetch --tags 再试），仅支持 main 或已存在的 tag\n' "$REF" >&2
+  exit 2
+fi
 
 echo "========== 构建参数 =========="
 printf 'TARGET=%s REF=%s COLLECT=%s DRY_RUN=%s\n' "$TARGET" "$REF" "$MODE_COLLECT" "$DRY_RUN"
@@ -105,6 +112,9 @@ remote_checkout() {
 run_task() {
   local platform="$1" host="$2" port="$3" user="$4" proj="$5" package_dir="$6" manifest="$7"
   local scp_path status="FAIL"
+  # 状态变量统一大写键：bash 变量区分大小写，STATUS_win 写入不会被 STATUS_WIN 读到
+  local status_key
+  status_key="$(printf '%s' "$platform" | tr '[:lower:]' '[:upper:]')"
 
   echo ""
   echo "========== ${platform}：$user@$host:$port 检出 $REF 并打包 =========="
@@ -120,7 +130,7 @@ run_task() {
   if [ "$DRY_RUN" = "1" ]; then
     echo "[dry-run] ssh -p $port $user@$host \"$remote_cmd\""
     echo "[dry-run] scp -P $port \"$scp_path\" -> $ARTIFACTS_DIR/$platform/"
-    eval "STATUS_${platform}=DRY"
+    eval "STATUS_${status_key}=DRY"
     return 0
   fi
 
@@ -138,14 +148,21 @@ run_task() {
     mkdir -p "$ARTIFACTS_DIR/$platform"
     echo "--- 回收产物 $scp_path ---"
     if scp -P "$port" "$scp_path" "$ARTIFACTS_DIR/$platform/pkg.tgz"; then
-      tar -xzf "$ARTIFACTS_DIR/$platform/pkg.tgz" -C "$ARTIFACTS_DIR/$platform"
-      rm -f "$ARTIFACTS_DIR/$platform/pkg.tgz"
-      echo "--- 本地校验清单 sha512（${manifest}）---"
-      if node "$REPO_ROOT/scripts/release-manifest.js" verify "$ARTIFACTS_DIR/$platform/$manifest" "$ARTIFACTS_DIR/$platform"; then
-        status="PASS（产物已回收至 $ARTIFACTS_DIR/${platform}）"
+      # 解包失败（传输截断等）单独报因，不落入 sha512 校验误导排障
+      if tar -xzf "$ARTIFACTS_DIR/$platform/pkg.tgz" -C "$ARTIFACTS_DIR/$platform"; then
+        rm -f "$ARTIFACTS_DIR/$platform/pkg.tgz"
+        echo "--- 本地校验清单 sha512（${manifest}）---"
+        if node "$REPO_ROOT/scripts/release-manifest.js" verify \
+          "$ARTIFACTS_DIR/$platform/$package_dir/$manifest" "$ARTIFACTS_DIR/$platform/$package_dir"; then
+          status="PASS（产物已回收至 $ARTIFACTS_DIR/$platform/$package_dir）"
+        else
+          echo "✗ $platform 清单与产物 sha512 不配对，产物不可投放！" >&2
+          status="FAIL（sha512 不配对）"
+        fi
       else
-        echo "✗ $platform 清单与产物 sha512 不配对，产物不可投放！" >&2
-        status="FAIL（sha512 不配对）"
+        echo "✗ ${platform} 回收包解压失败（tar，疑似传输截断）。" >&2
+        rm -f "$ARTIFACTS_DIR/$platform/pkg.tgz"
+        status="FAIL（回收包解压失败）"
       fi
     else
       echo "✗ ${platform} 产物回收失败（scp）。" >&2
@@ -155,7 +172,7 @@ run_task() {
     status="PASS（COLLECT_ARTIFACTS=0，产物留在打包机 $proj/dist）"
   fi
 
-  eval "STATUS_${platform}=\"\$status\""
+  eval "STATUS_${status_key}=\"\$status\""
 }
 
 STATUS_WIN="SKIP"; STATUS_MAC="SKIP"
