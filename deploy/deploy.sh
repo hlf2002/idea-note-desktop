@@ -97,13 +97,16 @@ ssh -G -o StrictHostKeyChecking=accept-new nonexistent.invalid >/dev/null 2>&1 \
 SSH_OPTS=(-o StrictHostKeyChecking="$SSH_STRICT" -o ConnectTimeout=15)
 
 # 仅降级路径（SSH_STRICT=yes）使用：幂等注入打包机 host key，使后续 ssh/scp 的
-# 严格校验在首次连接即可通过；重复调用不产生重复条目
+# 严格校验在首次连接即可通过；重复调用不产生重复条目。
+# 用管道而非 < <(...) 进程替换：Jenkins Execute shell 以 sh 调用本脚本（bash POSIX
+# 模式禁用进程替换，报 syntax error near unexpected token '<'）；循环在子 shell 中
+# 执行不影响结果——循环体只有写文件的副作用，无变量回传需求。
 ensure_known_host() {  # host port
   local kh="${HOME}/.ssh/known_hosts" entry
   mkdir -p "${HOME}/.ssh" && touch "$kh"
-  while IFS= read -r entry; do
+  ssh-keyscan -p "$2" "$1" 2>/dev/null | while IFS= read -r entry; do
     grep -qxF "$entry" "$kh" || printf '%s\n' "$entry" >> "$kh"
-  done < <(ssh-keyscan -p "$2" "$1" 2>/dev/null)
+  done
 }
 
 # 远程检出（阶段 1/2）：目录缺失先 clone（首跑自举）；脏树直接失败不覆盖打包机上的修改；
