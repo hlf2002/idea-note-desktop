@@ -86,6 +86,7 @@ New Item → **Pipeline** → Configure：
 | 测试挂了想跳过 | RUN_TESTS=false（不建议，发布门禁靠它） |
 | 想只构建一个平台 | TARGET=win 或 mac（分别跑，收尾目录互相独立） |
 | deploy.sh 报 Permission denied (publickey,…) | 调度机公钥未装到打包机；见第九节前置 1 |
+| deploy.sh 报 `Unknown option: -C`（随后误报「不是本仓库已知 tag」） | 调度机 git < 1.8.5（如 CentOS 7 的 1.8.3.1）不支持 `git -C`；脚本已改用 cd 子 shell 规避（2026-11-17），其他脚本再报此错则升级调度机 git |
 
 ## 八、发布到自动更新服务器（当前未接，人工执行）
 

@@ -56,11 +56,12 @@ case "$TARGET" in
 esac
 
 # REF：显式参数优先；未传时由本仓库实际 HEAD 推断，不猜版本号
+# 不用 git -C：需要 git >= 1.8.5，Jenkins 主控（CentOS 7）的 git 1.8.3.1 报 Unknown option
 REF="${TAG:-${tag:-${BRANCH:-${branch:-${GIT_BRANCH:-}}}}}"
 if [ -z "$REF" ]; then
-  REF="$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  REF="$(cd "$REPO_ROOT" && git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
   if [ -z "$REF" ]; then
-    REF="$(git -C "$REPO_ROOT" describe --tags --exact-match 2>/dev/null || true)"
+    REF="$(cd "$REPO_ROOT" && git describe --tags --exact-match 2>/dev/null || true)"
   fi
 fi
 case "$REF" in
@@ -74,9 +75,9 @@ if [[ ! "$REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] ||
   exit 2
 fi
 # 非 main 一律按 tag 检出：本地须先见到该 tag，否则远程按 refs/tags/<分支> fetch
-# 才失败，报错位置误导排障
+# 才失败，报错位置误导排障（git -C 兼容性同上，改用 cd 子 shell）
 if [ "$REF" != "main" ] &&
-   ! git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/$REF" >/dev/null; then
+   ! (cd "$REPO_ROOT" && git rev-parse -q --verify "refs/tags/$REF") >/dev/null; then
   printf 'REF=%s 不是本仓库已知 tag（先 git fetch --tags 再试），仅支持 main 或已存在的 tag\n' "$REF" >&2
   exit 2
 fi
@@ -88,56 +89,75 @@ printf '产物目录=%s\n' "$ARTIFACTS_DIR"
 # 认证与参考脚本一致：不强制 BatchMode，密钥（agent）或交互密码均可
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
 
-# 远程检出：目录缺失先 clone（首跑自举）；脏树直接失败不覆盖打包机上的修改；
-# main 取 origin/main，其余按 tag 取
+# 远程检出（阶段 1/2）：目录缺失先 clone（首跑自举）；脏树直接失败不覆盖打包机上的修改；
+# fetch 后确保工作区处于目标 ref 最新——main 取 origin/main，其余按 tag 取
 remote_checkout() {
   local platform="$1" proj="$2"
-  local git_fetch
+  local git_fetch tgt_ref
   if [ "$REF" = "main" ]; then
-    git_fetch="git fetch origin +refs/heads/main:refs/remotes/origin/main && git checkout --detach refs/remotes/origin/main"
+    git_fetch="git fetch origin +refs/heads/main:refs/remotes/origin/main"
+    tgt_ref="refs/remotes/origin/main"
   else
-    git_fetch="git fetch --force origin refs/tags/$REF:refs/tags/$REF && git checkout --detach refs/tags/$REF"
+    git_fetch="git fetch --force origin refs/tags/$REF:refs/tags/$REF"
+    tgt_ref="refs/tags/$REF"
   fi
   if [ "$platform" = "win" ]; then
-    # cmd 方言：cd /d + call npm（Windows OpenSSH 默认 shell）
-    printf 'if not exist "%s\\.git" git clone %s "%s" & cd /d %s && git diff --exit-code && git diff --cached --exit-code && %s && git rev-parse HEAD && call npm ci' \
-      "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch"
+    # cmd 方言做 SHA 串比较语法脆弱且无法在本机验证；无条件 detach 检出同样保证
+    # 工作区处于最新，git rev-parse HEAD 即留痕证明
+    printf 'if not exist "%s\\.git" git clone %s "%s" & cd /d %s && git diff --exit-code && git diff --cached --exit-code && %s && git checkout --detach %s && git rev-parse HEAD && call npm ci' \
+      "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref"
   else
+    # sh 方言：fetch 后显式比对 HEAD 与目标 ref——相同报「已是最新」跳过检出，
+    # 不同则 detach 检出并报「已更新」，两种情况均以 rev-parse HEAD 收口留痕。
     # mac 侧 $proj 不加引号：路径含 ~ 时需在远程 shell 展开；因此 MAC_PROJECT_DIR 不支持空格
-    printf '([ -d %s/.git ] || git clone %s %s) && cd %s && git diff --exit-code && git diff --cached --exit-code && %s && git rev-parse HEAD && npm ci' \
-      "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch"
+    printf '([ -d %s/.git ] || git clone %s %s) && cd %s && git diff --exit-code && git diff --cached --exit-code && %s && tgt=$(git rev-parse %s) && cur=$(git rev-parse HEAD) && { [ "$cur" = "$tgt" ] && echo "仓库已是最新：$tgt" || { git checkout --detach "$tgt" && echo "已更新至最新：$cur -> $tgt"; }; } && git rev-parse HEAD && npm ci' \
+      "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref"
   fi
 }
 
-# 单平台任务：远程打包 -> 回收产物 -> 本地清单校验。状态写入 STATUS_<platform>
+# 单平台任务：远程检出校验 -> 远程打包 -> 回收产物 -> 本地清单校验。状态写入 STATUS_<PLATFORM>
 run_task() {
   local platform="$1" host="$2" port="$3" user="$4" proj="$5" package_dir="$6" manifest="$7"
-  local scp_path status="FAIL"
+  local checkout_cmd package_cmd scp_path status="FAIL"
   # 状态变量统一大写键：bash 变量区分大小写，STATUS_win 写入不会被 STATUS_WIN 读到
   local status_key
   status_key="$(printf '%s' "$platform" | tr '[:lower:]' '[:upper:]')"
 
   echo ""
-  echo "========== ${platform}：$user@$host:$port 检出 $REF 并打包 =========="
+  echo "========== ${platform} 1/2：$user@$host:$port 检出 ${REF}（存在性/最新性校验）=========="
 
   if [ "$platform" = "win" ]; then
-    remote_cmd="$(remote_checkout win "$proj") && call npm run package:win && tar -czf dist/pkg-win.tgz -C dist package-win"
+    checkout_cmd="$(remote_checkout win "$proj")"
+    package_cmd="cd /d $proj && call npm run package:win && tar -czf dist/pkg-win.tgz -C dist package-win"
     scp_path="$user@$host:$(printf '%s' "$proj" | sed 's#\\\\#/#g; s#\\#/#g')/dist/pkg-win.tgz"
   else
-    remote_cmd="$(remote_checkout mac "$proj") && npm run package && tar -czf dist/pkg-mac.tgz -C dist package"
+    checkout_cmd="$(remote_checkout mac "$proj")"
+    package_cmd="cd $proj && npm run package && tar -czf dist/pkg-mac.tgz -C dist package"
     scp_path="$user@$host:$proj/dist/pkg-mac.tgz"
   fi
 
   if [ "$DRY_RUN" = "1" ]; then
-    echo "[dry-run] ssh -p $port $user@$host \"$remote_cmd\""
+    echo "[dry-run] ssh -p $port $user@$host \"$checkout_cmd\""
+    echo "[dry-run] ssh -p $port $user@$host \"$package_cmd\""
     echo "[dry-run] scp -P $port \"$scp_path\" -> $ARTIFACTS_DIR/$platform/"
     eval "STATUS_${status_key}=DRY"
     return 0
   fi
 
-  echo "--- 远程构建（日志实时回传）---"
-  if ssh "${SSH_OPTS[@]}" -p "$port" "$user@$host" "$remote_cmd"; then
-    echo "--- 远程构建成功 ---"
+  echo "--- 远程检出（日志实时回传）---"
+  if ssh "${SSH_OPTS[@]}" -p "$port" "$user@$host" "$checkout_cmd"; then
+    echo "--- 检出完成：仓库已处于 $REF 最新 ---"
+  else
+    echo "✗ $platform 仓库检出/最新性校验失败（SSH 退出码 $?）。" >&2
+    eval "STATUS_${status_key}=FAIL"
+    return 1
+  fi
+
+  echo ""
+  echo "========== ${platform} 2/2：执行打包流程 =========="
+  echo "--- 远程打包（日志实时回传）---"
+  if ssh "${SSH_OPTS[@]}" -p "$port" "$user@$host" "$package_cmd"; then
+    echo "--- 远程打包成功 ---"
   else
     echo "✗ $platform 远程打包失败（SSH 退出码 $?）。" >&2
     echo "  提示：win 失败先看是否 SimplySign 未登录/PIN 未预热（脚本会打印排查清单）。" >&2
@@ -155,7 +175,7 @@ run_task() {
         echo "--- 本地校验清单 sha512（${manifest}）---"
         if node "$REPO_ROOT/scripts/release-manifest.js" verify \
           "$ARTIFACTS_DIR/$platform/$package_dir/$manifest" "$ARTIFACTS_DIR/$platform/$package_dir"; then
-          status="PASS（产物已回收至 $ARTIFACTS_DIR/$platform/$package_dir）"
+          status="PASS（产物已回收至 $ARTIFACTS_DIR/$platform/${package_dir}）"
         else
           echo "✗ $platform 清单与产物 sha512 不配对，产物不可投放！" >&2
           status="FAIL（sha512 不配对）"
