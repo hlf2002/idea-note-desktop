@@ -85,7 +85,44 @@ New Item → **Pipeline** → Configure：
 | `npm test` 报 glob/参数错误 | 节点 Node 版本 < 21，升级 |
 | 测试挂了想跳过 | RUN_TESTS=false（不建议，发布门禁靠它） |
 | 想只构建一个平台 | TARGET=win 或 mac（分别跑，收尾目录互相独立） |
+| deploy.sh 报 Permission denied (publickey,…) | 调度机公钥未装到打包机；见第九节前置 1 |
 
 ## 八、发布到自动更新服务器（当前未接，人工执行）
 
 Jenkins 目前只做**构建 + 归档 + 校验**；发布（GitHub Release + 推清单到 ideanote.7373.com.cn/autoupdates/）涉及远端写操作，仍由人工在 mac 上执行 `npm run release -- patch`（内置版本递增、tag 先行、清单原子上传、线上校验）。如需把发布接进流水线，另行评审凭据与放行门禁（技能铁律 5：远端写操作前必须人工确认）。
+
+## 九、多机打包调度（deploy/deploy.sh，SSH 直连打包机）
+
+不依赖 Jenkins 节点：本机（或任意调度节点）执行 `deploy/deploy.sh`，由它 SSH 到两台打包机检出、打包、scp 回收产物并做 sha512 校验。调度模式与 q_assistant_desktop 的 deploy.sh 一致；两台打包机与 q_assistant 共用（仅项目目录不同）。
+
+| 项 | Windows 机 | macOS 机 |
+|---|---|---|
+| 地址 | keke@106.52.168.174:23491 | hulifeng@106.52.168.174:23490 |
+| 项目目录 | `D:\work\test\idea-note-desktop` | `~/dev/idea-note-desktop` |
+| 打包命令 | `npm run package:win`（SimplySign 自动签名） | `npm run package` |
+
+### 触发方式与参数（环境变量注入，大小写兼容）
+
+| 变量 | 说明 | 示例 |
+|---|---|---|
+| `TARGET` | win / mac / all（默认 all；单机失败不影响另一台，汇总退出码） | `TARGET=win bash deploy/deploy.sh` |
+| `TAG`/`BRANCH`/`GIT_BRANCH` | 构建哪个 tag 或 main；缺省由调度机仓库 HEAD 推断 | `TAG=v1.2.3 TARGET=win bash deploy/deploy.sh` |
+| `DRY_RUN` | 1 = 只打印将执行的远程命令，不连接机器 | `DRY_RUN=1 bash deploy/deploy.sh` |
+| `COLLECT_ARTIFACTS` | 0 = 产物留在打包机 `dist/`，不回收 | 默认 1 |
+| `ARTIFACTS_DIR` | 产物回收目录 | 默认 `deploy/artifacts-<时间戳>` |
+
+### 前置条件
+
+1. **免密公钥（无人值守必需）**：2026-11-17 实测 BatchMode 下两台机器均 `Permission denied (publickey,…)`，需先装公钥：
+   ```bash
+   ssh-copy-id -p 23491 keke@106.52.168.174
+   ssh-copy-id -p 23490 hulifeng@106.52.168.174
+   ```
+   注意：若 keke 属 Windows 管理员组，公钥须写入服务端 `C:\ProgramData\ssh\administrator_authorized_keys`（并收紧 ACL），而不是 `~/.ssh/authorized_keys`——Windows OpenSSH 免密最常见的坑。交互密码模式仅适合手动触发。
+2. 调度节点需 Node.js ≥ 20（回收后本地跑 `release-manifest.js verify`）与 git。
+3. 打包机首跑 clone 走 GitHub 全量（~58 MiB pack），国内慢链路可能超时——建议按第一节方案 A 用 bundle 自举首拉，此后每轮只拉增量。
+4. win 打包机需 SimplySign 已登录且跑过一次 `node scripts/win-sign.js --warmup`（PIN 缓存约 3 小时）。
+
+### Jenkins 接入（可选，与 label agent 模式二选一）
+
+若让 Jenkins 走此模式：Pipeline from SCM 检出仓库后执行 `TARGET=${params.TARGET} bash deploy/deploy.sh`，归档 `deploy/artifacts-*/**`。调度节点（主控或轻量 agent）需满足上述前置条件；无需在两台打包机上装 Jenkins agent。回收产物结构为 `artifacts-<时间戳>/<platform>/<package|package-win>/`（安装包 + blockmap + 清单，已过 sha512 配对校验）。
