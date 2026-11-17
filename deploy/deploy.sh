@@ -86,8 +86,25 @@ echo "========== 构建参数 =========="
 printf 'TARGET=%s REF=%s COLLECT=%s DRY_RUN=%s\n' "$TARGET" "$REF" "$MODE_COLLECT" "$DRY_RUN"
 printf '产物目录=%s\n' "$ARTIFACTS_DIR"
 
-# 认证与参考脚本一致：不强制 BatchMode，密钥（agent）或交互密码均可
-SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
+# 认证与参考脚本一致：不强制 BatchMode，密钥（agent）或交互密码均可。
+# StrictHostKeyChecking=accept-new 需 OpenSSH >= 7.6；CentOS 7 主控的 7.4p1 在解析
+# 选项值这一步即报 unsupported option 退出 255（与 known_hosts 内容无关）。探测到
+# 不支持时降级为「keyscan 预注入 + yes」组合：首次自动接受（TOFU）、密钥变化仍
+# 拒绝，语义与 accept-new 对齐。
+SSH_STRICT="accept-new"
+ssh -G -o StrictHostKeyChecking=accept-new nonexistent.invalid >/dev/null 2>&1 \
+  || SSH_STRICT="yes"
+SSH_OPTS=(-o StrictHostKeyChecking="$SSH_STRICT" -o ConnectTimeout=15)
+
+# 仅降级路径（SSH_STRICT=yes）使用：幂等注入打包机 host key，使后续 ssh/scp 的
+# 严格校验在首次连接即可通过；重复调用不产生重复条目
+ensure_known_host() {  # host port
+  local kh="${HOME}/.ssh/known_hosts" entry
+  mkdir -p "${HOME}/.ssh" && touch "$kh"
+  while IFS= read -r entry; do
+    grep -qxF "$entry" "$kh" || printf '%s\n' "$entry" >> "$kh"
+  done < <(ssh-keyscan -p "$2" "$1" 2>/dev/null)
+}
 
 # 远程检出（阶段 1/2）：目录缺失先 clone（首跑自举）；脏树直接失败不覆盖打包机上的修改；
 # fetch 后确保工作区处于目标 ref 最新——main 取 origin/main，其余按 tag 取
@@ -143,6 +160,9 @@ run_task() {
     eval "STATUS_${status_key}=DRY"
     return 0
   fi
+
+  # 降级路径（老 OpenSSH）首次连接前注入 host key；dry-run 已在上面提前返回
+  [ "$SSH_STRICT" = "accept-new" ] || ensure_known_host "$host" "$port"
 
   echo "--- 远程检出（日志实时回传）---"
   if ssh "${SSH_OPTS[@]}" -p "$port" "$user@$host" "$checkout_cmd"; then
