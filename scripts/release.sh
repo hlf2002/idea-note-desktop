@@ -9,7 +9,10 @@
 # 发布各步骤可重入：Release 已存在会补传资产，清单整体覆盖。
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# 项目根按脚本自身位置定位（对齐 deploy/deploy.sh 的 BASH_SOURCE 约定）：
+# $0 在被 source 时指向父 shell、经 PATH 调用时指向脚本真实路径之外，都会 cd 错目录
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
 
 MODE=release
 BUMP=patch

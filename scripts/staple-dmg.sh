@@ -3,7 +3,9 @@
 # 前置：公证已成功（APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD 凭据齐全）。
 # 用法：npm run staple   （构建并公证成功后执行）
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# 项目根按脚本自身位置定位（同 release.sh：$0 被 source 时指向父 shell，会 cd 错目录）
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
 
 shopt -s nullglob
 dmgs=(dist/*.dmg)

@@ -25,10 +25,14 @@
 # 退出码：0 全部成功；1 至少一台失败；2 参数错误
 set -uo pipefail
 
+# 项目根按脚本自身位置定位，先于一切使用路径的默认值计算
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 TARGET="${TARGET:-${target:-all}}"
 MODE_COLLECT="${COLLECT_ARTIFACTS:-1}"
 DRY_RUN="${DRY_RUN:-0}"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/artifacts-$(date +%Y%m%d-%H%M%S)}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-$SCRIPT_DIR/artifacts-$(date +%Y%m%d-%H%M%S)}"
 
 # ---- 机器配置区（环境变量可覆盖）----
 CLONE_URL="${CLONE_URL:-https://github.com/hlf2002/idea-note-desktop.git}"
@@ -42,9 +46,6 @@ MAC_PORT="${MAC_PORT:-23490}"
 MAC_USER="${MAC_USER:-hulifeng}"
 MAC_PROJECT_DIR="${MAC_PROJECT_DIR:-~/dev/idea-note-desktop}"
 # ------------------------------------
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 case "$TARGET" in
   win|mac|all) ;;
