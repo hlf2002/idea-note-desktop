@@ -11,3 +11,6 @@ out/
 .electron-release.json
 .workbuddy/
 deploy/artifacts-*/
+
+# qzhuli-cli 安装产物：installed_at 每次安装变化，属生成物不入库
+**/.qzhuli-manifest.json
