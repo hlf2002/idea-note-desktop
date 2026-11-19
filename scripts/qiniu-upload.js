@@ -12,11 +12,15 @@
  *
  * 凭据来源（优先级从高到低，均不写在代码里）：
  *   1. 环境变量：QINIU_ACCESS_KEY / QINIU_SECRET_KEY / QINIU_BUCKET
- *                可选 QINIU_PREFIX / QINIU_UPLOAD_HOST / QINIU_PUBLIC_BASE / QINIU_RS_HOST
+ *                可选 QINIU_PREFIX / QINIU_UPLOAD_HOST / QINIU_PUBLIC_BASE / QINIU_RS_HOST /
+ *                QINIU_CDN_HOST
  *   2. .release.config.json 的 qiniu 段（已 gitignore，模板 .release.config.example.json）
  *
  * 顺序契约：先传安装包与 blockmap，最后传 latest*.yml。
  *   electron-updater 只在清单更新后感知新版本，先传包可杜绝「清单已更新但包 404」。
+ *
+ * 发布生效：清单传完后修正其 Content-Type（text/yaml; charset=utf-8，防浏览器按 GBK 解码乱码），
+ *   再提交一次 CDN 刷新 —— 否则客户端可能继续拿到被缓存的旧清单（--no-cdn 可跳过）。
  *
  * 可重入：同 key 覆盖写（putPolicy.insertOnly=0），重复执行不残留旧对象；
  *   每个对象上传后立即 stat 校验字节数，不一致即失败退出（不会留下半套产物）。
@@ -34,12 +38,18 @@ const CONFIG_FILE = path.join(ROOT, '.release.config.json');
 const DEFAULT_PREFIX = 'autoupdates/';
 const DEFAULT_UPLOAD_HOST = 'https://upload.qiniup.com';
 const DEFAULT_RS_HOST = 'https://rs.qiniu.com';
+const DEFAULT_CDN_HOST = 'https://fusion.qiniuapi.com';
 const DEFAULT_RETRIES = 3;
 const RETRY_DELAY_MS = 800;
 const TOKEN_TTL_SECONDS = 3600;
 // 单个对象的上传超时：120MB 在 2Mbps 上行约 8 分钟，留足余量；可用环境变量覆盖
 const UPLOAD_TIMEOUT_MS = Number(process.env.QINIU_UPLOAD_TIMEOUT_MS || 600000);
 const STAT_TIMEOUT_MS = 30000;
+
+// 清单是 UTF-8（里面可能有中文文件名）。七牛对 .yml 推断 text/yaml 不带 charset，
+// 浏览器会按系统码页（zh-CN 是 GBK）解码，于是「灵感笔记」显示成乱码。
+// electron-updater 一律按 UTF-8 读，不受影响；这里只为人肉查看/排障服务。
+const MANIFEST_CONTENT_TYPE = 'text/yaml; charset=utf-8';
 
 // electron-builder 产出的清单名：latest-mac.yml / latest.yml / latest-linux.yml（及其 .yaml 变体）
 const MANIFEST_PATTERN = /^latest(?:-[a-z]+)?\.ya?ml$/;
@@ -156,6 +166,7 @@ function resolveConfig({ env = process.env, config = readConfigFile(), requireCr
   const prefix = pick('QINIU_PREFIX', 'prefix', DEFAULT_PREFIX);
   const uploadHost = pick('QINIU_UPLOAD_HOST', 'uploadHost', DEFAULT_UPLOAD_HOST);
   const rsHost = pick('QINIU_RS_HOST', 'rsHost', DEFAULT_RS_HOST);
+  const cdnHost = pick('QINIU_CDN_HOST', 'cdnHost', DEFAULT_CDN_HOST);
   const publicBase = pick('QINIU_PUBLIC_BASE', 'publicBase', '');
 
   const missing = [
@@ -169,8 +180,8 @@ function resolveConfig({ env = process.env, config = readConfigFile(), requireCr
       `缺少七牛凭据：${missing.join(' / ')}\n` +
       '  方式一（推荐，不入库）：在 .release.config.json 增加 qiniu 段\n' +
       '    { "qiniu": { "accessKey": "...", "secretKey": "...", "bucket": "...", "prefix": "autoupdates/" } }\n' +
-      `    模板见 .release.config.example.json（该文件已在 .gitignore，不会被提交）\n` +
-      '  方式二（CI）：以环境变量注入，见 docs/JENKINS.md 第十节'
+      `    模板见 .release.config.example.json（模板入库，只有真凭据的 .release.config.json 被 gitignore）\n` +
+      '  方式二（CI）：以环境变量注入，见 docs/DEPLOY.md §3.2'
     );
   }
 
@@ -181,6 +192,7 @@ function resolveConfig({ env = process.env, config = readConfigFile(), requireCr
     prefix: normalizePrefix(prefix.value),
     uploadHost: withScheme(uploadHost.value, DEFAULT_UPLOAD_HOST),
     rsHost: withScheme(rsHost.value, DEFAULT_RS_HOST),
+    cdnHost: withScheme(cdnHost.value, DEFAULT_CDN_HOST),
     publicBase: publicBase.value ? stripTrailingSlash(withScheme(publicBase.value, '')) : '',
     from: { accessKey: accessKey.from, bucket: bucket.from, prefix: prefix.from, uploadHost: uploadHost.from }
   };
@@ -231,15 +243,17 @@ function verifyLocalDigests(dir, manifests) {
   try {
     ({ verifyDigests } = require('./release-manifest'));
   } catch (e) {
-    warn(`跳过清单 sha512 预校验（${e.code === 'MODULE_NOT_FOUND' ? '缺少 js-yaml，先 npm install' : e.message}）`);
-    return false;
+    // 校验是发布门禁，不是可选增强：加载不到就说明依赖不全，直接判配置错误，
+    // 否则会「看起来校验了、其实整批对象裸传」。
+    throw new ConfigError(
+      `无法完成 sha512 预校验（发布门禁，不允许裸传）：${e.code === 'MODULE_NOT_FOUND' ? '缺少 js-yaml，先 npm install' : e.message}`
+    );
   }
   for (const name of manifests) {
     const manifestText = fs.readFileSync(path.join(dir, name), 'utf8');
     const lines = verifyDigests({ manifestText, dir });
     ok(`${name} 与目录内 ${lines.length} 个产物 sha512 配对`);
   }
-  return true;
 }
 
 // ---------------------------------------------------------------- 网络动作
@@ -338,10 +352,17 @@ async function statObject({ cfg, key, fetchImpl = globalThis.fetch }) {
   return { size: Number(body.fsize), hash: body.hash, mime: body.mimeType };
 }
 
+/** 公网访问 URL：逐段 percent-encode（中文 dmg 名必须编码），对象 key 本身仍是原始 UTF-8 */
+function publicUrlFor(cfg, key) {
+  if (!cfg.publicBase) return '';
+  const encoded = key.split('/').map(encodeURIComponent).join('/');
+  return `${cfg.publicBase}/${encoded}`;
+}
+
 /** 公网可达性（可选）：HEAD 公开域名，确认 CDN 上能拿到该对象 */
 async function checkPublic({ cfg, key, size, fetchImpl = globalThis.fetch }) {
   if (!cfg.publicBase) return { skipped: true };
-  const url = `${cfg.publicBase}/${key}`;
+  const url = publicUrlFor(cfg, key);
   try {
     const res = await fetchImpl(url, { method: 'HEAD', signal: AbortSignal.timeout(10000) });
     const length = Number(res.headers.get('content-length'));
@@ -349,6 +370,59 @@ async function checkPublic({ cfg, key, size, fetchImpl = globalThis.fetch }) {
   } catch (e) {
     return { url, status: 0, error: e.message, size };
   }
+}
+
+/**
+ * 修正对象 MIME：`POST /chgm/<urlsafe_b64(bucket:key)>/mime/<urlsafe_b64(mime)>`，body 为空。
+ * 与官方 SDK 的 `changeMimeOp`（qiniu/storage/rs.js）同形。
+ */
+async function changeMime({ cfg, key, mime = MANIFEST_CONTENT_TYPE, fetchImpl = globalThis.fetch }) {
+  const requestPath = `/chgm/${encodedEntry(cfg.bucket, key)}/mime/${urlSafeBase64(mime)}`;
+  const res = await fetchImpl(`${cfg.rsHost}${requestPath}`, {
+    method: 'POST',
+    headers: {
+      Authorization: managementToken({ accessKey: cfg.accessKey, secretKey: cfg.secretKey, path: requestPath })
+    },
+    signal: AbortSignal.timeout(STAT_TIMEOUT_MS)
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    const error = new UploadError(`修正 ${key} 的 Content-Type 失败（HTTP ${res.status}）：${text.slice(0, 200)}`);
+    error.hint = explainFailure(text, res.status);
+    throw error;
+  }
+  return { mime };
+}
+
+/**
+ * 刷新 CDN：`POST /v2/tune/refresh`，body `{"urls":[...]}`。
+ * 签名只覆盖 path —— 官方 SDK 这里显式用空 body 生成凭证（qiniu/cdn.js: generateAccessToken(mac, url, '')），
+ * 把 JSON body 算进签名反而会被拒。
+ */
+async function refreshCdn({ cfg, urls, fetchImpl = globalThis.fetch }) {
+  const requestPath = '/v2/tune/refresh';
+  const res = await fetchImpl(`${cfg.cdnHost}${requestPath}`, {
+    method: 'POST',
+    headers: {
+      Authorization: managementToken({ accessKey: cfg.accessKey, secretKey: cfg.secretKey, path: requestPath }),
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ urls }),
+    signal: AbortSignal.timeout(STAT_TIMEOUT_MS)
+  });
+  const text = await res.text();
+  let body = {};
+  try { body = JSON.parse(text); } catch (e) { /* 非 JSON 响应用原文兜底 */ }
+  const reason = body.error || text;
+  if (!res.ok || (body.code != null && Number(body.code) !== 200)) {
+    const error = new UploadError(`刷新 CDN 失败（HTTP ${res.status}${body.code ? ` / code ${body.code}` : ''}）：${String(reason).slice(0, 200)}`);
+    // 刷新接口的 403 常见是「URL 不在该域名下」，不是凭据问题，别按 explainFailure 判成密钥错误
+    error.hint = /domain|域名|not in/i.test(String(reason))
+      ? 'URL 不在该 CDN 域名下：核对 QINIU_PUBLIC_BASE 是否就是为该 bucket 绑定的域名（且不含 prefix）'
+      : explainFailure(reason, res.status);
+    throw error;
+  }
+  return { urls, requestId: body.requestId || body.request_id || '' };
 }
 
 // ---------------------------------------------------------------- CLI
@@ -362,6 +436,8 @@ const HELP = `用法：node scripts/qiniu-upload.js --dir <产物目录> [选项
   --check              不写数据，只核对远端是否已有同名同大小对象
   --skip-unchanged     远端已存在且大小一致时跳过上传（省流量，默认仍覆盖写）
   --strict-public      公网 HEAD 失败即判失败（默认仅告警，避免 CDN 缓存误伤发布）
+  --no-cdn             跳过清单 Content-Type 修正与 CDN 刷新
+  --strict-cdn         Content-Type / CDN 刷新失败即判失败（默认仅告警）
   --retries <n>        单文件重试次数，默认 ${DEFAULT_RETRIES}
   -h, --help           显示本帮助
 
@@ -369,7 +445,7 @@ const HELP = `用法：node scripts/qiniu-upload.js --dir <产物目录> [选项
 `;
 
 function parseArgs(argv) {
-  const opts = { dir: '', prefix: null, dryRun: false, check: false, skipUnchanged: false, strictPublic: false, retries: DEFAULT_RETRIES };
+  const opts = { dir: '', prefix: null, dryRun: false, check: false, skipUnchanged: false, strictPublic: false, noCdn: false, strictCdn: false, retries: DEFAULT_RETRIES };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const value = () => {
@@ -386,6 +462,8 @@ function parseArgs(argv) {
     else if (arg === '--check') opts.check = true;
     else if (arg === '--skip-unchanged') opts.skipUnchanged = true;
     else if (arg === '--strict-public') opts.strictPublic = true;
+    else if (arg === '--no-cdn') opts.noCdn = true;
+    else if (arg === '--strict-cdn') opts.strictCdn = true;
     else if (arg === '--retries') opts.retries = Number(value());
     else if (arg === '-h' || arg === '--help') opts.help = true;
     else throw new ConfigError(`未知参数：${arg}（--help 查看用法）`);
@@ -460,6 +538,34 @@ async function main(argv) {
     }
   }
 
+  // ---- 发布生效的最后一步：清单 Content-Type + CDN 刷新
+  // 上传成功不等于客户端能看到新版本：清单若被 CDN 缓存，客户端会继续拿旧版本。
+  if (!failures.length && !opts.check && !opts.noCdn) {
+    for (const name of plan.manifests) {
+      const key = objectKey(cfg.prefix, name);
+      try {
+        await changeMime({ cfg, key });
+        ok(`${key}  Content-Type=${MANIFEST_CONTENT_TYPE}`);
+      } catch (e) {
+        if (opts.strictCdn) failures.push(`${key}：${e.message}`);
+        else warn(`${key} 的 Content-Type 未修正（不影响 electron-updater）：${e.message}`);
+      }
+    }
+
+    const urls = plan.all.map((name) => publicUrlFor(cfg, objectKey(cfg.prefix, name))).filter(Boolean);
+    if (urls.length === 0) {
+      warn('未配置 QINIU_PUBLIC_BASE，跳过 CDN 刷新（没有公网域名可刷新）');
+    } else {
+      try {
+        const refreshed = await refreshCdn({ cfg, urls });
+        ok(`CDN 刷新已提交（${refreshed.urls.length} 个 URL${refreshed.requestId ? `，requestId=${refreshed.requestId}` : ''}）`);
+      } catch (e) {
+        if (opts.strictCdn) failures.push(`CDN 刷新：${e.message}`);
+        else warn(`CDN 刷新失败（对象已落盘，可稍后重跑）：${e.message}`);
+      }
+    }
+  }
+
   if (failures.length) {
     console.error(`\u001b[31m\u2717 七牛投放失败 ${failures.length} 项\u001b[0m`);
     for (const line of failures) console.error(`  ${line}`);
@@ -475,6 +581,7 @@ async function main(argv) {
 module.exports = {
   ConfigError,
   UploadError,
+  main,
   urlSafeBase64,
   normalizePrefix,
   objectKey,
@@ -489,7 +596,11 @@ module.exports = {
   explainFailure,
   putObject,
   statObject,
+  publicUrlFor,
   checkPublic,
+  changeMime,
+  refreshCdn,
+  MANIFEST_CONTENT_TYPE,
   parseArgs
 };
 

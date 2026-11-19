@@ -318,6 +318,260 @@ test('checkPublic: 200 且长度一致可通过', async () => {
   assert.equal(result.length, 12);
 });
 
+// ------------------------------------------------------------ 清单 MIME 与 CDN 刷新
+
+test('changeMime: 走 rs 域名 /chgm/<encEntry>/mime/<encMime>，签名只覆盖 path', async () => {
+  const calls = [];
+  const result = await qiniu.changeMime({
+    cfg: { ...CFG, cdnHost: 'https://fusion.qiniuapi.com' },
+    key: 'autoupdates/latest-mac.yml',
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return response(200, '{}');
+    }
+  });
+
+  const entry = qiniu.encodedEntry(CFG.bucket, 'autoupdates/latest-mac.yml');
+  const encMime = qiniu.urlSafeBase64(qiniu.MANIFEST_CONTENT_TYPE);
+  assert.equal(calls[0].url, `https://rs.qiniu.com/chgm/${entry}/mime/${encMime}`);
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(result.mime, 'text/yaml; charset=utf-8');
+
+  // 复算签名：管理凭证只签 path，不签 body（此处 body 为空）
+  const requestPath = new URL(calls[0].url).pathname;
+  const expected = crypto.createHmac('sha1', CFG.secretKey).update(`${requestPath}\n`).digest('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  assert.equal(calls[0].init.headers.Authorization, `QBox ${CFG.accessKey}:${expected}`);
+});
+
+test('changeMime: 失败时带处置建议抛出', async () => {
+  await assert.rejects(
+    qiniu.changeMime({
+      cfg: CFG,
+      key: 'k.yml',
+      fetchImpl: async () => response(401, { error: 'bad token' })
+    }),
+    (e) => e instanceof qiniu.UploadError && /凭据被拒/.test(e.hint)
+  );
+});
+
+test('refreshCdn: POST /v2/tune/refresh，body 是 urls 且不参与签名', async () => {
+  const calls = [];
+  const urls = ['https://cdn.example.com/autoupdates/a.dmg', 'https://cdn.example.com/autoupdates/latest-mac.yml'];
+  const result = await qiniu.refreshCdn({
+    cfg: { ...CFG, cdnHost: 'https://fusion.qiniuapi.com' },
+    urls,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return response(200, { code: 200, requestId: 'req-1' });
+    }
+  });
+
+  assert.equal(calls[0].url, 'https://fusion.qiniuapi.com/v2/tune/refresh');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { urls });
+
+  // 关键：签名串只有 path + \n。官方 SDK 用空 body 生成凭证，把 JSON 算进去会被拒
+  const expected = crypto.createHmac('sha1', CFG.secretKey).update('/v2/tune/refresh\n').digest('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  assert.equal(calls[0].init.headers.Authorization, `QBox ${CFG.accessKey}:${expected}`);
+  assert.equal(result.requestId, 'req-1');
+});
+
+test('refreshCdn: HTTP 200 但 code 非 200 也判失败', async () => {
+  await assert.rejects(
+    qiniu.refreshCdn({
+      cfg: CFG,
+      urls: ['https://cdn.example.com/x'],
+      fetchImpl: async () => response(200, { code: 400100, error: 'url not in domain list' })
+    }),
+    /刷新 CDN 失败/
+  );
+});
+
+test('refreshCdn: 域名未绑定类错误不误判成凭据问题', async () => {
+  const error = await qiniu.refreshCdn({
+    cfg: CFG,
+    urls: ['https://wrong.example.com/x'],
+    fetchImpl: async () => response(403, { code: 40131001, error: 'url not in domain list' })
+  }).catch((e) => e);
+  assert.ok(error instanceof qiniu.UploadError);
+  assert.match(error.hint, /QINIU_PUBLIC_BASE/);
+  assert.doesNotMatch(error.hint, /凭据被拒/);
+});
+
+test('publicUrlFor: 中文 key 逐段 percent-encode，未配 publicBase 返回空串', () => {
+  const cfg = { ...CFG, publicBase: 'https://cdn.example.com' };
+  assert.equal(
+    qiniu.publicUrlFor(cfg, 'autoupdates/灵感笔记-1.2.4-arm64.dmg'),
+    'https://cdn.example.com/autoupdates/%E7%81%B5%E6%84%9F%E7%AC%94%E8%AE%B0-1.2.4-arm64.dmg'
+  );
+  assert.equal(qiniu.publicUrlFor({ ...CFG, publicBase: '' }, 'k'), '');
+});
+
+test('main: 安装包先传、清单最后传，之后才修 MIME 并刷 CDN', async () => {
+  const dmg = 'dmg-bytes';
+  const manifest = [
+    'version: 1.2.4',
+    'files:',
+    '  - url: 灵感笔记-1.2.4-arm64.dmg',
+    `    sha512: ${crypto.createHash('sha512').update(dmg).digest('base64')}`,
+    `    size: ${Buffer.byteLength(dmg)}`,
+    'path: 灵感笔记-1.2.4-arm64.dmg'
+  ].join('\n');
+  const dir = tempDir({ '灵感笔记-1.2.4-arm64.dmg': dmg, 'latest-mac.yml': manifest });
+
+  const calls = [];
+  const statCount = new Map();
+  // /stat/<urlsafe_b64(bucket:key)>：解出 key 再读本地文件大小，否则 fsize 校验必挂
+  const localOf = (url) => {
+    const entry = url.split('/stat/')[1];
+    const decoded = Buffer.from(entry.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const key = decoded.slice(decoded.indexOf(':') + 1);
+    const name = key.replace(/^autoupdates\//, '');
+    return { key, name, size: fs.statSync(path.join(dir, name)).size };
+  };
+  const fetchImpl = async (url, init = {}) => {
+    if (url === 'https://upload.qiniup.com/') {
+      const key = init.body.get('key');
+      calls.push({ kind: 'upload', url, key });
+      return response(200, { key, hash: 'Fake' });
+    }
+    if (url.startsWith('https://rs.qiniu.com/stat/')) {
+      const { key, size } = localOf(url);
+      const seen = (statCount.get(key) || 0) + 1;
+      statCount.set(key, seen);
+      calls.push({ kind: 'stat', url, key });
+      // 第一次查不到 → 触发上传；上传后再查返回真实大小
+      if (seen === 1) return response(612, { error: 'no such file' });
+      return response(200, { fsize: size, hash: 'Fake' });
+    }
+    if (url.startsWith('https://rs.qiniu.com/chgm/')) {
+      calls.push({ kind: 'chgm', url });
+      return response(200, '{}');
+    }
+    if (url === 'https://fusion.qiniuapi.com/v2/tune/refresh') {
+      calls.push({ kind: 'refresh', url, body: JSON.parse(init.body) });
+      return response(200, { code: 200, requestId: 'req-e2e' });
+    }
+    if (url.startsWith('https://cdn.example.com/')) {
+      calls.push({ kind: 'head', url });
+      const name = decodeURIComponent(url.split('/').pop());
+      return response(200, '', { 'content-length': String(fs.statSync(path.join(dir, name)).size) });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const saved = { ...process.env };
+  const realFetch = globalThis.fetch;
+  Object.assign(process.env, {
+    QINIU_ACCESS_KEY: CFG.accessKey,
+    QINIU_SECRET_KEY: CFG.secretKey,
+    QINIU_BUCKET: CFG.bucket,
+    QINIU_PREFIX: CFG.prefix,
+    QINIU_PUBLIC_BASE: 'https://cdn.example.com'
+  });
+  globalThis.fetch = fetchImpl;
+  try {
+    const code = await qiniu.main(['--dir', dir]);
+    assert.equal(code, 0);
+
+    const uploads = calls.filter((c) => c.kind === 'upload').map((c) => c.key);
+    assert.deepEqual(uploads, ['autoupdates/灵感笔记-1.2.4-arm64.dmg', 'autoupdates/latest-mac.yml'], '清单必须最后上传');
+
+    const chgmAt = calls.findIndex((c) => c.kind === 'chgm');
+    const refreshAt = calls.findIndex((c) => c.kind === 'refresh');
+    const lastUploadAt = calls.map((c) => c.kind).lastIndexOf('upload');
+    assert.ok(chgmAt > lastUploadAt, 'Content-Type 修正在上传之后');
+    assert.ok(refreshAt > chgmAt, 'CDN 刷新在最后');
+
+    const refreshed = calls[refreshAt].body.urls;
+    assert.equal(refreshed.length, 2);
+    assert.ok(refreshed.some((u) => u.includes('%E7%81%B5%E6%84%9F%E7%AC%94%E8%AE%B0')), '中文 dmg 的刷新 URL 必须编码');
+  } finally {
+    globalThis.fetch = realFetch;
+    process.env = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('main: --no-cdn 时不发 chgm / refresh', async () => {
+  const dmg = 'dmg-bytes';
+  const manifest = [
+    'version: 1.2.4',
+    'files:',
+    '  - url: idea-note-1.2.4-arm64.dmg',
+    `    sha512: ${crypto.createHash('sha512').update(dmg).digest('base64')}`,
+    `    size: ${Buffer.byteLength(dmg)}`,
+    'path: idea-note-1.2.4-arm64.dmg'
+  ].join('\n');
+  const dir = tempDir({ 'idea-note-1.2.4-arm64.dmg': dmg, 'latest-mac.yml': manifest });
+
+  const kinds = [];
+  const statSeen = new Set();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    if (url === 'https://upload.qiniup.com/') {
+      kinds.push('upload');
+      return response(200, { key: init.body.get('key'), hash: 'F' });
+    }
+    if (url.startsWith('https://rs.qiniu.com/stat/')) {
+      const entry = url.split('/stat/')[1];
+      const decoded = Buffer.from(entry.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+      const key = decoded.slice(decoded.indexOf(':') + 1);
+      if (!statSeen.has(key)) { statSeen.add(key); return response(612, {}); }
+      const name = key.replace(/^autoupdates\//, '');
+      return response(200, { fsize: fs.statSync(path.join(dir, name)).size });
+    }
+    if (url.includes('/chgm/') || url.includes('/v2/tune/refresh')) { kinds.push('cdn'); return response(200, '{}'); }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+  const saved = { ...process.env };
+  Object.assign(process.env, {
+    QINIU_ACCESS_KEY: CFG.accessKey, QINIU_SECRET_KEY: CFG.secretKey,
+    QINIU_BUCKET: CFG.bucket, QINIU_PREFIX: CFG.prefix
+  });
+  try {
+    assert.equal(await qiniu.main(['--dir', dir, '--no-cdn']), 0);
+    assert.equal(kinds.includes('cdn'), false);
+  } finally {
+    globalThis.fetch = realFetch;
+    process.env = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('main: 清单 sha512 与产物不符时直接失败，且一个对象都不上传', async () => {
+  const dir = tempDir({
+    'a.zip': 'hello',
+    'latest-mac.yml': [
+      'version: 1.2.4',
+      'files:',
+      '  - url: a.zip',
+      '    sha512: WRONG',
+      '    size: 5'
+    ].join('\n')
+  });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    throw new Error(`校验未通过时不该联网：${url}`);
+  };
+  const saved = { ...process.env };
+  Object.assign(process.env, {
+    QINIU_ACCESS_KEY: CFG.accessKey, QINIU_SECRET_KEY: CFG.secretKey, QINIU_BUCKET: CFG.bucket
+  });
+  try {
+    await assert.rejects(() => qiniu.main(['--dir', dir]), /sha512 与清单不一致/);
+    assert.equal(calls.length, 0, 'sha512 门禁必须在联网前中断');
+  } finally {
+    globalThis.fetch = realFetch;
+    process.env = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
 // ------------------------------------------------------------ CLI 解析
 
 test('parseArgs: 默认值 / = 语法 / 未知参数', () => {
@@ -325,6 +579,12 @@ test('parseArgs: 默认值 / = 语法 / 未知参数', () => {
   assert.equal(opts.dir, 'dist/package');
   assert.equal(opts.dryRun, true);
   assert.equal(opts.retries, 3);
+  assert.equal(opts.noCdn, false, '默认要做 Content-Type 与 CDN 刷新');
+  assert.equal(opts.strictCdn, false);
+
+  const cdnOff = qiniu.parseArgs(['--dir', 'x', '--no-cdn']);
+  assert.equal(cdnOff.noCdn, true);
+  assert.equal(qiniu.parseArgs(['--dir', 'x', '--strict-cdn']).strictCdn, true);
 
   assert.throws(() => qiniu.parseArgs(['--dir', 'x', '--nope']), /未知参数/);
   assert.throws(() => qiniu.parseArgs(['--dry-run']), /缺少 --dir/);

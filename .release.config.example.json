@@ -17,7 +17,9 @@
     "prefix": "autoupdates/",
     "_uploadHost说明": "上传入口。加速上传用 upload.qiniup.com，指定区域可用 upload-z0/z1/z2.qiniup.com 等",
     "uploadHost": "https://upload.qiniup.com",
-    "_publicBase说明": "桶的公开访问域名根（不带 prefix），仅用于上传后公网 HEAD 校验；留空则跳过该检查",
+    "_cdnHost说明": "CDN 刷新入口（融合 CDN），一般不用改；刷新接口是 POST /v2/tune/refresh",
+    "cdnHost": "https://fusion.qiniuapi.com",
+    "_publicBase说明": "桶的公开访问域名根（不带 prefix）。配了才做公网 HEAD 校验与 CDN 刷新；留空则两者都跳过",
     "publicBase": ""
   }
 }
