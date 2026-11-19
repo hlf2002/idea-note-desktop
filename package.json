@@ -10,8 +10,10 @@
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
     "package": "bash scripts/release.sh --package",
+    "package:mac": "bash scripts/package-mac.sh",
     "package:win": "node scripts/win-sign.js",
-    "staple": "bash scripts/staple-dmg.sh",
+    "staple": "bash scripts/notarize-dmg.sh",
+    "notarize:dmg": "bash scripts/notarize-dmg.sh",
     "upload:qiniu": "node scripts/qiniu-upload.js",
     "release": "bash scripts/release.sh",
     "release:dry": "bash scripts/release.sh --dry-run"
@@ -63,6 +65,7 @@
       "gatekeeperAssess": false
     },
     "dmg": {
+      "sign": true,
       "contents": [
         {
           "x": 130,

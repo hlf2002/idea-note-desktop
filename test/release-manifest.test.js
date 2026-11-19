@@ -13,9 +13,11 @@ const path = require('node:path');
 const yaml = require('js-yaml');
 const {
   asciiName,
+  assetName,
   releaseAssetUrl,
   buildDeployManifest,
   buildRelativeManifest,
+  refreshDigests,
   verifyDigests
 } = require('../scripts/release-manifest');
 
@@ -48,20 +50,39 @@ test('asciiName: 空值报错', () => {
   assert.throws(() => asciiName(''), /资产名不能为空/);
 });
 
-test('releaseAssetUrl: 拼出 GitHub Release 绝对地址', () => {
+// ============ assetName（两套名字的分界） ============
+test('assetName: dmg 保留中文原名（只供人工下载）', () => {
+  assert.strictEqual(assetName('灵感笔记-1.2.0-arm64.dmg'), '灵感笔记-1.2.0-arm64.dmg');
+  assert.strictEqual(assetName('idea-note-1.2.0.dmg'), 'idea-note-1.2.0.dmg');
+});
+
+test('assetName: zip / blockmap 强制 ASCII（自动更新链路）', () => {
+  assert.strictEqual(assetName('灵感笔记-1.2.0-arm64-mac.zip'), 'idea-note-1.2.0-arm64-mac.zip');
+  assert.strictEqual(assetName('灵感笔记-1.2.0-mac.zip.blockmap'), 'idea-note-1.2.0-mac.zip.blockmap');
+});
+
+test('assetName: 空值报错', () => {
+  assert.throws(() => assetName(''), /资产名不能为空/);
+});
+
+test('releaseAssetUrl: zip 用 ASCII 名，dmg 用 percent-encoded 中文名', () => {
   assert.strictEqual(
     releaseAssetUrl('a/b', 'v1.2.0', '灵感笔记-1.2.0-mac.zip'),
     'https://github.com/a/b/releases/download/v1.2.0/idea-note-1.2.0-mac.zip'
   );
+  assert.strictEqual(
+    releaseAssetUrl('a/b', 'v1.2.0', '灵感笔记-1.2.0-arm64.dmg'),
+    'https://github.com/a/b/releases/download/v1.2.0/%E7%81%B5%E6%84%9F%E7%AC%94%E8%AE%B0-1.2.0-arm64.dmg'
+  );
 });
 
 // ============ buildDeployManifest ============
-test('buildDeployManifest: 所有 url 改写为 GitHub 绝对地址', () => {
+test('buildDeployManifest: zip 走 ASCII 地址，dmg 走 percent-encoded 中文地址', () => {
   const out = yaml.load(buildDeployManifest(BASE));
   assert.deepStrictEqual(out.files.map((f) => f.url), [
     'https://github.com/hlf2002/idea-note-desktop/releases/download/v1.2.0/idea-note-1.2.0-arm64-mac.zip',
     'https://github.com/hlf2002/idea-note-desktop/releases/download/v1.2.0/idea-note-1.2.0-mac.zip',
-    'https://github.com/hlf2002/idea-note-desktop/releases/download/v1.2.0/idea-note-1.2.0-arm64.dmg'
+    'https://github.com/hlf2002/idea-note-desktop/releases/download/v1.2.0/%E7%81%B5%E6%84%9F%E7%AC%94%E8%AE%B0-1.2.0-arm64.dmg'
   ]);
 });
 
@@ -117,12 +138,12 @@ test('buildDeployManifest: 清单版本与发布版本不一致时报错', () =>
 });
 
 // ============ buildRelativeManifest ============
-test('buildRelativeManifest: url 只换成 ASCII 相对名，可整目录直投静态服务器', () => {
+test('buildRelativeManifest: dmg 保留中文原名，zip 换成 ASCII 相对名', () => {
   const out = yaml.load(buildRelativeManifest(BUILD_MANIFEST, { version: '1.2.0' }));
   assert.deepStrictEqual(out.files.map((f) => f.url), [
     'idea-note-1.2.0-arm64-mac.zip',
     'idea-note-1.2.0-mac.zip',
-    'idea-note-1.2.0-arm64.dmg'
+    '灵感笔记-1.2.0-arm64.dmg'
   ]);
   assert.strictEqual(out.path, 'idea-note-1.2.0-arm64-mac.zip');
 });
@@ -172,10 +193,22 @@ test('verifyDigests: 产物 sha512 / size 与清单一致时通过', () => {
   );
 });
 
-test('verifyDigests: 中文产物名也能按清单 url 对上（先转 ASCII 再查文件）', () => {
-  const { dir, files } = makeFixtureDir({ 'idea-note-1.2.0-mac.zip': 'hello' });
-  const manifest = manifestOf([{ ...files[0], name: '灵感笔记-1.2.0-mac.zip' }]);
-  assert.strictEqual(verifyDigests({ manifestText: manifest, dir })[0].startsWith('idea-note-1.2.0-mac.zip'), true);
+test('verifyDigests: 清单 url 是 percent-encoded 中文时也能对上中文文件', () => {
+  const { dir, files } = makeFixtureDir({ '灵感笔记-1.2.0-arm64.dmg': 'hello' });
+  const manifest = manifestOf([{ ...files[0], name: encodeURIComponent('灵感笔记-1.2.0-arm64.dmg') }]);
+  assert.strictEqual(verifyDigests({ manifestText: manifest, dir })[0].startsWith('灵感笔记-1.2.0-arm64.dmg'), true);
+});
+
+test('verifyDigests: 清单 url 是中文原名时直接按原名找文件', () => {
+  const { dir, files } = makeFixtureDir({ '灵感笔记-1.2.0-arm64.dmg': 'hello' });
+  const manifest = manifestOf([{ ...files[0], name: '灵感笔记-1.2.0-arm64.dmg' }]);
+  assert.doesNotThrow(() => verifyDigests({ manifestText: manifest, dir }));
+});
+
+test('verifyDigests: 清单写中文名但目录只有 ASCII 名时报错（命名契约不能漂移）', () => {
+  const { dir, files } = makeFixtureDir({ 'idea-note-1.2.0-arm64.dmg': 'hello' });
+  const manifest = manifestOf([{ ...files[0], name: '灵感笔记-1.2.0-arm64.dmg' }]);
+  assert.throws(() => verifyDigests({ manifestText: manifest, dir }), /ENOENT/);
 });
 
 test('verifyDigests: 字节数对不上时报错', () => {
@@ -188,4 +221,34 @@ test('verifyDigests: 内容被改动（sha512 不符）时报错', () => {
   const { dir, files } = makeFixtureDir({ 'idea-note-1.2.0-mac.zip': 'hello' });
   const manifest = manifestOf([{ ...files[0], sha512: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }]);
   assert.throws(() => verifyDigests({ manifestText: manifest, dir }), /sha512 与清单不一致/);
+});
+
+// ============ refreshDigests ============
+test('refreshDigests: 装订改写 dmg 字节后，清单按磁盘实际内容重算', () => {
+  const { dir, files } = makeFixtureDir({ 'idea-note-1.2.0-arm64.dmg': 'signed-and-stapled' });
+  const stale = manifestOf([{ ...files[0], sha512: 'OLDSTALE', size: 1 }]);
+  const refreshed = refreshDigests({ manifestText: stale, dir });
+  assert.doesNotThrow(() => verifyDigests({ manifestText: refreshed, dir }));
+  const out = yaml.load(refreshed);
+  assert.strictEqual(out.files[0].size, Buffer.byteLength('signed-and-stapled'));
+  assert.notStrictEqual(out.files[0].sha512, 'OLDSTALE');
+});
+
+test('refreshDigests: 只改哈希与字节数，url / version 原样保留', () => {
+  const { dir, files } = makeFixtureDir({ 'idea-note-1.2.0-mac.zip': 'hello' });
+  const before = yaml.load(manifestOf(files));
+  const after = yaml.load(refreshDigests({ manifestText: manifestOf(files), dir }));
+  assert.strictEqual(after.version, before.version);
+  assert.deepStrictEqual(after.files.map((f) => f.url), before.files.map((f) => f.url));
+});
+
+test('refreshDigests: 清单登记的文件在目录里缺失时报错', () => {
+  const { dir } = makeFixtureDir({ 'idea-note-1.2.0-mac.zip': 'hello' });
+  const manifest = `version: 1.2.0
+files:
+  - url: idea-note-1.2.0-arm64.dmg
+    sha512: AAAA
+    size: 1
+`;
+  assert.throws(() => refreshDigests({ manifestText: manifest, dir }), /在 .* 中不存在/);
 });

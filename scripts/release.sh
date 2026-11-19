@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 打包与发布：
-#   npm run package                 # 只打包：跑测试 → 出 mac 双架构安装包 → ASCII 改名 → 同目录清单 → 校验 sha512
+#   npm run package                 # 只打包：跑测试 → 出 mac 双架构安装包 → dmg 公证装订 → ASCII 改名 → 同目录清单 → 校验 sha512
 #   npm run package -- 1.2.3        # 打包前先把版本号改成 1.2.3（只改 package.json，不提交）
 #   npm run release -- patch        # 打包 + 分发（建 Release、推清单到更新服务器、push）
 #   npm run release:dry             # 分发链路预演：只改写清单，不提交/上传/推送
@@ -29,7 +29,8 @@ done
 CONFIG_FILE=".release.config.json"
 PRODUCT_NAME="灵感笔记"
 DEFAULT_SSH_DIR="/var/www/ideanote/autoupdates/"
-FEED_URL=$(node -p "require('./package.json').build.publish.url")
+# 一次性归一掉尾部斜杠：publish.url 习惯带 /，直接拼 "/latest-mac.yml" 会得到 //latest-mac.yml
+FEED_BASE=$(node -p 'require("./package.json").build.publish.url.replace(/\/+$/, "")')
 [[ "$MODE" == "package" ]] && OUT_DIR="dist/package" || OUT_DIR="dist/release"
 DEPLOY_MANIFEST="$OUT_DIR/latest-mac.yml"
 
@@ -129,6 +130,19 @@ build() {
   [[ -f dist/latest-mac.yml ]] || die "构建未产出 dist/latest-mac.yml"
 }
 
+# dmg 是 app 完成公证+装订之后由 hdiutil 打出的新字节流，Apple 侧没有它的票。
+# 就地在 dist/ 补「签名 → 公证 → 装订」，让随后的 stage 直接复制最终字节 ——
+# 清单 sha512 一次算准，不必走「先写清单 → 装订改字节 → 再重算」的绕路。
+notarize_dmgs() {
+  if [[ -n "${NOTARY_PROFILE:-}" ]] \
+    || [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+    log "dmg 签名 + 公证 + 装订（就地 dist/，先于 stage）"
+    bash scripts/dmg-notarize.sh dist || die "dmg 公证装订失败：不产出无票的交付包"
+  else
+    log "跳过 dmg 公证装订（无 NOTARY_PROFILE 或 APPLE_ID 三件套）—— 产物未装订，不要投放"
+  fi
+}
+
 stage_assets() {
   rm -rf "$OUT_DIR"
   mkdir -p "$OUT_DIR"
@@ -137,7 +151,7 @@ stage_assets() {
     [[ -f "$f" ]] || continue
     base=$(basename "$f")
     [[ "$base" == "$PRODUCT_NAME-$VERSION"* ]] || continue
-    cp "$f" "$OUT_DIR/$(node -e 'console.log(require("./scripts/release-manifest.js").asciiName(process.argv[1]))' "$base")"
+    cp "$f" "$OUT_DIR/$(node -e 'console.log(require("./scripts/release-manifest.js").assetName(process.argv[1]))' "$base")"
     n=$((n + 1))
   done
   [[ $n -gt 0 ]] || die "dist/ 里没有版本 $VERSION 的产物"
@@ -146,12 +160,19 @@ stage_assets() {
 
 write_package_manifest() {
   node scripts/release-manifest.js relative dist/latest-mac.yml "$DEPLOY_MANIFEST" "$VERSION"
+  # dmg 在上一步已就地装订：electron-builder 清单里的 sha512 对应的是装订前的字节，
+  # 必须按 stage 到磁盘的实际内容重算，否则 verify 必失败、投出去客户端也会拒绝升级
+  node scripts/release-manifest.js refresh "$DEPLOY_MANIFEST" "$OUT_DIR" >/dev/null
   log "校验产物 sha512 / 字节数"
   node scripts/release-manifest.js verify "$DEPLOY_MANIFEST" "$OUT_DIR" | sed 's/^/  /'
 }
 
 write_deploy_manifest() {
   node scripts/release-manifest.js github dist/latest-mac.yml "$DEPLOY_MANIFEST" "$REPO" "$TAG" "$VERSION"
+  if [[ -d "$OUT_DIR" ]]; then
+    node scripts/release-manifest.js refresh "$DEPLOY_MANIFEST" "$OUT_DIR" >/dev/null
+    node scripts/release-manifest.js verify "$DEPLOY_MANIFEST" "$OUT_DIR" >/dev/null
+  fi
   node -e '
     const m = require("js-yaml").load(require("fs").readFileSync(process.argv[1], "utf8"));
     for (const f of m.files) console.log("  " + f.url.split("/").pop() + "  " + Math.round(f.size / 1048576) + "MB");
@@ -191,7 +212,7 @@ verify_assets() {
       const code = execFileSync("curl", ["-s", "--max-time", "30", "-r", "0-1023", "-L",
         "-o", "/dev/null", "-w", "%{http_code}", f.url]).toString();
       if (code !== "200" && code !== "206") throw new Error("资产不可下载 (" + code + ") " + f.url);
-      console.log("  " + code + " " + f.url.split("/").pop());
+      console.log("  " + code + " " + decodeURIComponent(f.url.split("/").pop()));
     }
   ' "$DEPLOY_MANIFEST"
 }
@@ -215,10 +236,10 @@ deploy_manifest() {
 }
 
 verify_feed() {
-  LIVE=$(curl -s --max-time 20 "$FEED_URL/latest-mac.yml") || die "更新地址不可访问：$FEED_URL"
+  LIVE=$(curl -s --max-time 20 "$FEED_BASE/latest-mac.yml") || die "更新地址不可访问：$FEED_BASE"
   grep -q "^version: $VERSION$" <<<"$LIVE" \
     || die "线上清单版本不是 $VERSION，客户端不会升级。线上开头：$(head -3 <<<"$LIVE" | tr '\n' ' ')"
-  log "线上清单已是 v$VERSION（$FEED_URL）"
+  log "线上清单已是 v$VERSION（$FEED_BASE）"
 }
 
 read_config
@@ -229,13 +250,14 @@ case "$MODE" in
   package)
     run_tests
     build
+    notarize_dmgs
     stage_assets
     write_package_manifest
     cat <<EOF
 
 打包完成 ${PRODUCT_NAME} v${VERSION}（未提交、未上传）
-  产物目录   $OUT_DIR/  —— 安装包 + blockmap + latest-mac.yml，整目录可直接投放
-  安装包     dist/
+  投放目录   $OUT_DIR/  —— 安装包（已签名+公证+装订）+ blockmap + latest-mac.yml
+  构建目录   dist/  —— 同一份字节（dmg 中文名 / zip ASCII 名），但缺清单，不要直接分发
 EOF
     ;;
   dry)
@@ -248,6 +270,7 @@ EOF
     commit_version
     run_tests
     build
+    notarize_dmgs
     stage_assets
     push_git
     publish_release
@@ -260,7 +283,7 @@ EOF
 
 发布完成 ${PRODUCT_NAME} v${VERSION}
   Release    https://github.com/$REPO/releases/tag/$TAG
-  更新清单   ${FEED_URL}latest-mac.yml
+  更新清单   ${FEED_BASE}/latest-mac.yml
   安装包     dist/
 EOF
     ;;
