@@ -20,6 +20,8 @@
 - 打包 mac：`npm run package`（测试 → electron-builder → ASCII 改名 → 清单 sha512 校验）
 - 打包 win：`npm run package:win`（win-sign.js 解析签名来源：显式 > env > 配置 > 证书存储自动发现，SimplySign 登录即自动签名+PIN 预热；构建 → 收尾三断言校验；须 Windows 宿主；`--dry-run` 可预演决策）
 - dmg 装订：`npm run staple`（公证成功后执行；electron-builder 的 notarize 不覆盖 dmg）
+- 多机打包 + 投放：`deploy/deploy.sh target mac REF main upload 1`（位置参数顺序无关；`dry` 只演练；不带 `upload 1` 只构建不发布）
+- 只投放七牛：`npm run upload:qiniu -- --dir dist/package`（凭据读 `.release.config.json` 的 `qiniu` 段或 `QINIU_*` 环境变量，`--dry-run` 可预演）
 
 ## 架构速览
 

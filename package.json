@@ -12,6 +12,7 @@
     "package": "bash scripts/release.sh --package",
     "package:win": "node scripts/win-sign.js",
     "staple": "bash scripts/staple-dmg.sh",
+    "upload:qiniu": "node scripts/qiniu-upload.js",
     "release": "bash scripts/release.sh",
     "release:dry": "bash scripts/release.sh --dry-run"
   },

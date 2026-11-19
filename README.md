@@ -88,31 +88,23 @@ idea-note-desktop/
 - 大文件（dmg / zip / blockmap）→ GitHub Release（https://github.com/hlf2002/idea-note-desktop/releases）
 - 更新清单 `latest-mac.yml` → 阿里云服务器 `https://ideanote.7373.com.cn/autoupdates/`（服务器路径 `/var/www/ideanote/autoupdates/`）
 
-发布步骤（以 v1.1.1 为例）：
+发布走脚本，**不要手工改 `latest-mac.yml`**（逐行替换会让 `sha512`/`size` 的缩进被并入 `url`，客户端解析失败）：
 
-1. 修改 `package.json` 的 `version`（必须递增，semver）
-2. 执行 `npm run build`（mac）或 `npm run build:win`（Windows），产物在 `dist/`
-3. 上传安装包到 GitHub Release（**用 ASCII 文件名**，避免 URL 编码问题）：
-   ```bash
-   gh release create v1.1.1 --title "灵感笔记 v1.1.1"
-   gh release upload v1.1.1 \
-     dist/灵感笔记-1.1.1-arm64-mac.zip#idea-note-1.1.1-arm64-mac.zip \
-     dist/灵感笔记-1.1.1-arm64-mac.zip.blockmap#idea-note-1.1.1-arm64-mac.zip.blockmap \
-     dist/灵感笔记-1.1.1-mac.zip#idea-note-1.1.1-mac.zip \
-     dist/灵感笔记-1.1.1-mac.zip.blockmap#idea-note-1.1.1-mac.zip.blockmap \
-     dist/灵感笔记-1.1.1-arm64.dmg#idea-note-1.1.1-arm64.dmg \
-     dist/灵感笔记-1.1.1.dmg#idea-note-1.1.1.dmg
-   ```
-   > 注意：`gh release upload` 的 `#` 重命名语法对含中文路径可能失效，如遇资产名异常（如少了前缀），改用 ASCII 临时文件名上传。
-4. 修改 `dist/latest-mac.yml`：把 `files[].url` 改为 GitHub Release 的完整 URL，例如：
-   ```yaml
-   - url: https://github.com/hlf2002/idea-note-desktop/releases/download/v1.1.1/idea-note-1.1.1-arm64-mac.zip
-   ```
-   （`path`、`sha512`、`size` 保持构建产物原样）
-5. 把修改后的 `latest-mac.yml` 上传到服务器 `/var/www/ideanote/autoupdates/`（本机无 SSH 时可用阿里云云助手 `SendFile` / `RunCommand` + base64 写入）
-6. 验证：`curl https://ideanote.7373.com.cn/autoupdates/latest-mac.yml` 返回新版本清单，且其中 URL 可下载（HTTP 200）
+| 场景 | 命令 |
+|---|---|
+| 本地打包 mac，不碰 git、不上传 | `npm run package` |
+| 单机完整发布（改版本 → 建 Release → 推清单到服务器 → 线上校验） | `npm run release -- patch` |
+| 多机打包（mac + win）并投放七牛 | `deploy/deploy.sh target all REF main upload 1` |
+| 只把已回收的产物投放七牛 | `npm run upload:qiniu -- --dir deploy/artifacts-<ts>/mac/package` |
+| 演练（不联网、不写远端） | 上面命令加 `dry`（deploy.sh）或 `--dry-run`（upload:qiniu） |
 
-> 版本号必须递增（semver），否则不会触发升级。
+三条硬约束：
+
+1. **版本号必须严格递增**（semver），否则客户端不会触发升级；tag `v$VERSION` 已存在时脚本直接退出。
+2. **清单与安装包必须成对发布**：同一版本重复打包 sha512 会变，旧包配新清单会被客户端拒绝更新。
+3. **七牛凭据只放 `.release.config.json` 的 `qiniu` 段或 `QINIU_*` 环境变量**，不得写进 `package.json` 等入库文件。对象 key 前缀须与 `build.publish.url` 的路径一致（默认 `autoupdates/`）。
+
+上传顺序（包在前、`latest*.yml` 在后）、逐个 `stat` 字节校验、按 key 覆盖写等契约，见 `docs/JENKINS.md` 第十节。
 
 ### 配置更新服务器地址
 

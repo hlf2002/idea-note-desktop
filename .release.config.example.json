@@ -6,5 +6,18 @@
     "port": 22,
     "identity": "~/.ssh/id_ed25519",
     "dir": "/var/www/ideanote/autoupdates/"
+  },
+  "qiniu": {
+    "_说明": "deploy/deploy.sh 上传七牛时读取。复制本文件为 .release.config.json 后填写（该文件已 gitignore）。也可全用环境变量 QINIU_ACCESS_KEY / QINIU_SECRET_KEY / QINIU_BUCKET 注入，环境变量优先。",
+    "_密钥来源": "七牛控制台 -> 个人中心 -> 密钥管理；建议用子账号密钥并只授予目标 bucket 的写入权限",
+    "accessKey": "",
+    "secretKey": "",
+    "bucket": "",
+    "_prefix说明": "对象 key 前缀，须与 electron-updater 的 feed 地址一致；安装包与 latest*.yml 同前缀，清单里是相对文件名",
+    "prefix": "autoupdates/",
+    "_uploadHost说明": "上传入口。加速上传用 upload.qiniup.com，指定区域可用 upload-z0/z1/z2.qiniup.com 等",
+    "uploadHost": "https://upload.qiniup.com",
+    "_publicBase说明": "桶的公开访问域名根（不带 prefix），仅用于上传后公网 HEAD 校验；留空则跳过该检查",
+    "publicBase": ""
   }
 }
