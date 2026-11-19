@@ -94,9 +94,9 @@ idea-note-desktop/
 |---|---|
 | 本地打包 mac，不碰 git、不上传 | `npm run package` |
 | 单机完整发布（改版本 → 建 Release → 推清单到服务器 → 线上校验） | `npm run release -- patch` |
-| 多机打包（mac + win）并投放七牛 | `deploy/deploy.sh target all REF main upload 1` |
+| 多机打包（mac + win）并投放七牛 | `PLATFORM=all MODE=publish REF=main deploy/deploy.sh` |
 | 只把已回收的产物投放七牛 | `npm run upload:qiniu -- --dir deploy/artifacts-<ts>/mac/package` |
-| 演练（不联网、不写远端） | 上面命令加 `dry`（deploy.sh）或 `--dry-run`（upload:qiniu） |
+| 演练（不联网、不写远端） | deploy.sh 加 `DRY_RUN=1`；`upload:qiniu` 加 `--dry-run` |
 
 三条硬约束：
 
@@ -104,7 +104,7 @@ idea-note-desktop/
 2. **清单与安装包必须成对发布**：同一版本重复打包 sha512 会变，旧包配新清单会被客户端拒绝更新。
 3. **七牛凭据只放 `.release.config.json` 的 `qiniu` 段或 `QINIU_*` 环境变量**，不得写进 `package.json` 等入库文件。对象 key 前缀须与 `build.publish.url` 的路径一致（默认 `autoupdates/`）。
 
-上传顺序（包在前、`latest*.yml` 在后）、逐个 `stat` 字节校验、按 key 覆盖写等契约，见 `docs/JENKINS.md` 第十节。
+上传顺序（包在前、`latest*.yml` 在后）、逐个 `stat` 字节校验、按 key 覆盖写等契约，以及全部参数与环境变量，见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
 
 ### 配置更新服务器地址
 

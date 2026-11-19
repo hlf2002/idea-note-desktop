@@ -1,0 +1,448 @@
+# 打包与发布手册
+
+三条链路的完整用法：本地打包、单机发版（GitHub Release + 服务器清单）、多机打包 + 七牛投放。
+本文与 `deploy/deploy.sh`、`scripts/qiniu-upload.js`、`scripts/release.sh` 的代码同步维护——参数含义以脚本为准，改脚本时请同改本文。
+
+---
+
+## 0. 先选链路
+
+| 目标 | 命令 | 副作用 | 产物落点 |
+|---|---|---|---|
+| 只出 mac 安装包 | `npm run package` | 写 `dist/`，不碰 git；有公证凭据时会联网提交 Apple 公证 | `dist/package/` |
+| 出 win 安装包 | `npm run package:win` | 写 `dist/`，需 Windows 宿主 + SimplySign | `dist/package-win/` |
+| 单机完整发版 | `npm run release -- patch` | 改版本、本地 commit + tag、**push 远端**、建 Release、scp 清单到服务器 | `dist/release/` |
+| 双机打包（SSH 调度） | `PLATFORM=all MODE=local REF=main deploy/deploy.sh` | 两台打包机检出 + 打包，产物回收到调度机 | `deploy/artifacts-<时间戳>/` |
+| 双机打包 + 七牛投放 | `PLATFORM=all MODE=publish REF=main deploy/deploy.sh` | 上一行 + 覆盖写七牛对象 | 同上 + 对象存储 |
+
+`release.sh` 与 `deploy.sh` 是**两条独立链路**：前者在本机出 mac 包、发 GitHub Release；后者调度两台打包机、回收到调度机、可选投七牛。两者不共享产物目录，也不互相调用。
+
+---
+
+## 1. 前置条件
+
+### 调度机（跑 `deploy/deploy.sh`）
+
+| 项 | 要求 | 不满足时 |
+|---|---|---|
+| bash / git / ssh / scp | 任意近期版本 | 脚本启动即报错 |
+| Node.js | ≥ 20（回收后跑 `release-manifest.js verify`） | `preflight` 层面的命令直接失败 |
+| 免密登录打包机 | `ssh-agent` 密钥；密码模式仅适合手动 | 退出码 255，脚本给 `ssh-copy-id` 提示 |
+| `.release.config.json` | 上传时必需，只构建不需要 | 上传阶段报「缺少七牛凭据」退出 2 |
+
+### macOS 打包机
+
+| 项 | 要求 |
+|---|---|
+| Node.js | ≥ 21（`npm test` 依赖运行器展开 glob） |
+| Xcode CLT | `codesign`、`xcrun` 可用 |
+| 签名证书 | 钥匙串有 Developer ID Application；**SSH 会话下 login keychain 必须已解锁**，否则 `errSecInternalComponent` |
+| 公证凭据 | `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`（三件套缺一不可，`mac.notarize: true` 时必需）；或 `NOTARY_PROFILE` 指向 keychain profile |
+
+### Windows 打包机
+
+| 项 | 要求 |
+|---|---|
+| Node.js | ≥ 21 |
+| SimplySign | 已登录（证书挂进 `Cert:\CurrentUser\My`），首跑执行 `node scripts/win-sign.js --warmup` 缓存 OTP/PIN（约 3 小时有效） |
+| Windows SDK | 含 `signtool.exe` |
+| SSH | OpenSSH Server；管理员组账号的公钥要写 `C:\ProgramData\ssh\administrators_authorized_keys` 并收紧 ACL |
+
+---
+
+## 2. `deploy/deploy.sh`
+
+### 2.1 执行流程
+
+```
+参数解析 → 校验本地 REF → [win] 检出→打包→回收→sha512 → [mac] 同上 → 上传七牛（可选）→ 汇总
+```
+
+- 单平台失败**不影响**另一平台，最终按汇总表决定退出码。
+- 上传是最后一步，仅 `MODE=publish`（或 `UPLOAD=1`）执行；只投已回收且 sha512 配对的平台目录。`COLLECT_ARTIFACTS=0` 时没有可投的本地文件，会判失败而不是静默跳过。
+
+### 2.2 调用方式（与 `q_assistant_desktop_dev/deploy/deploy.sh` 一致）
+
+```bash
+PLATFORM=mac MODE=publish REF=main bash deploy/deploy.sh
+PLATFORM=win MODE=local   REF=v1.2.4 bash deploy/deploy.sh
+```
+
+| 参数 | 取值 | 说明 |
+|---|---|---|
+| `PLATFORM` / `platform` | `win`（默认）\| `mac` \| `all` | 与样本一致：默认只构建 Windows。双平台须显式传 `PLATFORM=all`（未显式指定时脚本会打印提示），双机串行、互不阻塞 |
+| `MODE` / `mode` | `local`（默认）\| `publish` \| `publish-feishu` | `local` 只构建 + 回收 + 校验；`publish` 追加七牛投放；`publish-feishu` 本项目未接飞书，传入即报错退出 2 |
+| `REF` | `main` 或已存在的 tag | `TAG` / `tag` / `BRANCH` / `branch` / `GIT_BRANCH` 同样有效；缺省由调度机 HEAD 推断 |
+
+`MODE` 与上传开关的对应：`local` → `UPLOAD=0`，`publish` → `UPLOAD=1`；显式传 `UPLOAD=0|1` 可覆盖（兼容旧调用）。
+
+位置参数（可选，等价于同名环境变量，键名不区分大小写、顺序无关）：
+
+| 键 | 取值 |
+|---|---|
+| `platform`（`target` 同义） | `win` \| `mac` \| `all` |
+| `mode` | `local` \| `publish` |
+| `ref`（`tag`/`branch` 同义） | `main` 或 tag |
+| `collect` | `0` \| `1` |
+| `upload` | `0` \| `1` |
+| `artifacts_dir` | 任意路径 |
+| `dry` | 无值，等价 `DRY_RUN=1` |
+
+裸写 `win`/`mac`/`all` 等价 `platform <值>`，裸 `local`/`publish` 等价 `mode <值>`。未知键报错退出 2，不静默忽略。
+
+```bash
+deploy/deploy.sh platform mac mode publish REF main   # 等价于上一节的环境变量写法
+deploy/deploy.sh mac publish                          # 裸平台 + 裸模式
+```
+
+### 2.3 环境变量全表
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PLATFORM` | `win` | `win` / `mac` / `all`（双机串行） |
+| `MODE` | `local` | `local` 构建回收 / `publish` 追加七牛投放 |
+| `REF` / `TAG` / `BRANCH` / `GIT_BRANCH` | 由调度机 HEAD 推断 | 只接受 `main` 或**调度机本地已存在**的 tag |
+| `COLLECT_ARTIFACTS` | `1` | `0` = 产物留在打包机 `dist/`，不回传（此时 `MODE=publish` 会拒绝） |
+| `ARTIFACTS_DIR` | `deploy/artifacts-<日期-时间>` | 回收目录，已在 `.gitignore` |
+| `DRY_RUN` | `0` | `1` = 只打印远程命令与上传计划，不连机、不联网 |
+| `UPLOAD` / `UPLOAD_QINIU` | 由 `MODE` 推导 | `1` 强制投放，`0` 强制不投（覆盖 `MODE`） |
+| `UPLOAD_REQUIRE_ALL` | `1` | `PLATFORM=all` 时任一平台失败则整批跳过上传 |
+| `UPLOAD_SKIP_UNCHANGED` | `0` | `1` = 远端同名同大小对象跳过上传（省流量） |
+| `UPLOAD_STRICT_PUBLIC` | `0` | `1` = 公网 HEAD 校验失败即判失败 |
+| `UPLOAD_NO_CDN` | `0` | `1` = 跳过清单 Content-Type 修正与 CDN 刷新 |
+| `UPLOAD_STRICT_CDN` | `0` | `1` = Content-Type / CDN 刷新失败即判失败（默认只告警） |
+| `TARGET` | 无 | 旧调用方式别名，等价 `PLATFORM` |
+| `CLONE_URL` | GitHub origin | 打包机首跑目录缺失时的 clone 地址 |
+| `WINDOWS_HOST` / `_PORT` / `_USER` / `_PROJECT_DIR` | `106.52.168.174:23491 keke D:\work\test\idea-note-desktop` | win 打包机 |
+| `MAC_HOST` / `_PORT` / `_USER` / `_PROJECT_DIR` | `106.52.168.174:23490 hulifeng ~/dev/idea-note-desktop` | mac 打包机 |
+| `QINIU_ACCESS_KEY` / `QINIU_SECRET_KEY` / `QINIU_BUCKET` | 无 | 七牛凭据，见 §3.2 |
+| `QINIU_PREFIX` / `QINIU_PUBLIC_BASE` | `autoupdates/` / 空 | 投放前缀与公网域名根 |
+
+**优先级**：位置参数 > 环境变量 > 脚本默认；`REF` 缺省时才由仓库 HEAD 推断，不猜版本号。
+
+### 2.4 常用命令
+
+| 场景 | 命令 |
+|---|---|
+| 只演练，看会执行什么 | `PLATFORM=all MODE=publish REF=main DRY_RUN=1 deploy/deploy.sh` |
+| 只构建两台机，不发布 | `PLATFORM=all MODE=local REF=main deploy/deploy.sh` |
+| 只重跑 mac | `PLATFORM=mac MODE=local REF=main deploy/deploy.sh` |
+| 构建并投七牛 | `PLATFORM=all MODE=publish REF=main deploy/deploy.sh` |
+| 产物留在打包机（不回传） | `PLATFORM=win COLLECT_ARTIFACTS=0 REF=main deploy/deploy.sh` |
+| 指定回收目录 | `PLATFORM=mac ARTIFACTS_DIR=/data/pkg/1.2.4 REF=main deploy/deploy.sh` |
+| 跳过已一致对象再投一次 | `UPLOAD_SKIP_UNCHANGED=1 PLATFORM=all MODE=publish REF=v1.2.4 deploy/deploy.sh` |
+| 只想投、不想重建 | `npm run upload:qiniu -- --dir deploy/artifacts-<ts>/mac/package` |
+
+### 2.5 产物结构
+
+```
+deploy/artifacts-20261119-180001/
+├── mac/package/
+│   ├── 灵感笔记-1.2.4-arm64.dmg          # 安装包保留中文名（人工下载）
+│   ├── 灵感笔记-1.2.4.dmg                # x64
+│   ├── idea-note-1.2.4-arm64-mac.zip     (+ .blockmap)
+│   ├── idea-note-1.2.4-mac.zip           (+ .blockmap)   # x64
+│   └── latest-mac.yml
+└── win/package-win/
+    ├── idea-note-Setup-1.2.4.exe         (+ .blockmap)
+    ├── idea-note-1.2.4-win.zip           # zip target 产出时才存在
+    └── latest.yml
+```
+
+命名分两套，原因不同（`release-manifest.js` 的 `assetName()` 是唯一定义处）：
+
+| 资产 | 名字 | 原因 |
+|---|---|---|
+| `.dmg` | 中文原名 `灵感笔记-*` | 只供人工下载；electron-updater 在 mac 上只消费 zip，不碰 dmg |
+| `.zip` / `.exe` / `.blockmap` / `latest*.yml` 里的 `path` | ASCII `idea-note-*` | 走自动更新，URL 要过 CDN / GitHub / 客户端解析，中文需 percent-encode，任一环不一致就是静默 404 |
+
+GitHub Release 绝对地址里，中文 dmg 段会 percent-encode（`%E7%81%B5...`），清单里存的就是编码后的形式。
+
+### 2.6 各阶段校验
+
+| 阶段 | 校验内容 | 失败表现 |
+|---|---|---|
+| 检出 | 工作区干净（排除 `**/.qzhuli-manifest.json`）、`git rev-parse HEAD` 留痕 | SSH 非 0：255 = 认证/连接，其余多为脏树，脚本会分叉提示 |
+| 打包 | 打包命令退出码 | 退出码非 0；按平台给排障提示 |
+| 回收 | `scp` + `tar -xzf` 均成功 | 单独报「回收失败 / 解压失败」，不混入 sha512 |
+| 清单 | `release-manifest.js verify` 逐条比对字节数与 sha512 | `FAIL（sha512 不配对）`，产物不可投放 |
+| 上传 | 见 §3.5 | `FAIL（七牛投放失败）` |
+
+### 2.7 退出码
+
+| 码 | 含义 |
+|---|---|
+| 0 | 全部成功（含上传，若启用） |
+| 1 | 至少一台失败：检出/打包/回收/sha512/上传任一环节 |
+| 2 | 参数错误：未知键、非法取值、`REF` 非法或本地无此 tag |
+
+---
+
+### 2.8 mac 打包入口（`scripts/package-mac.sh`）
+
+SSH 场景下裸跑 `npm run package` 会死在 codesign（`errSecInternalComponent(-2070)`），因为签名身份在专用钥匙串里、而该钥匙串在非 GUI 会话下是锁着的，electron-builder 只会重试 4 次再抛栈。打包机的 mac 分支已改走本脚本：
+
+| 步骤 | 行为 | 失败时 |
+|---|---|---|
+| 载入 `.env` | `set -a; . ./.env; set +a`，提供公证凭据 | 无 `.env` → 仅告警，公证被跳过 |
+| 选钥匙串 | `CSC_KEYCHAIN` > `QASSISTANT_KEYCHAIN` > 系统搜索列表 | 路径不存在 → 退出 1，提示核对 `~/.config/qassistant-packager/packager.env` |
+| 解锁 | 读到密码才执行 `security unlock-keychain` | 密码错 → 退出 1，指明是密码问题而非证书问题 |
+| 真签自测 | 临时文件跑一次带 `--timestamp` 的 `codesign` | 按 `-2070` / `no identity found` / `timestamp` 三类分别给处置 |
+| 打包 | `npm run package`，完整输出同时写 `dist/package-mac.log` | 退出 1，直接给出日志路径 |
+| 票据复核 | `stapler validate` 逐个检查 `dist/package/*.dmg` | 缺票则补跑 `npm run notarize:dmg`；补跑失败即退出 1（不产出无票的包） |
+
+```bash
+bash scripts/package-mac.sh                 # 签名 + 公证（取决于 .env）
+npm run package:mac                         # 同上
+SKIP_SIGNING=1 bash scripts/package-mac.sh  # 未签名包，同时清掉公证凭据
+```
+
+> `SKIP_SIGNING=1` 会 unset `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` / `NOTARY_PROFILE`。这不是保险措施而是必需：electron-builder 的 `notarize` 不看签名结果，只要凭据在就会尝试公证未签名的包，必然失败；`notarize_dmgs` 又优先看 `NOTARY_PROFILE`，漏清同样会去公证未签名包。
+
+## 3. `scripts/qiniu-upload.js`
+
+零依赖（Node 20 自带 `fetch` / `crypto`），直接调七牛 Kodo 上传与 `rs` 查询接口，不需要 `qshell` 或 SDK。
+
+### 3.1 命令行选项
+
+| 选项 | 说明 |
+|---|---|
+| `--dir <dir>` | 必填。产物目录，须含 `latest*.yml` 与安装包 |
+| `--prefix <p>` | 覆盖对象 key 前缀（默认取配置，缺省 `autoupdates/`） |
+| `--dry-run` | 只打印上传计划，不联网、不要求凭据 |
+| `--check` | 不写数据，只核对远端是否存在且大小一致 |
+| `--skip-unchanged` | 远端同名同大小则跳过上传 |
+| `--strict-public` | 公网 HEAD 失败即判失败（默认只告警） |
+| `--no-cdn` | 跳过清单 Content-Type 修正与 CDN 刷新 |
+| `--strict-cdn` | Content-Type / CDN 刷新失败即判失败（默认只告警） |
+| `--retries <n>` | 单文件重试次数，默认 3 |
+| `-h, --help` | 帮助 |
+
+### 3.2 配置项
+
+优先级：**环境变量 > `.release.config.json` 的 `qiniu` 段 > 默认值**。
+
+| 配置键 | 环境变量 | 默认 | 说明 |
+|---|---|---|---|
+| `accessKey` | `QINIU_ACCESS_KEY` | 无（必填） | 七牛密钥 AK；建议用只授予目标 bucket 写权限的子账号 |
+| `secretKey` | `QINIU_SECRET_KEY` | 无（必填） | 七牛密钥 SK |
+| `bucket` | `QINIU_BUCKET` | 无（必填） | 目标空间名 |
+| `prefix` | `QINIU_PREFIX` | `autoupdates/` | 对象 key 前缀，**必须与 `build.publish.url` 的路径一致** |
+| `uploadHost` | `QINIU_UPLOAD_HOST` | `https://upload.qiniup.com` | 上传入口；指定区域可用 `upload-z0/z1/z2.qiniup.com` |
+| `rsHost` | `QINIU_RS_HOST` | `https://rs.qiniu.com` | 管理接口（stat 校验、`chgm` 改 MIME） |
+| `cdnHost` | `QINIU_CDN_HOST` | `https://fusion.qiniuapi.com` | CDN 刷新入口（融合 CDN） |
+| `publicBase` | `QINIU_PUBLIC_BASE` | 空 | 桶的公开域名根（不含 prefix）。配了才做公网 HEAD 校验与 CDN 刷新 |
+
+另：`QINIU_UPLOAD_TIMEOUT_MS`（默认 600000）控制单文件上传超时；stat 固定 30s、HEAD 固定 10s。
+
+`.release.config.json` 片段（模板见 `.release.config.example.json`，该文件已 gitignore）：
+
+```json
+{
+  "qiniu": {
+    "accessKey": "…",
+    "secretKey": "…",
+    "bucket": "…",
+    "prefix": "autoupdates/",
+    "uploadHost": "https://upload.qiniup.com",
+    "publicBase": "https://cdn.example.com"
+  }
+}
+```
+
+### 3.3 发布生效（Content-Type 与 CDN 刷新）
+
+上传成功 ≠ 客户端能看到新版本。全部对象传完后脚本还会做两件事：
+
+1. **清单 MIME**：`POST /chgm/...` 把 `latest*.yml` 的 Content-Type 钉成 `text/yaml; charset=utf-8`。
+   七牛对 `.yml` 推断的 `text/yaml` 不带 charset，浏览器按系统码页（zh-CN 是 GBK）解码，
+   清单里的中文文件名会显示成乱码。electron-updater 一律按 UTF-8 读，不受影响，这条是为人肉排障。
+2. **CDN 刷新**：`POST /v2/tune/refresh` 刷新本次上传的全部 URL（含清单）。
+   清单若被 CDN 缓存，客户端会继续拿到旧版本——这是「发了版但没人升级」最常见的原因。
+
+两者失败默认**只告警**（CDN 未绑定、测试域名、刷新配额用尽都不该阻断发布）；
+`--strict-cdn` 可升级为失败。签名细节：`chgm` 与刷新都只签 `path + "\n"`，
+**刷新接口的 JSON body 不参与签名**（与官方 SDK `generateAccessToken(mac, url, '')` 一致）。
+
+### 3.4 对象 key 与 feed 对齐
+
+key = `prefix + 文件名`，清单内是**相对文件名**，所以清单与安装包必须落在同一前缀：
+
+```
+autoupdates/latest-mac.yml                 ← 客户端拉这个
+autoupdates/灵感笔记-1.2.4-arm64.dmg        ← 中文名，仅人工下载
+autoupdates/idea-note-1.2.4-arm64-mac.zip  ← ASCII 名，自动更新走这个
+...
+```
+
+cdn 刷新与 HEAD 校验用的 URL 由 `publicBase + '/' + 逐段 encodeURIComponent(key)` 得到，
+中文 dmg 会编码成 `%E7%81%B5%E6%84%9F%E7%AC%94%E8%AE%B0-…`；对象 key 本身仍是原始 UTF-8。
+
+对应 `package.json`：
+
+```json
+"publish": { "provider": "generic", "url": "https://ideanote.7373.com.cn/autoupdates/" }
+```
+
+**这条必须对齐**：桶的访问域名 + 前缀要等于 `build.publish.url`。若换桶/换域名，先改 `build.publish.url` 再重新打包，否则客户端仍去旧地址。
+
+### 3.5 校验矩阵
+
+| 校验 | 时机 | 判定 | 失败处理 |
+|---|---|---|---|
+| 目录完整性 | 上传前 | 必须有 `latest*.yml` 且至少一个安装包 | 退出 2（拒绝上传，避免清单指向 404） |
+| 本地 sha512 | 上传前 | `release-manifest.js verify` 逐条比对 | 退出 1，一个对象都不传 |
+| 上传顺序 | 全程 | 安装包/blockmap 在前，`latest*.yml` 最后 | 客户端不会先看到指向 404 的清单 |
+| 远端 stat | 每个对象上传后 | `fsize` == 本地字节数 | 退出 1，不继续（凭据类错误直接中断） |
+| 公网 HEAD | 配了 `publicBase` 时 | 200 且 `content-length` 一致 | 默认告警；`--strict-public` 时判失败 |
+| 清单 MIME | 全部上传后 | `chgm` 返回 2xx | 默认告警；`--strict-cdn` 时判失败 |
+| CDN 刷新 | 全部上传后 | `/v2/tune/refresh` 返回 `code=200` | 默认告警；`--strict-cdn` 时判失败 |
+
+### 3.6 可重复执行
+
+- 写入用 putPolicy `insertOnly=0`，**同 key 覆盖**，重跑不会产生 `-1` 副本；
+- 中途失败可直接重跑同一条命令，已上传对象被覆盖为同一份内容；
+- `--skip-unchanged` 按「远端大小 == 本地大小」跳过，适合只补传清单的场景；
+- 清单永远最后写，因此「包没传完就中断」不会让客户端拉到半套版本。
+
+### 3.7 输出与退出码
+
+```
+▸ 七牛投放 · bucket=ideanote · 前缀=autoupdates/ · 目标=https://upload.qiniup.com
+  凭据 AK_a****（env QINIU_ACCESS_KEY）· 共 7 个对象 · 清单最后上传
+  ✓ latest-mac.yml 与目录内 4 个产物 sha512 配对
+  ✓ autoupdates/idea-note-1.2.4-arm64-mac.zip  108MB  fsize=112901957
+  ✓ autoupdates/灵感笔记-1.2.4-arm64.dmg  113MB  fsize=118602579
+  ✓ autoupdates/latest-mac.yml  1KB  fsize=503
+▸ 完成：7 个对象已就位并校验（bucket=ideanote 前缀=autoupdates/）
+```
+
+| 码 | 含义 |
+|---|---|
+| 0 | 全部上传并校验通过（`--dry-run` / `--check` 通过也返回 0） |
+| 1 | 上传或校验失败（含 stat 大小不一致、本地 sha512 不配对） |
+| 2 | 参数/配置错误（缺 `--dir`、缺凭据、目录不存在、清单缺失） |
+
+---
+
+## 4. `scripts/release.sh`（单机发版）
+
+### 4.1 三种模式
+
+| 模式 | 命令 | 远端副作用 | 产物目录 |
+|---|---|---|---|
+| `package` | `npm run package` | 无 | `dist/package/` |
+| `dry` | `npm run release:dry` | 无（只改写清单） | `dist/release/latest-mac.yml` |
+| `release` | `npm run release -- patch` | 有：commit、tag、push、GitHub Release、scp 清单 | `dist/release/` |
+
+### 4.2 release 模式步骤
+
+1. `resolve_version`：`npm version <bump> --no-git-tag-version` 改 `package.json`
+2. 检查 tag `v$VERSION` 不存在
+3. `commit_version`：本地 commit + 打 tag
+4. `run_tests`（`SKIP_TESTS=1` 可跳过）
+5. `build`：`npx electron-builder --mac`
+6. `notarize_dmgs`：就地对 `dist/*.dmg` 签名 → notarytool 提交 dmg 本体 → staple（有凭据才跑）
+7. `stage_assets`：收 dmg/zip/blockmap；dmg 保留中文名，zip/blockmap 转 ASCII
+8. `push_git`：**push 分支与 tag**
+9. `publish_release`：`gh release create` + `upload --clobber`
+10. `write_deploy_manifest`：清单 url 改 GitHub 绝对地址，并按磁盘实际重算 sha512
+11. `verify_assets`：`curl -r 0-1023` 逐条验证资产可下载
+12. `deploy_manifest`：scp 到服务器，先传 `.tmp` 再原子 `mv`，比对 sha256
+13. `verify_feed`：线上清单版本必须等于本次版本
+
+### 4.3 参数与前置
+
+| 项 | 说明 |
+|---|---|
+| 版本参数 | `patch` / `minor` / `major` / `x.y.z`；与当前相同会被拒绝 |
+| 工作区 | `release` 模式要求干净，脏则退出 |
+| `.release.config.json` | `release` 必需：`repo` + `ssh.{host,user,port,identity,dir}` |
+| `gh` | 已登录且对仓库有 Write 权限 |
+| `SKIP_TESTS` | `1` = 跳过单测（不建议） |
+
+> `release.sh` 自带的 `git push` 是**这条命令的显式语义**（发版必须推 tag），不是自动行为；只跑 `npm run package` 不会碰远端。
+
+---
+
+## 5. 典型场景
+
+### 5.1 打包机首跑
+
+```bash
+PLATFORM=all MODE=local REF=main DRY_RUN=1 deploy/deploy.sh   # 先看命令对不对
+PLATFORM=all MODE=local REF=main deploy/deploy.sh             # 目录缺失会自动 git clone
+```
+首次 clone 走 GitHub 全量（约 58 MiB pack），慢链路可能超时；可先手工在打包机放好仓库。
+
+### 5.2 日常发版（双平台 + 七牛）
+
+```bash
+git fetch --tags && git tag --sort=-v:refname | head -5   # 确认目标 tag 在本地存在（脚本只认本地 tag）
+PLATFORM=all MODE=publish REF=v1.2.5 deploy/deploy.sh
+```
+
+### 5.3 只补传产物（不重新打包）
+
+`COLLECT_ARTIFACTS=0` 时产物留在打包机，`MODE=publish` 会拒绝（本机没有可投放的产物）；补传要先回收再单独投：
+
+```bash
+PLATFORM=mac MODE=local REF=v1.2.5 deploy/deploy.sh             # 只回收，不上传
+npm run upload:qiniu -- --dir deploy/artifacts-<ts>/mac/package # 对回收目录单独投放
+```
+
+### 5.4 只重试上传
+
+```bash
+UPLOAD_SKIP_UNCHANGED=1 PLATFORM=all MODE=publish REF=v1.2.5 deploy/deploy.sh
+# 或对已回收目录直接重跑（覆盖写，幂等）
+node scripts/qiniu-upload.js --dir deploy/artifacts-<ts>/mac/package
+```
+
+### 5.5 线上核验
+
+```bash
+curl -s https://ideanote.7373.com.cn/autoupdates/latest-mac.yml | head -5   # 版本号与 files
+curl -sI "https://ideanote.7373.com.cn/autoupdates/灵感笔记-1.2.5-arm64.dmg" | head -3   # dmg 是中文名，不是 idea-note-*
+```
+
+### 5.6 回滚
+
+| 场景 | 做法 |
+|---|---|
+| 只投错清单、包没错 | 用旧版本目录的 `latest*.yml` 重投（覆盖写），客户端即回到旧版 |
+| 版本号写错、尚未推送 | 本地 `git checkout -- package.json package-lock.json`，清 `dist/` 重跑 |
+| 已发 tag/Release | Release 可删，tag 保留以保证可追溯；客户端已升级的只能发更高版本修复 |
+| 已投七牛的包有问题 | 上传同版本重建产物会换 sha512，**必须连同清单一起重投**，不能只换包 |
+
+---
+
+## 6. 排障
+
+| 现象 | 根因 | 处置 |
+|---|---|---|
+| `Permission denied (publickey,password…)`，退出码 255 | 未装公钥 / 密码错 3 次 | `ssh-copy-id -p <port> <user>@<host>`；Windows 管理员组见 §1 |
+| 检出阶段退出码 1，日志有 `git diff` 输出 | 打包机工作区有未提交改动 | 在打包机 `git status` 后提交或还原；`*.qzhuli-manifest.json` 已被排除，不再误报 |
+| `codesign … errSecInternalComponent` | SSH 会话拿不到证书私钥 | 打包机 GUI 终端 `security unlock-keychain ~/Library/Keychains/login.keychain-db`；或把私钥访问控制设为 Always Allow |
+| `试签失败：errSecInternalComponent(-2070)`（package-mac.sh） | 钥匙串锁定，或私钥 ACL 未放行，或 codesign 命中了别的钥匙串 | 解锁 + `security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k <密码> <钥匙串>`；身份若在专用钥匙串，用 `CSC_KEYCHAIN` 指过去 |
+| `试签失败：no identity found`（package-mac.sh） | 指定钥匙串里只有证书、没有配对私钥 | 换到含私钥的钥匙串，或重新导入 `.p12` |
+| `试签失败：时间戳服务不可达` | `--timestamp` 需要 `timestamp.apple.com:80` | 放通该域名（代理/TUN 加直连）；不能去掉时间戳，公证要求安全时间戳 |
+| 构建日志 `skipped macOS notarization` | 三类：`.env` 未载入（`build:mac` 不读 `.env`）、未配 `APPLE_*` 三件套、或 `notarize:false` | 预期行为之一。需要公证则用 `bash scripts/package-mac.sh`（会 source `.env`）并补齐三件套；补票用 `npm run notarize:dmg` |
+| Windows 报「证书存储中没有可用代码签名证书」 | SimplySign 未登录 / PIN 过期 | 登录后 `node scripts/win-sign.js --warmup`；急用可 `--allow-unsigned` |
+| `缺少七牛凭据：QINIU_ACCESS_KEY …` | 没配置 | 填 `.release.config.json` 的 `qiniu` 段或注入环境变量 |
+| `bad token` / 401 / 403 | AK/SK 不匹配或无 bucket 写权限 | 核对是否同账号、子账号授权 |
+| `no such bucket` / 631 | bucket 名或区域不符 | 核对 `QINIU_BUCKET`；换 `upload-z*.qiniup.com` |
+| `file exists` / 614 | 策略禁止覆盖 | 脚本默认 `insertOnly=0`，检查是否被外部策略覆盖 |
+| `MODE=publish` 但报「未回收，无法投放」 | `COLLECT_ARTIFACTS=0`，产物留在了打包机 | 去掉 `COLLECT_ARTIFACTS=0` 重跑；补传见 §5.3 |
+| stat 大小不一致 | 上传被截断或对象被并发改写 | 重跑同命令（覆盖写）；持续失败查网络/代理 |
+| 公网 HEAD 403/404 但 stat 正常 | 未绑域名 / CDN 未刷新 / 防盗链 | 对象已落盘；刷新 CDN 后复验 |
+| 客户端仍拉到旧版本 | 清单被 CDN 缓存 | 对 `latest*.yml` 做刷新或该前缀配置不缓存 |
+
+---
+
+## 7. 凭据与安全
+
+- AK/SK 只允许出现在 `.release.config.json`（gitignore）或 CI 环境变量中，**不得写入 `package.json`、脚本、README**。
+- 日志只输出掩码（`AK_a****`），完整密钥不会出现在 stdout/stderr。
+- 建议用子账号密钥，仅授予目标 bucket 的写入权限；不要用账号主密钥。
+- 上传走 HTTPS；`uploadHost` 若改成 http，凭证会在明文链路传输，脚本不做拦截，勿这么配。
