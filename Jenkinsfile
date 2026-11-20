@@ -37,7 +37,7 @@ pipeline {
         booleanParam(name: 'NOTARIZE', defaultValue: false, description: 'mac 构建是否做 Apple 公证（需节点有 Developer ID 证书 + apple-id 凭据）')
         string(name: 'APPLE_TEAM_ID', defaultValue: 'FY4X5PTS6Q', description: 'Apple Developer Team ID（公证必填，非秘密）')
         string(name: 'WIN_SIGN_SHA1', defaultValue: '', description: 'Windows 代码签名证书 SHA1 指纹（留空 = 自动发现：证书存储唯一可用证书即 SimplySign 登录后自动签名）')
-        string(name: 'WIN_PUBLISHER_NAME', defaultValue: '', description: 'signtool publisherName（可选，自动模式下取证书 Subject）')
+        string(name: 'WIN_PUBLISHER_NAME', defaultValue: '', description: 'signtool publisherName（可选，仅显式模式使用；自动模式由 electron-builder 取证书 commonName。值不得含空格）')
         booleanParam(name: 'WIN_ALLOW_UNSIGNED', defaultValue: false, description: '证书不可用时仍继续出未签名包（SmartScreen 会拦截）')
     }
 

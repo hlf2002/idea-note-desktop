@@ -124,7 +124,7 @@ function checkSignature(opts) {
       `(Get-AuthenticodeSignature -LiteralPath "${target}" | ` +
       'Select-Object Status,StatusMessage,@{n="Signer";e={$_.SignerCertificate.Subject}},' +
       '@{n="Timestamp";e={$_.TimeStamperCertificate.Subject}} | ConvertTo-Json -Compress)'
-    ], { encoding: 'utf8', timeout: 60000, windowsVerbatimArguments: true });
+    ], { encoding: 'utf8', timeout: 60000 });
     info = JSON.parse(json);
   } catch (e) {
     skip('签名校验未能执行（PowerShell 失败：' + String(e.message).split('\n')[0] + '）');

@@ -202,13 +202,15 @@ remote_checkout() {
   if [ "$platform" = "win" ]; then
     # cmd 方言做 SHA 串比较语法脆弱且无法在本机验证；无条件 detach 检出同样保证
     # 工作区处于最新，git rev-parse HEAD 即留痕证明
-    printf 'if not exist "%s\\.git" git clone %s "%s" & cd /d %s && git diff --exit-code -- . ":(exclude)**/.qzhuli-manifest.json" && git diff --cached --exit-code && %s && git checkout --detach %s && git rev-parse HEAD && call npm ci' \
-      "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref"
+    # [deps] 标记：检出段历来是静默的，npm ci 若被跳过或失败会表现为「检出完成但依赖缺失」
+    # （后续 win-sign 报找不到 node_modules/electron-builder）。标记让每步在日志里可辨。
+    printf 'if not exist "%s\\.git" git clone %s "%s" & cd /d %s && git diff --exit-code -- . ":(exclude)**/.qzhuli-manifest.json" && git diff --cached --exit-code && echo [deps] git fetch && %s && echo [deps] checkout %s && git checkout --detach %s && echo [deps] HEAD && git rev-parse HEAD && echo [deps] npm ci start && call npm ci && echo [deps] npm ci done' \
+      "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref" "$tgt_ref"
   else
     # sh 方言：fetch 后显式比对 HEAD 与目标 ref——相同报「已是最新」跳过检出，
     # 不同则 detach 检出并报「已更新」，两种情况均以 rev-parse HEAD 收口留痕。
     # mac 侧 $proj 不加引号：路径含 ~ 时需在远程 shell 展开；因此 MAC_PROJECT_DIR 不支持空格
-    printf '([ -d %s/.git ] || git clone %s %s) && cd %s && git ls-files -z "*/.qzhuli-manifest.json" | xargs -0 git checkout -- && git diff --exit-code && git diff --cached --exit-code && %s && tgt=$(git rev-parse %s) && cur=$(git rev-parse HEAD) && { [ "$cur" = "$tgt" ] && echo "仓库已是最新：$tgt" || { git checkout --detach "$tgt" && echo "已更新至最新：$cur -> $tgt"; }; } && git rev-parse HEAD && npm ci' \
+    printf '([ -d %s/.git ] || git clone %s %s) && cd %s && git ls-files -z "*/.qzhuli-manifest.json" | xargs -0 git checkout -- && git diff --exit-code && git diff --cached --exit-code && echo "[deps] git fetch" && %s && tgt=$(git rev-parse %s) && cur=$(git rev-parse HEAD) && { [ "$cur" = "$tgt" ] && echo "仓库已是最新：$tgt" || { git checkout --detach "$tgt" && echo "已更新至最新：$cur -> $tgt"; }; } && echo "[deps] HEAD $cur -> $tgt" && git rev-parse HEAD && echo "[deps] npm ci start" && npm ci && echo "[deps] npm ci done"' \
       "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref"
   fi
 }
@@ -259,6 +261,7 @@ run_task() {
       echo "    3) 交互密码模式：密码错 3 次即 Permission denied；本轮所有 SSH 调用都会重复询问" >&2
     else
       echo "  原因：远程命令返回非 0（多为打包机工作区有未提交改动；git 原始输出见上）。处置：" >&2
+      echo "    · 若最后一条 [deps] 标记是 npm ci start，则为依赖安装失败（锁文件/网络/磁盘），不是仓库脏" >&2
       echo "--- 打包机工作区快照（只读取证）---" >&2
       if [ "$platform" = "win" ]; then
         ssh "${SSH_OPTS[@]}" -p "$port" "$user@$host" "cd /d $proj && git status --short && git rev-parse --short HEAD" >&2 || true
@@ -291,6 +294,8 @@ run_task() {
     if [ "$platform" = "win" ]; then
       echo "  提示：win 失败先看是否 SimplySign 未登录/PIN 未预热（脚本会打印排查清单）。" >&2
       echo "        证书不可用时可 WIN_ALLOW_UNSIGNED=1 出未签名包（SmartScreen 会拦截）。" >&2
+      echo "        依赖缺失（node_modules/electron-builder 不存在）：win-sign 已不走 npx 兜底，会直接拒绝构建；" >&2
+      echo "        确认检出段 [deps] 标记走到了 npm ci done，否则在打包机上手动 npm ci 后重跑。" >&2
     else
       echo "  提示：codesign 相关失败已由 scripts/package-mac.sh 分类（试签探针先跑），看它上一行结论：" >&2
       echo "        - errSecInternalComponent = 钥匙串锁着或私钥 ACL 未放行" >&2

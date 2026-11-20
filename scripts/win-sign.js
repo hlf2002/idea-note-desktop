@@ -27,7 +27,12 @@
  *
  * 用法：
  *   node scripts/win-sign.js [--sign-sha1 <指纹>] [--sign-subject <Subject>]
- *        [--publisher-name <完整DN>] [--allow-unsigned] [--no-sign] [--warmup] [--dry-run]
+ *        [--publisher-name <不含空白的CN值>] [--allow-unsigned] [--no-sign] [--warmup] [--dry-run]
+ *
+ * 约束：所有 builder 参数都会以 argv 数组形式传给 electron-builder，含空白/引号的
+ * 参数在 shell 拼串路径上会被拆词（yargs strict → Unknown arguments）。runBuilder
+ * 会先断言并在命中时 fail-fast。自动模式不注入 publisherName，由 electron-builder
+ * 从证书取 commonName。
  *
  * 退出码：0 成功；1 构建或校验失败；2 签名来源无法确定（未登录/多证书/缺私钥）；3 预热超时。
  */
@@ -128,13 +133,16 @@ function resolveSigning({ cli, env, config, pkgSigntool, platform, certs }) {
   }
   if (certs.length === 1) {
     const cert = certs[0];
+    // 不注入 publisherName：证书 Subject 是完整 X500 DN（"CN=…, O=…, L=…, S=…, C=CN"），
+    // 含 ", " 分隔符，一旦经过 shell 拼串就被按空格切成多段（yargs strict 直接判
+    // Unknown arguments 退出 1）。electron-builder 未配置该项时会自己从证书取
+    // commonName（app-builder-lib codeSign/windowsSignToolManager.js），语义等价。
     const args = [
       '--c.win.signtoolOptions.certificateSha1=' + cert.thumbprint,
-      '--c.win.signtoolOptions.rfc3161TimeStampServer=' + ts,
-      '--c.win.signtoolOptions.publisherName=' + cert.subject
+      '--c.win.signtoolOptions.rfc3161TimeStampServer=' + ts
     ];
     return { ...base, mode: 'auto', builderArgs: args, sha1: cert.thumbprint,
-      publisherName: cert.subject, cert, reason: '证书存储唯一可用证书（SimplySign 自动签名）' };
+      publisherName: '', cert, reason: '证书存储唯一可用证书（SimplySign 自动签名）' };
   }
   if (certs.length === 0) {
     return { ...base, mode: 'missing', canBuild: false,
@@ -232,18 +240,41 @@ function prewarm(resolution, timestampServer) {
   }
 }
 
+/** 含空白/双引号的参数无法安全穿过 shell：返回候选（供断言与单测） */
+function findUnsafeArgs(args) {
+  return args.filter((a) => /[\s"]/.test(a));
+}
+
 function runBuilder(builderArgs) {
   const cliJs = path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
   const args = ['--win'].concat(builderArgs);
-  let cmdDesc = 'node node_modules/electron-builder/cli.js ' + args.join(' ');
-  let r;
-  if (fs.existsSync(cliJs)) {
-    console.log('▸ 构建：' + cmdDesc);
-    r = spawnSync(process.execPath, [cliJs].concat(args), { stdio: 'inherit', cwd: ROOT });
-  } else {
-    cmdDesc = 'npx electron-builder ' + args.join(' ');
-    console.log('▸ 构建：' + cmdDesc);
-    r = spawnSync('npx', ['electron-builder'].concat(args), { stdio: 'inherit', cwd: ROOT, shell: process.platform === 'win32' });
+
+  // 含空白的参数一旦被 shell 拼串就会被拆词。2026-11-20 实测：证书完整 Subject
+  // （"CN=射手科技（珠海）有限公司, O=…, L=珠海, S=广东, C=CN"）被按空格拆成 5 段，
+  // yargs strict 把后 4 段判为 Unknown arguments，退出 1，构建一步没走。
+  // 宁可停在这里并说清原因，也不静默传一个注定被拆的值。
+  const unsafe = findUnsafeArgs(args);
+  if (unsafe.length > 0) {
+    console.error('✗ 构建参数含空白字符，跨 shell 传递会被拆词：');
+    for (const a of unsafe) console.error('   ' + JSON.stringify(a));
+    console.error('   签名参数不要携带完整 X500 DN（含 ", "）；需要指定签名主体时改用 -c 配置文件。');
+    return false;
+  }
+
+  // 依赖必须来自本机 node_modules（npm ci 装的确定版本）。不再退回 npx：
+  // ① npx 会拉最新版 electron-builder，构建行为随远端漂移；
+  // ② Windows 上 spawn 带 shell 时 Node 只做字符串拼接、不给参数加引号，必然拆词。
+  if (!fs.existsSync(cliJs)) {
+    console.error('✗ 未找到 node_modules/electron-builder/cli.js：依赖未安装或不完整');
+    console.error('   先执行 npm ci（打包机由 deploy/deploy.sh 检出阶段负责），再重跑 npm run package:win。');
+    return false;
+  }
+
+  console.log('▸ 构建：node node_modules/electron-builder/cli.js ' + args.join(' '));
+  const r = spawnSync(process.execPath, [cliJs].concat(args), { stdio: 'inherit', cwd: ROOT });
+  if (r.error) {
+    console.error('✗ electron-builder 启动失败：' + r.error.message);
+    return false;
   }
   if (r.status !== 0) {
     console.error('✗ electron-builder 退出码 ' + r.status);
@@ -344,5 +375,5 @@ function main() {
   console.log('[win-sign] 完成');
 }
 
-module.exports = { resolveSigning, enumerateCerts, MACHINE_NAMES, DEFAULT_TIMESTAMP };
+module.exports = { resolveSigning, enumerateCerts, MACHINE_NAMES, DEFAULT_TIMESTAMP, findUnsafeArgs };
 if (require.main === module) main();

@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { resolveSigning, DEFAULT_TIMESTAMP } = require('../scripts/win-sign');
+const { resolveSigning, DEFAULT_TIMESTAMP, findUnsafeArgs } = require('../scripts/win-sign');
 
 const CLI_EMPTY = { signSha1: '', signSubject: '', publisherName: '' };
 const ENV_EMPTY = {};
@@ -81,7 +81,7 @@ test('优先级④ package.json signtoolOptions 在配置为空时生效', () =>
   assert.match(argByPrefix(r.builderArgs, 'certificateSha1'), /PKG_FPR/);
 });
 
-test('优先级⑤ 证书存储唯一可用证书 → auto：注入指纹 + 时间戳 + publisherName=Subject', () => {
+test('优先级⑤ 证书存储唯一可用证书 → auto：只注入指纹 + 时间戳，不注入 publisherName', () => {
   const r = resolveSigning({
     cli: CLI_EMPTY, env: ENV_EMPTY, config: CONFIG_EMPTY, pkgSigntool: PKG_EMPTY,
     platform: 'win32', certs: ONE_CERT
@@ -89,8 +89,24 @@ test('优先级⑤ 证书存储唯一可用证书 → auto：注入指纹 + 时�
   assert.equal(r.mode, 'auto');
   assert.equal(r.canBuild, true);
   assert.match(argByPrefix(r.builderArgs, 'certificateSha1'), /ABC123/);
-  assert.match(argByPrefix(r.builderArgs, 'publisherName'), /CN=Test Co/);
+  // 证书 Subject 是完整 X500 DN（"CN=Test Co, O=Test"，含 ", "），直接当参数值会被
+  // shell 按空格拆成多段 → yargs strict 报 Unknown arguments。交给 electron-builder
+  // 自己从证书取 commonName，语义等价且没有空白字符。
+  assert.equal(argByPrefix(r.builderArgs, 'publisherName'), undefined);
+  assert.equal(r.publisherName, '');
+  assert.deepEqual(findUnsafeArgs(r.builderArgs), []);
   assert.equal(r.timestampServer, DEFAULT_TIMESTAMP);
+});
+
+test('findUnsafeArgs：揪出会被 shell 拆词的参数（回归样例为完整证书 DN）', () => {
+  // 2026-11-20 打包机实测：这条参数在 Windows 上被拆成 5 段，后 4 段成 Unknown arguments
+  const dn = '--c.win.signtoolOptions.publisherName=CN=射手科技（珠海）有限公司, O=射手科技（珠海）有限公司, L=珠海, S=广东, C=CN';
+  assert.deepEqual(findUnsafeArgs([dn]), [dn]);
+  assert.deepEqual(findUnsafeArgs([
+    '--c.win.signtoolOptions.certificateSha1=ABC123',
+    '--c.win.signtoolOptions.rfc3161TimeStampServer=http://timestamp.digicert.com'
+  ]), []);
+  assert.deepEqual(findUnsafeArgs(['--c.win.publisherName=CN= ']), ['--c.win.publisherName=CN= ']); // 结尾空格同样危险
 });
 
 test('auto：零张证书 → missing 且 canBuild=false（未登录 SimplySign 的默认停止行为）', () => {
