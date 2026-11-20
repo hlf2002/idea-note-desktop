@@ -39,6 +39,8 @@ pipeline {
         string(name: 'WIN_SIGN_SHA1', defaultValue: '', description: 'Windows 代码签名证书 SHA1 指纹（留空 = 自动发现：证书存储唯一可用证书即 SimplySign 登录后自动签名）')
         string(name: 'WIN_PUBLISHER_NAME', defaultValue: '', description: 'signtool publisherName（可选，仅显式模式使用；自动模式由 electron-builder 取证书 commonName。值不得含空格）')
         booleanParam(name: 'WIN_ALLOW_UNSIGNED', defaultValue: false, description: '证书不可用时仍继续出未签名包（SmartScreen 会拦截）')
+        booleanParam(name: 'PUBLISH_FEISHU', defaultValue: false, description: '打包成功后发布到 IPA 平台（ipa.qzhuli.cn）并发飞书公告（需 IPA_APP_ID + ipa-token 凭据；与七牛自动更新互斥）')
+        string(name: 'IPA_APP_ID', defaultValue: '', description: 'IPA 平台应用 ID（PUBLISH_FEISHU=true 时必填，非秘密）')
     }
 
     environment {
@@ -69,6 +71,17 @@ pipeline {
                              "WIN_PUBLISHER_NAME=${params.WIN_PUBLISHER_NAME ?: ''}"]) {
                         def flags = params.WIN_ALLOW_UNSIGNED ? ' --allow-unsigned' : ''
                         bat "node scripts/win-sign.js${flags}"
+                    }
+                    // IPA 发布（可选）：PUBLISH_FEISHU=true 时，把 dist/package-win 的安装包
+                    // 上传 ipa.qzhuli.cn 并发飞书公告。appId 来自参数，token 来自 Jenkins
+                    // 凭据 ipa-token（secretText）。与七牛自动更新互斥，本流水线只走 IPA 渠道。
+                    if (params.PUBLISH_FEISHU) {
+                        if (!params.IPA_APP_ID?.trim()) {
+                            error('PUBLISH_FEISHU=true 需要提供 IPA_APP_ID')
+                        }
+                        withCredentials([string(credentialsId: 'ipa-token', variable: 'IPA_TOKEN')]) {
+                            bat "node scripts/publish-ipa.js --platform win --dir dist/package-win --app-id \"${params.IPA_APP_ID}\""
+                        }
                     }
                 }
             }
@@ -114,6 +127,17 @@ pipeline {
                             }
                         } else {
                             sh "${skipTests}npm run package"
+                        }
+                    }
+                    // IPA 发布（可选）：PUBLISH_FEISHU=true 时，把 dist/package 的 dmg
+                    // 上传 ipa.qzhuli.cn 并发飞书公告。appId 来自参数，token 来自 Jenkins
+                    // 凭据 ipa-token（secretText）。与七牛自动更新互斥，本流水线只走 IPA 渠道。
+                    if (params.PUBLISH_FEISHU) {
+                        if (!params.IPA_APP_ID?.trim()) {
+                            error('PUBLISH_FEISHU=true 需要提供 IPA_APP_ID')
+                        }
+                        withCredentials([string(credentialsId: 'ipa-token', variable: 'IPA_TOKEN')]) {
+                            sh "node scripts/publish-ipa.js --platform mac --dir dist/package --app-id '${params.IPA_APP_ID}'"
                         }
                     }
                 }

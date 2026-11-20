@@ -23,5 +23,10 @@
     "publicBase": "",
     "_artifactPrefix说明": "产物单传（npm run upload:artifact）的前缀，默认 artifacts/。必须与上面的 prefix 分离，脚本会拒绝与更新源前缀重叠的配置；也可用 QINIU_ARTIFACT_PREFIX 覆盖",
     "artifactPrefix": "artifacts/"
+  },
+  "ipa": {
+    "_说明": "publish-ipa.js 上传 IPA 平台（ipa.qzhuli.cn）并触发飞书公告时读取。appId 是平台为「灵感笔记」注册的应用 ID；token 是发布令牌（X-IPA-TOKEN 鉴权头）。也可用环境变量 IPA_APP_ID / IPA_TOKEN（或 PUBLISH_TOKEN，兼容 q_assistant）注入，环境变量优先。",
+    "appId": "",
+    "token": ""
   }
 }

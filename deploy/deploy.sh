@@ -8,7 +8,9 @@
 #
 # 参数（环境变量，支持小写）：
 #   PLATFORM / platform   win | mac | all（默认 win）；all = 双机串行
-#   MODE / mode           local（默认）只构建；publish 构建后由打包机上传七牛
+#   MODE / mode           local（默认）只构建；publish 构建后由打包机上传七牛；
+#                         publish-feishu 构建后由打包机上传 IPA + 飞书公告（不投七牛，
+#                         与 publish 是两个互斥渠道，各管一个发布面）
 #   REF                   tag 或 main；TAG/tag/BRANCH/branch/GIT_BRANCH 同样有效，
 #                         缺省由本仓库 HEAD 推断
 #
@@ -69,7 +71,7 @@ while [ $# -gt 0 ]; do
       DRY_RUN=1; shift ;;
     win|mac|all)
       PLATFORM="$1"; PLATFORM_GIVEN=1; shift ;;
-    local|publish)
+    local|publish|publish-feishu)
       MODE="$1"; shift ;;
     *)
       printf '未知参数：%s\n  支持 platform/mode/ref/dry，或裸 win|mac|all|local|publish\n' "$1" >&2
@@ -98,21 +100,27 @@ case "$PLATFORM" in
     ;;
 esac
 
-# MODE 决定是否发布：local 只构建，publish 构建后由打包机投七牛
+# MODE 决定发布渠道（对齐 q_assistant 的 mode 语义）：
+#   local           只构建
+#   publish         构建后由打包机投七牛（electron-updater 自动更新仓）
+#   publish-feishu  构建后由打包机上传 IPA + 飞书公告（不投七牛）
+# 两个发布渠道互斥，各管一个发布面。IPA 凭据读打包机本地 .release.config.json 的
+# ipa 段（appId/token）或 IPA_APP_ID / IPA_TOKEN 环境变量，跳板机不持有凭据。
 case "$MODE" in
-  local) MODE_UPLOAD=0 ;;
-  publish) MODE_UPLOAD=1 ;;
-  publish-feishu)
-    printf 'MODE=publish-feishu 需要飞书通知，本项目未接入；请用 MODE=publish 只投七牛\n' >&2
-    exit 2
-    ;;
+  local) MODE_UPLOAD=0; MODE_FEISHU=0 ;;
+  publish) MODE_UPLOAD=1; MODE_FEISHU=0 ;;
+  publish-feishu) MODE_UPLOAD=0; MODE_FEISHU=1 ;;
   *)
-    printf 'MODE 仅支持 local/publish，当前 MODE=%s\n' "$MODE" >&2
+    printf 'MODE 仅支持 local/publish/publish-feishu，当前 MODE=%s\n' "$MODE" >&2
     exit 2
     ;;
 esac
-# 显式 UPLOAD 优先于 MODE 推导（兼容旧调用方式）
+# 显式 UPLOAD 优先于 MODE 推导（兼容旧调用方式）；与 publish-feishu 互斥
 UPLOAD="${UPLOAD_OVERRIDE:-$MODE_UPLOAD}"
+if [ "$MODE_FEISHU" = "1" ] && [ "$UPLOAD" = "1" ]; then
+  printf 'MODE=publish-feishu 与 UPLOAD=1（七牛）互斥：IPA 发布与七牛更新仓是两个独立渠道\n' >&2
+  exit 2
+fi
 
 for flag in "$DRY_RUN" "$UPLOAD"; do
   case "$flag" in
@@ -231,11 +239,13 @@ run_task() {
     # win 校验在 finalize-win.js 收尾三断言（latest.yml 存在 + files[] 逐条 sha512/size 配对）
     package_cmd="cd /d $proj && call npm run package:win"
     [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package-win"
+    [ "$MODE_FEISHU" = "1" ] && package_cmd="$package_cmd && node scripts/publish-ipa.js --platform win --dir dist/package-win"
   else
     checkout_cmd="$(remote_checkout mac "$proj")"
     # mac 校验在 release.sh 内（refresh + verify）；老 ref 无 package-mac.sh 时回退裸 npm run package
     package_cmd="cd $proj && if [ -f scripts/package-mac.sh ]; then bash scripts/package-mac.sh; else npm run package; fi"
     [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package"
+    [ "$MODE_FEISHU" = "1" ] && package_cmd="$package_cmd && node scripts/publish-ipa.js --platform mac --dir dist/package"
   fi
 
   if [ "$DRY_RUN" = "1" ]; then
@@ -283,7 +293,9 @@ run_task() {
   echo "--- 远程打包（日志实时回传）---"
   if ssh "${SSH_OPTS[@]}" -p "$port" "$user@$host" "$package_cmd"; then
     echo "--- 远程打包成功 ---"
-    if [ "$UPLOAD" = "1" ]; then
+    if [ "$MODE_FEISHU" = "1" ]; then
+      status="PASS（打包 + 校验 + 上传 IPA + 飞书公告完成）"
+    elif [ "$UPLOAD" = "1" ]; then
       status="PASS（打包 + 校验 + 上传七牛完成）"
     else
       status="PASS（打包 + 校验完成）"
@@ -324,9 +336,9 @@ if [ "$PLATFORM" = "mac" ] || [ "$PLATFORM" = "all" ]; then
   run_task mac "$MAC_HOST" "$MAC_PORT" "$MAC_USER" "$MAC_PROJECT_DIR" || true
 fi
 
-if [ "$UPLOAD" = "0" ]; then
+if [ "$UPLOAD" = "0" ] && [ "$MODE_FEISHU" = "0" ]; then
   echo ""
-  echo "（未启用上传：MODE=publish 重跑，由打包机上传七牛）"
+  echo "（未启用发布：MODE=publish 由打包机上传七牛；MODE=publish-feishu 由打包机上传 IPA + 飞书公告）"
 fi
 
 echo ""

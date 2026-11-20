@@ -17,7 +17,8 @@
     "upload:qiniu": "node scripts/qiniu-upload.js",
     "upload:artifact": "node scripts/qiniu-artifact.js",
     "release": "bash scripts/release.sh",
-    "release:dry": "bash scripts/release.sh --dry-run"
+    "release:dry": "bash scripts/release.sh --dry-run",
+    "publish:ipa": "node scripts/publish-ipa.js"
   },
   "license": "MIT",
   "author": "射手科技（珠海）有限公司",

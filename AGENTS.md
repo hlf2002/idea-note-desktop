@@ -26,9 +26,10 @@
 - dmg 补票入口（历史产物 / 事后改目录才用）：`npm run staple` = `npm run notarize:dmg`（`scripts/notarize-dmg.sh`：调 dmg-notarize.sh + 重生成 blockmap + 重算清单）
 - 交付目录纪律：**投放只认 `dist/package/`**。dmg 保留中文名 `灵感笔记-*`（人工下载用），zip / blockmap 是 ASCII `idea-note-*`（自动更新链路）；`dist/` 根目录是同一份字节但缺清单，不要直接分发
 - electron-builder 的 `mac.notarize` 只覆盖 `.app`（`@electron/notarize` 会顺带装订 app）；dmg 是之后 hdiutil 打出的新字节流，不单独提交就没有票，`stapler` 必报 Record not found / Error 65
-- 多机打包 + 投放：`PLATFORM=mac MODE=publish REF=main deploy/deploy.sh`（与 q_assistant 的 deploy.sh 同一套 PLATFORM/MODE/REF；`PLATFORM=all` 为双机扩展；`DRY_RUN=1` 只演练）
+- 多机打包 + 投放：`PLATFORM=mac MODE=publish REF=main deploy/deploy.sh`（与 q_assistant 的 deploy.sh 同一套 PLATFORM/MODE/REF；`PLATFORM=all` 为双机扩展；`DRY_RUN=1` 只演练）。`MODE` 三种：`local` 只构建、`publish` 投七牛（自动更新仓）、`publish-feishu` 上传 IPA + 飞书公告（与七牛互斥，各管一个发布面）
 - 只投放七牛：`npm run upload:qiniu -- --dir dist/package`（凭据读 `.release.config.json` 的 `qiniu` 段或 `QINIU_*` 环境变量，`--dry-run` 可预演；传完会修清单 Content-Type 并提交 CDN 刷新，`--no-cdn` / `--strict-cdn` 控制）
 - 产物单传：`npm run upload:artifact -- <文件|目录>… [--dated] [--subdir qa] [--dry-run]`（独立链路，不读 latest\*.yml、默认不刷 CDN；前缀 `artifacts/`，配置键 `qiniu.artifactPrefix`）
+- IPA 发布（`ipa.qzhuli.cn` + 飞书公告）：`npm run publish:ipa -- --platform mac --dir dist/package --app-id <id>`（四步 API：policy→upload→complete→feishu，`X-IPA-TOKEN` 鉴权；凭据 `--token` / 环境变量 `IPA_TOKEN`（或 `PUBLISH_TOKEN`）/ `.release.config.json` 的 `ipa` 段；`--dry-run` 预演、`--uploaded-key <key>` 只补飞书公告）
 
 ## 架构速览
 
