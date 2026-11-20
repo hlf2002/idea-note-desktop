@@ -28,6 +28,7 @@
 - electron-builder 的 `mac.notarize` 只覆盖 `.app`（`@electron/notarize` 会顺带装订 app）；dmg 是之后 hdiutil 打出的新字节流，不单独提交就没有票，`stapler` 必报 Record not found / Error 65
 - 多机打包 + 投放：`PLATFORM=mac MODE=publish REF=main deploy/deploy.sh`（与 q_assistant 的 deploy.sh 同一套 PLATFORM/MODE/REF；`PLATFORM=all` 为双机扩展；`DRY_RUN=1` 只演练）
 - 只投放七牛：`npm run upload:qiniu -- --dir dist/package`（凭据读 `.release.config.json` 的 `qiniu` 段或 `QINIU_*` 环境变量，`--dry-run` 可预演；传完会修清单 Content-Type 并提交 CDN 刷新，`--no-cdn` / `--strict-cdn` 控制）
+- 产物单传：`npm run upload:artifact -- <文件|目录>… [--dated] [--subdir qa] [--dry-run]`（独立链路，不读 latest\*.yml、默认不刷 CDN；前缀 `artifacts/`，配置键 `qiniu.artifactPrefix`）
 
 ## 架构速览
 

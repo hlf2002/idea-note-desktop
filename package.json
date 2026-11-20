@@ -15,6 +15,7 @@
     "staple": "bash scripts/notarize-dmg.sh",
     "notarize:dmg": "bash scripts/notarize-dmg.sh",
     "upload:qiniu": "node scripts/qiniu-upload.js",
+    "upload:artifact": "node scripts/qiniu-artifact.js",
     "release": "bash scripts/release.sh",
     "release:dry": "bash scripts/release.sh --dry-run"
   },

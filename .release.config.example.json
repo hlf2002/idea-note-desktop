@@ -20,6 +20,8 @@
     "_cdnHost说明": "CDN 刷新入口（融合 CDN），一般不用改；刷新接口是 POST /v2/tune/refresh",
     "cdnHost": "https://fusion.qiniuapi.com",
     "_publicBase说明": "桶的公开访问域名根（不带 prefix）。配了才做公网 HEAD 校验与 CDN 刷新；留空则两者都跳过",
-    "publicBase": ""
+    "publicBase": "",
+    "_artifactPrefix说明": "产物单传（npm run upload:artifact）的前缀，默认 artifacts/。必须与上面的 prefix 分离，脚本会拒绝与更新源前缀重叠的配置；也可用 QINIU_ARTIFACT_PREFIX 覆盖",
+    "artifactPrefix": "artifacts/"
   }
 }

@@ -1,7 +1,7 @@
 # 打包与发布手册
 
 三条链路的完整用法：本地打包、单机发版（GitHub Release + 服务器清单）、多机打包 + 七牛投放。
-本文与 `deploy/deploy.sh`、`scripts/qiniu-upload.js`、`scripts/release.sh` 的代码同步维护——参数含义以脚本为准，改脚本时请同改本文。
+本文与 `deploy/deploy.sh`、`scripts/qiniu-upload.js`、`scripts/qiniu-artifact.js`、`scripts/release.sh` 的代码同步维护——参数含义以脚本为准，改脚本时请同改本文。
 
 ---
 
@@ -342,6 +342,80 @@ cdn 刷新与 HEAD 校验用的 URL 由 `publicBase + '/' + 逐段 encodeURIComp
 | 1 | 上传或校验失败（含 stat 大小不一致、本地 sha512 不配对） |
 | 2 | 参数/配置错误（缺 `--dir`、缺凭据、目录不存在、清单缺失） |
 
+### 4.8 产物单传（`scripts/qiniu-artifact.js`）
+
+用于把**单个或一组构建/生成产物**（QA 包、截图、报告、归档）单独投到对象存储，不与发版耦合。
+入口：`npm run upload:artifact -- <文件|目录>…`。
+
+与发布链路的边界：
+
+| | 发布链路 `qiniu-upload.js` | 产物单传 `qiniu-artifact.js` |
+|---|---|---|
+| 输入 | 整个产物目录，**必须**含 `latest*.yml` | 任意文件/目录，无清单要求 |
+| 校验 | sha512 门禁 + stat 大小 | stat 大小 + 七牛 etag（内容级） |
+| 前缀 | `qiniu.prefix`（默认 `autoupdates/`） | `qiniu.artifactPrefix`（默认 `artifacts/`） |
+| 副作用 | 清单 MIME 修正 + CDN 刷新 | 默认无；`--cdn` 才刷新 |
+| 触发 | `npm run upload:qiniu` / `deploy.sh MODE=publish` | `npm run upload:artifact`，独立命令 |
+
+脚本只复用 `qiniu-upload.js` 的纯函数（签名、配置优先级、stat、上传原语），**不调用它的流程**，
+因此两条链路可以各自独立执行、互不改变对方的远端状态。
+
+**对象 key 规则**：`<prefix><subdir><[YYYY-MM-DD/]><name>`
+
+| 调用 | key |
+|---|---|
+| `upload:artifact -- shot.png` | `artifacts/shot.png` |
+| `... -- shot.png --dated` | `artifacts/2026-11-20/shot.png` |
+| `... -- shot.png --subdir qa/1.2.4 --dated` | `artifacts/qa/1.2.4/2026-11-20/shot.png` |
+| `... -- shot.png --name 首屏.png` | `artifacts/首屏.png` |
+| `... -- shot.png --prefix tmp/` | `tmp/shot.png` |
+
+`name` 默认取源文件名：去路径、空白折叠为 `-`、去控制字符；中文原样保留（URL 侧逐段 percent-encode）。
+`--name` 只允许单文件；子目录用 `--subdir`。以下情况直接拒绝（退出 2）：
+
+- `latest*.yml`：防止把清单当普通文件传到错误前缀，误以为更新源已更新（`--allow-manifest` 可绕过）；
+- 产物前缀与更新源前缀互相包含：默认配置下 overlaps 即报错，`--prefix` 显式指定时仅告警；
+- 多个输入清洗后同名、或落到同一个 key：避免静默互相覆盖；
+- 单文件 > 512MB：现实现整文件读入内存，大文件请用 `qsctl` 分片。
+
+**重复上传**（幂等）：先 `stat` 远端，用七牛 etag 比对内容。
+
+| 远端状态 | 默认行为 | 覆盖方式 |
+|---|---|---|
+| 不存在 | 上传 | — |
+| 同名且 etag 一致 | 跳过，打印 `↷` | `--force` 强制重传 |
+| 同名同大小、etag 不同 | 告警并覆盖写 | — |
+| 同名不同大小 | 覆盖写（提示大小差异） | `--skip-existing` 可改为一律跳过 |
+
+写入仍是 `insertOnly=0`，重跑不会产生 `-1` 副本；`--check` 只核对、`--dry-run` 不联网。
+
+**输出**：
+
+```
+▸ 七牛产物单传 · bucket=ideanote · 前缀=artifacts/ · 目标=https://upload.qiniup.com
+  凭据 AK_a****（env QINIU_ACCESS_KEY）· 前缀来源 .release.config.json qiniu.artifactPrefix · 2 个文件
+  ✓ artifacts/qa/2026-11-20/screenshot.png  412KB  etag=Fabc…
+    https://cdn.example.com/artifacts/qa/2026-11-20/screenshot.png
+  ↷ artifacts/qa/2026-11-20/report.pdf  远端已存在且内容一致（--force 可强制重传）
+▸ 完成：1 上传 / 1 跳过 / 0 失败 · 合计 412KB
+```
+
+失败时逐条打印 `key + 原因 + 处置`，最后提示可原命令重跑；`--json` 输出结构化结果
+（`items[].status` = `uploaded` / `skipped` / `failed` / `aborted`，附 `summary`），供 CI 消费。
+退出码与 §4.7 一致：0 成功（含跳过）、1 上传/校验失败、2 参数/配置错误。
+
+配置项（复用 §4.2 的凭据，仅新增前缀）：
+
+| 配置键 | 环境变量 | 默认 | 说明 |
+|---|---|---|---|
+| `artifactPrefix` | `QINIU_ARTIFACT_PREFIX` | `artifacts/` | 产物前缀，必须与 `prefix` 分离 |
+
+```bash
+npm run upload:artifact -- dist/package/灵感笔记-1.2.4-arm64.dmg --subdir qa --dated
+npm run upload:artifact -- screenshot.png --dry-run
+npm run upload:artifact -- --dir reports --check
+```
+
 ---
 
 ## 5. `scripts/release.sh`（单机发版）
@@ -451,6 +525,10 @@ curl -sI "https://ideanote.7373.com.cn/autoupdates/灵感笔记-1.2.5-arm64.dmg"
 | 构建日志 `skipped macOS notarization` | 三类：`.env` 未载入（`build:mac` 不读 `.env`）、未配 `APPLE_*` 三件套、或 `notarize:false` | 预期行为之一。需要公证则用 `bash scripts/package-mac.sh`（会 source `.env`）并补齐三件套；补票用 `npm run notarize:dmg` |
 | Windows 报「证书存储中没有可用代码签名证书」 | SimplySign 未登录 / PIN 过期 | 登录后 `node scripts/win-sign.js --warmup`；急用可 `--allow-unsigned` |
 | `no such bucket` / 631 | bucket 名或区域不符 | 核对 `QINIU_BUCKET`；换 `upload-z*.qiniup.com` |
+| 产物单传报「产物前缀与更新源前缀重叠」 | `artifactPrefix` 配到了 `autoupdates/` 下 | 改成独立前缀（默认 `artifacts/`）；确需落更新源目录时用 `--prefix` 显式指定（仅告警） |
+| 产物单传报「拒绝单传发布清单 latest*.yml」 | 把发版清单喂给了产物链路 | 发版用 `npm run upload:qiniu -- --dir <产物目录>`；仅留档时加 `--allow-manifest` |
+| `--cdn 需要 QINIU_PUBLIC_BASE` | 未配公开域名，拼不出刷新 URL | 配 `publicBase`，或去掉 `--cdn`（产物单传默认不刷新） |
+| 产物单传 `etag 不一致` | 同名文件已被别的内容占用 | 脚本已按覆盖写重传；仍失败查是否有外部程序并发改写该 key |
 | `file exists` / 614 | 策略禁止覆盖 | 脚本默认 `insertOnly=0`，检查是否被外部策略覆盖 |
 | stat 大小不一致 | 上传被截断或对象被并发改写 | 重跑同命令（覆盖写）；持续失败查网络/代理 |
 | 公网 HEAD 403/404 但 stat 正常 | 未绑域名 / CDN 未刷新 / 防盗链 | 对象已落盘；刷新 CDN 后复验 |
