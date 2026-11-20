@@ -58,6 +58,10 @@ for f in "${dmgs[@]}"; do
   name="$(basename "$f")"
   log "处理 ${name}"
 
+  # 文件缺失必须在此处显式失败：否则 codesign -dv 输出 "No such file or directory"，
+  # 不匹配 "not signed at all"，会被误判成「已签名，跳过 codesign」，把问题拖到 notarytool。
+  [[ -f "$f" ]] || die "  文件不存在：${f}（构建未产出，先查 dist/ 与 package-mac.log）"
+
   # ---- 1) 签名（electron-builder 只签 .app，dmg 通常裸着；签名会改字节，必须在提交前做）
   # 注意：不能写 `codesign -dv "$f" | grep -q ...` —— 未签名时 codesign 退出码为 1，
   # pipefail 会把整条管道判成失败，分支永远走不到「需要签名」。先落变量再匹配。
@@ -91,13 +95,13 @@ for f in "${dmgs[@]}"; do
     if [[ -n "$PROFILE" ]]; then
       if ! out="$(xcrun notarytool submit "$f" --keychain-profile "$PROFILE" \
           --wait --output-format json 2>"$ERR_LOG")"; then
-        die "  notarytool 提交失败（${name}）：$(tail -3 "$ERR_LOG")"
+        die "  notarytool 提交失败（${name}）：$(head -n 4 "$ERR_LOG")"
       fi
     else
       if ! out="$(xcrun notarytool submit "$f" \
           --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
           --wait --output-format json 2>"$ERR_LOG")"; then
-        die "  notarytool 提交失败（${name}）：$(tail -3 "$ERR_LOG")"
+        die "  notarytool 提交失败（${name}）：$(head -n 4 "$ERR_LOG")"
       fi
     fi
     verdict="$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log((j.status||"?")+" "+(j.id||""))}catch(e){console.log("? ")}})')"
