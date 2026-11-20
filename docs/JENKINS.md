@@ -88,7 +88,7 @@ New Item → **Pipeline** → Configure：
 | 测试挂了想跳过 | RUN_TESTS=false（不建议，发布门禁靠它） |
 | 想只构建一个平台 | TARGET=win 或 mac（分别跑，收尾目录互相独立） |
 | deploy.sh 报 `Unknown option: -C`（随后误报「不是本仓库已知 tag」） | 调度机 git < 1.8.5（如 CentOS 7 的 1.8.3.1）不支持 `git -C`；脚本已改用 cd 子 shell 规避（2026-11-17），其他脚本再报此错则升级调度机 git |
-| deploy.sh 的 SSH 认证、脏树、`errSecInternalComponent`、七牛报错 | 见 [DEPLOY.md §6 排障](./DEPLOY.md#6-排障) |
+| deploy.sh 的 SSH 认证、脏树、`errSecInternalComponent`、七牛报错 | 见 [DEPLOY.md §7 排障](./DEPLOY.md#7-排障) |
 
 ## 八、发布到自动更新服务器（当前未接，人工执行）
 
@@ -97,22 +97,20 @@ Jenkins 目前只做**构建 + 归档 + 校验**；发布（GitHub Release + 推
 
 ## 九、多机打包调度与七牛投放
 
-不依赖 Jenkins 节点：本机（或任意调度节点）执行 `deploy/deploy.sh`，SSH 到两台打包机检出、打包、scp 回收产物并做 sha512 配对校验，可选按「包在前、清单在后」投放到七牛 Kodo。
+Jenkins 作为跳板机，只负责触发：执行 `deploy/deploy.sh`，SSH 到两台打包机，由打包机完成「检出 → 打包/签名/公证 → 校验（node verify）→ 可选上传七牛」。跳板机不回收产物、不校验、不上传，全程零 Node、零产物落盘。节点职责分工见 [DEPLOY.md §1 架构](./DEPLOY.md#1-架构跳板机-vs-打包机)。
 
-**完整用法见 [`docs/DEPLOY.md`](./DEPLOY.md)**：位置参数与环境变量全表、七牛配置项、校验矩阵、幂等语义、场景命令、排障表。
+**完整用法见 [`docs/DEPLOY.md`](./DEPLOY.md)**：位置参数与环境变量全表、七牛配置项、校验矩阵、场景命令、排障表。
 
-Jenkins 接入（可选，与 label agent 模式二选一）：
+Jenkins 接入：
 
 ```groovy
-// 只构建并归档（不发布）
+// 只构建（打包 + 校验，产物留打包机）
 sh "PLATFORM=${params.TARGET} MODE=local REF=main bash deploy/deploy.sh"
-archiveArtifacts artifacts: 'deploy/artifacts-*/**', allowEmptyArchive: true
 
-// 构建后投七牛：凭据在 Jenkins 里以 Credentials 注入 QINIU_ACCESS_KEY / QINIU_SECRET_KEY / QINIU_BUCKET
+// 构建 + 打包机上传七牛（凭据在打包机本地的 .release.config.json，Jenkins 不持凭据）
 sh "PLATFORM=${params.TARGET} MODE=publish REF=main bash deploy/deploy.sh"
 ```
 
-- 调度节点需满足 DEPLOY.md §1 的前置条件（Node ≥ 20、免密 SSH、上传时需 `.release.config.json`）；两台打包机上无需装 Jenkins agent。
-- mac 分支调用 `scripts/package-mac.sh`：载入 `.env` → 解锁签名钥匙串 → 真签自测 → 打包（内含 dmg 公证装订）→ 票据复核（缺票才补跑 `npm run notarize:dmg`）；目标 ref 无此脚本时回退 `npm run package`。签名与公证细节见 DEPLOY.md §2.8。
-- 回收结构：`deploy/artifacts-<时间戳>/<platform>/<package|package-win>/`，已过 sha512 配对校验。
-- 上传需凭据：`QINIU_*` 环境变量或 `.release.config.json` 的 `qiniu` 段，二选一，均不入库。
+- **Jenkins 即跳板机，Node 固定（CentOS7 Node 12）也没关系**：它只做参数解析 + SSH 调度 + 读退出码，只需 `bash/git/ssh`。构建/签名/公证/校验/上传全在打包机，因此 `MODE=local` 与 `MODE=publish` 都能由 Jenkins 触发——上传在打包机执行，不经过 Jenkins。
+- 上传凭据（`QINIU_*` 或 `.release.config.json` 的 `qiniu` 段）配置在**打包机本地**，Jenkins 不持有、不转发；GitHub Release 仍走 mac 单机 `npm run release`（独立链路）。
+- mac 分支调用 `scripts/package-mac.sh`：载入 `.env` → 解锁签名钥匙串 → 真签自测 → 打包（内含 dmg 公证装订 + release.sh 的 refresh/verify）→ 票据复核。win 分支走 `npm run package:win`（win-sign.js 签名 + finalize-win.js 收尾三断言：latest.yml 存在 + files[] 逐条 sha512/size 配对）。
