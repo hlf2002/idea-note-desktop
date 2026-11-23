@@ -55,11 +55,6 @@ const DISTRIBUTION_BASE = 'https://ipadistribution.qzhuli.cn';
 // q助理开放平台群消息 webhook（独立于 IPA 的 publish-feishu 渠道）
 const DEFAULT_QZHULI_WEBHOOK_URL = 'https://open.qzhuli.com/open/webhook/message/push';
 
-// q助理群消息类型 → 展示标识（预留扩展：hotfix / beta 等）
-const QZHULI_MESSAGE_TYPES = {
-  release: { emoji: '📱', label: '新版本发布' }
-};
-
 const REQUEST_TIMEOUT_MS = 60 * 1000;          // 普通 JSON 请求
 const UPLOAD_TIMEOUT_MS = 60 * 60 * 1000;      // 上传大文件
 const COMPLETE_RETRY_DELAY_MS = 3 * 1000;      // 上传后到 complete 之间留 3s
@@ -437,23 +432,13 @@ async function publishToFeishu(baseUrl, feishuPath, versionId, token, { dryRun }
 
 /**
  * 构造发往 q助理群聊的消息内容（纯函数，便于测试）。
- * 明确体现「来源平台」（Windows/macOS + 架构）与「消息类型」（release 等），
- * 使不同平台/类型的消息在群里可一眼区分。url 用 IPA 下载地址。
+ * url 用 IPA 下载地址 https://ipadistribution.qzhuli.cn/{key}。
  */
-function buildQzhuliMessage({ displayName, platform, architecture, version, buildNumber, policyKey, type = 'release' }) {
-  const typeDef = QZHULI_MESSAGE_TYPES[type] || QZHULI_MESSAGE_TYPES.release;
+function buildQzhuliMessage({ displayName, platform, version, buildNumber, policyKey }) {
   const platformLabel = platform === 'win' ? 'Windows' : 'macOS';
-  const archLabel = platform === 'win'
-    ? 'x64'
-    : (architecture === 'apple_silicon' ? 'arm64' : 'x64');
-
   return {
-    title: `${typeDef.emoji} ${typeDef.label} — ${displayName}（${platformLabel} · ${archLabel}）`,
-    content: [
-      `**类型**: ${typeDef.label}`,
-      `**平台**: ${platformLabel} · ${archLabel}`,
-      `**Version / Build**: ${version} / ${buildNumber}`
-    ].join('\n'),
+    title: `📱 新版本发布 — ${displayName}（${platformLabel}）`,
+    content: `**Version / Build**: ${version} / ${buildNumber}`,
     url: `${DISTRIBUTION_BASE}/${policyKey}`
   };
 }
@@ -748,7 +733,6 @@ async function main() {
     const qzhuliMsg = buildQzhuliMessage({
       displayName,
       platform: o.platform,
-      architecture,
       version,
       buildNumber,
       policyKey: policyKey || '{key}'
@@ -802,7 +786,6 @@ module.exports = {
   DEFAULT_COMPLETE_PATH,
   DEFAULT_FEISHU_PATH,
   DEFAULT_QZHULI_WEBHOOK_URL,
-  QZHULI_MESSAGE_TYPES,
   DISTRIBUTION_BASE,
   PublishError
 };

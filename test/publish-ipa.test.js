@@ -188,37 +188,20 @@ test('parseArgs: 解析 --architecture', () => {
 
 // ------------------------------------------------------------ q助理群通知
 
-test('buildQzhuliMessage: mac x64 标题与结构含平台/类型，url 正确', () => {
+test('buildQzhuliMessage: mac 消息内容与下载地址', () => {
   const msg = ipa.buildQzhuliMessage({
     displayName: '灵感笔记',
     platform: 'mac',
-    architecture: 'intel',
     version: '1.2.4',
     buildNumber: '20261123101059',
     policyKey: 'dmg/xxx/intel/1795401101852.dmg'
   });
-  assert.equal(msg.title, '📱 新版本发布 — 灵感笔记（macOS · x64）');
-  assert.equal(
-    msg.content,
-    ['**类型**: 新版本发布', '**平台**: macOS · x64', '**Version / Build**: 1.2.4 / 20261123101059'].join('\n')
-  );
+  assert.equal(msg.title, '📱 新版本发布 — 灵感笔记（macOS）');
+  assert.equal(msg.content, '**Version / Build**: 1.2.4 / 20261123101059');
   assert.equal(msg.url, `${ipa.DISTRIBUTION_BASE}/dmg/xxx/intel/1795401101852.dmg`);
 });
 
-test('buildQzhuliMessage: mac arm64 明确标注架构', () => {
-  const msg = ipa.buildQzhuliMessage({
-    displayName: '灵感笔记',
-    platform: 'mac',
-    architecture: 'apple_silicon',
-    version: '1.2.4',
-    buildNumber: '123',
-    policyKey: 'dmg/xxx/apple_silicon/1.dmg'
-  });
-  assert.equal(msg.title, '📱 新版本发布 — 灵感笔记（macOS · arm64）');
-  assert.match(msg.content, /\*\*平台\*\*: macOS · arm64/);
-});
-
-test('buildQzhuliMessage: win 标题与平台行使用 Windows', () => {
+test('buildQzhuliMessage: win 标题使用 Windows 平台名', () => {
   const msg = ipa.buildQzhuliMessage({
     displayName: '灵感笔记',
     platform: 'win',
@@ -226,16 +209,7 @@ test('buildQzhuliMessage: win 标题与平台行使用 Windows', () => {
     buildNumber: '123',
     policyKey: 'exe/xxx'
   });
-  assert.equal(msg.title, '📱 新版本发布 — 灵感笔记（Windows · x64）');
-  assert.match(msg.content, /\*\*平台\*\*: Windows · x64/);
-});
-
-test('buildQzhuliMessage: 不同平台/架构生成的标题互不相同（可区分）', () => {
-  const base = { displayName: '灵感笔记', version: '1.2.4', buildNumber: '1', policyKey: 'k' };
-  const macX64 = ipa.buildQzhuliMessage({ ...base, platform: 'mac', architecture: 'intel' });
-  const macArm = ipa.buildQzhuliMessage({ ...base, platform: 'mac', architecture: 'apple_silicon' });
-  const win = ipa.buildQzhuliMessage({ ...base, platform: 'win' });
-  assert.equal(new Set([macX64.title, macArm.title, win.title]).size, 3);
+  assert.equal(msg.title, '📱 新版本发布 — 灵感笔记（Windows）');
 });
 
 test('parseArgs: 解析 --qzhuli-conversation-id / --qzhuli-token', () => {
