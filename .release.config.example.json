@@ -28,5 +28,10 @@
     "_说明": "publish-ipa.js 上传 IPA 平台（ipa.qzhuli.cn）并触发飞书公告时读取。appId 是平台为「灵感笔记」注册的应用 ID；token 是发布令牌（X-IPA-TOKEN 鉴权头）。也可用环境变量 IPA_APP_ID / IPA_TOKEN（或 PUBLISH_TOKEN，兼容 q_assistant）注入，环境变量优先。",
     "appId": "",
     "token": ""
+  },
+  "qzhuli": {
+    "_说明": "publish-ipa.js 发布完成后，把消息发到 q助理群聊时读取（可选，独立于飞书公告）。conversationId 是目标群会话 ID；token 是 q助理开放平台 push token（qzw_ 前缀，Authorization: Bearer 鉴权头）。也可用环境变量 QZHULI_CONVERSATION_ID / QZHULI_PUSH_TOKEN（或 qzhuli_push）注入，环境变量优先。",
+    "conversationId": "",
+    "token": ""
   }
 }

@@ -52,6 +52,14 @@ const DEFAULT_COMPLETE_PATH = '/open-api/v1/versions/complete';
 const DEFAULT_FEISHU_PATH = '/open-api/v1/versions/%s/publish-feishu';
 const DISTRIBUTION_BASE = 'https://ipadistribution.qzhuli.cn';
 
+// q助理开放平台群消息 webhook（独立于 IPA 的 publish-feishu 渠道）
+const DEFAULT_QZHULI_WEBHOOK_URL = 'https://open.qzhuli.com/open/webhook/message/push';
+
+// q助理群消息类型 → 展示标识（预留扩展：hotfix / beta 等）
+const QZHULI_MESSAGE_TYPES = {
+  release: { emoji: '📱', label: '新版本发布' }
+};
+
 const REQUEST_TIMEOUT_MS = 60 * 1000;          // 普通 JSON 请求
 const UPLOAD_TIMEOUT_MS = 60 * 60 * 1000;      // 上传大文件
 const COMPLETE_RETRY_DELAY_MS = 3 * 1000;      // 上传后到 complete 之间留 3s
@@ -75,12 +83,15 @@ const die = (msg, code = EXIT_FAIL) => {
 function usage() {
   console.error(
     '用法: node scripts/publish-ipa.js --platform <win|mac> [--app-id <id>] [--token <t>]\n' +
+    '                 [--mode <publish-feishu|publish-qzhuli|publish-both>]\n' +
+    '                 （默认 publish-feishu 只发飞书；publish-qzhuli 只发 q助理；publish-both 两者都发）\n' +
     '                 [--file <安装包路径> | --dir <产物目录>]\n' +
-    '                 [--architecture <intel|apple_silicon>]（mac 专用，默认按文件名推断）\n' +
+    '                 [--architecture <intel|apple_silicon>]（mac 专用，默认 intel/x64）\n' +
     '                 [--version <v>] [--build-number <n>] [--display-name <名>]\n' +
     '                 [--release-notes <说明>] [--uploaded-key <key>] [--dry-run]\n' +
     '                 [--base-url <url>] [--policy-path <path>] [--complete-path <path>]\n' +
-    '                 [--feishu-path <path>]'
+    '                 [--feishu-path <path>]\n' +
+    '                 [--qzhuli-conversation-id <群会话ID>] [--qzhuli-token <t>]'
   );
   process.exit(EXIT_USAGE);
 }
@@ -103,6 +114,12 @@ function readIpaConfig() {
   return cfg.ipa || {};
 }
 
+/** 读 .release.config.json 的 qzhuli 段（q助理群通知凭据，不存在时返回空对象）。 */
+function readQzhuliConfig() {
+  const cfg = readJsonSafe(CONFIG_FILE) || {};
+  return cfg.qzhuli || {};
+}
+
 // ---------------------------------------------------------------- 参数解析
 
 function parseArgs(argv) {
@@ -118,6 +135,9 @@ function parseArgs(argv) {
     displayName: '',
     releaseNotes: '',
     uploadedKey: '',
+    qzhuliConversationId: '',
+    qzhuliToken: '',
+    mode: 'publish-feishu',
     dryRun: false,
     baseUrl: DEFAULT_BASE_URL,
     policyPath: DEFAULT_POLICY_PATH,
@@ -147,6 +167,9 @@ function parseArgs(argv) {
     else if (a === '--display-name') o.displayName = take(i++);
     else if (a === '--release-notes') o.releaseNotes = take(i++);
     else if (a === '--uploaded-key') o.uploadedKey = take(i++);
+    else if (a === '--mode') o.mode = take(i++).toLowerCase();
+    else if (a === '--qzhuli-conversation-id') o.qzhuliConversationId = take(i++);
+    else if (a === '--qzhuli-token') o.qzhuliToken = take(i++);
     else if (a === '--base-url') o.baseUrl = take(i++);
     else if (a === '--policy-path') o.policyPath = take(i++);
     else if (a === '--complete-path') o.completePath = take(i++);
@@ -410,14 +433,76 @@ async function publishToFeishu(baseUrl, feishuPath, versionId, token, { dryRun }
   return response;
 }
 
+// ---------------------------------------------------------------- q助理群通知
+
+/**
+ * 构造发往 q助理群聊的消息内容（纯函数，便于测试）。
+ * 明确体现「来源平台」（Windows/macOS + 架构）与「消息类型」（release 等），
+ * 使不同平台/类型的消息在群里可一眼区分。url 用 IPA 下载地址。
+ */
+function buildQzhuliMessage({ displayName, platform, architecture, version, buildNumber, policyKey, type = 'release' }) {
+  const typeDef = QZHULI_MESSAGE_TYPES[type] || QZHULI_MESSAGE_TYPES.release;
+  const platformLabel = platform === 'win' ? 'Windows' : 'macOS';
+  const archLabel = platform === 'win'
+    ? 'x64'
+    : (architecture === 'apple_silicon' ? 'arm64' : 'x64');
+
+  return {
+    title: `${typeDef.emoji} ${typeDef.label} — ${displayName}（${platformLabel} · ${archLabel}）`,
+    content: [
+      `**类型**: ${typeDef.label}`,
+      `**平台**: ${platformLabel} · ${archLabel}`,
+      `**Version / Build**: ${version} / ${buildNumber}`
+    ].join('\n'),
+    url: `${DISTRIBUTION_BASE}/${policyKey}`
+  };
+}
+
+/**
+ * 通过 q助理开放平台 webhook 把发布消息发到指定群聊。
+ * 接口：POST https://open.qzhuli.com/open/webhook/message/push
+ * 鉴权：Authorization: Bearer <token>（与 IPA 的 X-IPA-TOKEN 不同）
+ * 与 IPA 的 publish-feishu 是两条独立通知渠道，互不影响。
+ */
+async function sendQzhuliMessage(token, conversationId, { title, content, url }, { dryRun } = {}) {
+  say('==> Notifying q助理 group');
+  say(`    webhook:   ${DEFAULT_QZHULI_WEBHOOK_URL}`);
+  say(`    conversation-id: ${conversationId}`);
+  say(`    title:     ${title}`);
+  say(`    content:   ${content}`);
+  say(`    url:       ${url}`);
+
+  const body = { conversation_id: conversationId, title, content, url };
+  if (dryRun) {
+    say(`    [dry-run] would POST ${JSON.stringify(body)}`);
+    return null;
+  }
+
+  const { status, raw } = await httpRequest(DEFAULT_QZHULI_WEBHOOK_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: Buffer.from(JSON.stringify(body), 'utf8')
+  });
+  if (status >= 400) {
+    throw new PublishError(`q助理 webhook failed with status ${status}: ${raw.toString('utf8').trim()}`);
+  }
+  const response = decodeJson(raw, 'q助理 webhook');
+  printApiResponse('q助理 webhook', response);
+  return response;
+}
+
 // ---------------------------------------------------------------- 产物定位
 
 /**
  * 定位要上传的安装包：
  *   --file 显式指定时直接使用（basename 作为 policy 的 filename）；
- *   否则在 --dir（默认 win→dist/package-win，mac→dist/package）里按平台匹配：
+ *   否则在 --dir（默认 win→dist/package-win，mac→dist/package）里按平台/架构匹配：
  *     win：*Setup*.exe（排除 .blockmap）
- *     mac：*.dmg
+ *     mac：按 o.architecture 选包 —— apple_silicon 匹配 *-arm64.dmg，intel（默认）匹配其余 .dmg
  */
 function locateInstaller(o) {
   if (o.file) {
@@ -431,15 +516,26 @@ function locateInstaller(o) {
       `产物目录不存在：${dir}。请先完成打包（win: npm run package:win / mac: npm run package:mac），或用 --file 指定安装包。`
     );
   }
-  const pattern = o.platform === 'win' ? /Setup.*\.exe$/ : /\.dmg$/;
-  const candidates = fs.readdirSync(dir)
-    .filter((f) => pattern.test(f))
+  const files = fs.readdirSync(dir);
+  let candidates;
+  if (o.platform === 'win') {
+    candidates = files.filter((f) => /Setup.*\.exe$/.test(f));
+  } else {
+    const wantArm = o.architecture === 'apple_silicon';
+    candidates = files.filter((f) => {
+      if (!/\.dmg$/.test(f)) return false;
+      const isArm = /-arm64\.dmg$/.test(f);
+      return wantArm ? isArm : !isArm;
+    });
+  }
+  candidates = candidates
     .map((f) => path.join(dir, f))
     .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
   if (candidates.length === 0) {
-    throw new PublishError(
-      `目录 ${dir} 里没有可发布的安装包（${o.platform === 'win' ? '*.exe' : '*.dmg'}）。`
-    );
+    const label = o.platform === 'win'
+      ? '*.exe'
+      : (o.architecture === 'apple_silicon' ? 'arm64 架构的 *.dmg' : 'x64 架构的 *.dmg');
+    throw new PublishError(`目录 ${dir} 里没有可发布的安装包（${label}）。`);
   }
   if (candidates.length > 1 && !o.dryRun) {
     console.error(`WARNING: 发现多个候选安装包，按修改时间取最新：`);
@@ -484,26 +580,51 @@ async function main() {
     die('缺少 IPA 发布令牌：传 --token，或设环境变量 IPA_TOKEN（或 PUBLISH_TOKEN），或在 .release.config.json 的 ipa.token 配置', EXIT_USAGE);
   }
 
-  // ---- 安装包定位 ----
-  const installer = locateInstaller(o);
-  const filename = path.basename(installer);
+  // ---- 发布模式：独立控制飞书 / q助理两条通知渠道 ----
+  // publish-feishu（默认）只发飞书；publish-qzhuli 只发 q助理；publish-both 两者都发。
+  const mode = o.mode;
+  if (mode !== 'publish-feishu' && mode !== 'publish-qzhuli' && mode !== 'publish-both') {
+    die(`未知 --mode：${mode}（仅支持 publish-feishu / publish-qzhuli / publish-both）`, EXIT_USAGE);
+  }
+  const feishuEnabled = mode === 'publish-feishu' || mode === 'publish-both';
+  const qzhuliEnabled = mode === 'publish-qzhuli' || mode === 'publish-both';
 
-  // ---- 架构（mac 专用，对齐 IPA 服务端枚举 intel|apple_silicon）----
-  // 默认按文件名推断：含 arm64 → apple_silicon，否则 → intel。
-  // 显式 --architecture 与推断不一致时拦截，避免「上传的包与标注架构不符」。
+  // ---- q助理群通知凭据（仅 qzhuliEnabled 时必填）：CLI > 环境变量 > 配置文件 ----
+  const qzhuliCfg = readQzhuliConfig();
+  const qzhuliConversationId = o.qzhuliConversationId || env.QZHULI_CONVERSATION_ID || qzhuliCfg.conversationId || '';
+  const qzhuliToken = o.qzhuliToken || env.QZHULI_PUSH_TOKEN || env.qzhuli_push || qzhuliCfg.token || '';
+  if (qzhuliEnabled && !qzhuliConversationId) {
+    die('--mode 需要 q助理群会话ID：传 --qzhuli-conversation-id，或设环境变量 QZHULI_CONVERSATION_ID，或在 .release.config.json 的 qzhuli.conversationId 配置', EXIT_USAGE);
+  }
+  if (qzhuliEnabled && !qzhuliToken) {
+    die('--mode 需要 q助理 push token：传 --qzhuli-token，或设环境变量 QZHULI_PUSH_TOKEN，或在 .release.config.json 的 qzhuli.token 配置', EXIT_USAGE);
+  }
+
+  // ---- 架构确定（mac 专用）----
+  // 优先级：显式 --architecture > --file 指定包时从文件名推断 > --dir 默认 x64/intel。
   let architecture = '';
   if (o.platform === 'mac') {
-    const inferred = inferArchitecture('mac', filename);
     if (o.architecture) {
       if (o.architecture !== 'intel' && o.architecture !== 'apple_silicon') {
         die(`--architecture 仅支持 intel|apple_silicon（mac 专用），当前收到：${o.architecture}`, EXIT_USAGE);
       }
-      if (o.architecture !== inferred) {
-        die(`--architecture ${o.architecture} 与产物文件名推断的 ${inferred} 不一致（${filename}），请核对要上传的安装包或用 --file 指定正确架构的包`, EXIT_USAGE);
-      }
       architecture = o.architecture;
+    } else if (o.file) {
+      architecture = inferArchitecture('mac', path.basename(o.file));
     } else {
-      architecture = inferred;
+      architecture = 'intel'; // 默认 x64
+    }
+  }
+
+  // ---- 安装包定位（mac 按 architecture 确定性选包）----
+  const installer = locateInstaller({ ...o, architecture });
+  const filename = path.basename(installer);
+
+  // 防御性校验：--file 显式指定时，包的实际架构必须与确定的 architecture 一致
+  if (o.platform === 'mac') {
+    const actual = inferArchitecture('mac', filename);
+    if (actual !== architecture) {
+      die(`产物 ${filename} 实际是 ${actual}，与指定架构 ${architecture} 不一致；请改用 --architecture ${actual} 或换正确的包`, EXIT_USAGE);
     }
   }
 
@@ -533,6 +654,8 @@ async function main() {
   say(`    installer:  ${installer}`);
   say(`    size:       ${fs.statSync(installer).size} bytes`);
   say(`    resume-key: ${o.uploadedKey || '(new upload)'}`);
+  say(`    mode:      ${mode} (feishu=${feishuEnabled ? 'yes' : 'no'}, qzhuli=${qzhuliEnabled ? 'yes' : 'no'})`);
+  if (qzhuliEnabled) say(`    qzhuli-notify: ${qzhuliConversationId}`);
 
   // ---- ① policy（续传时跳过）----
   let policyKey = o.uploadedKey;
@@ -602,19 +725,42 @@ async function main() {
     say(`    admin:      ${o.baseUrl.replace(/\/+$/, '')}/admin/apps`);
   }
 
-  // ---- ④ feishu ----
-  if (o.dryRun) {
-    say(`==> Feishu announce (dry-run)`);
-  } else {
-    if (!versionId) {
-      throw new PublishError('Feishu publish is enabled, but the complete response did not include a version id.');
+  // ---- ④ feishu（feishuEnabled 时执行）----
+  if (feishuEnabled) {
+    if (o.dryRun) {
+      say(`==> Feishu announce (dry-run)`);
+    } else {
+      if (!versionId) {
+        throw new PublishError('Feishu publish is enabled, but the complete response did not include a version id.');
+      }
+      try {
+        await publishToFeishu(o.baseUrl, o.feishuPath, versionId, token);
+      } catch (e) {
+        throw new PublishError(
+          `${e.message} The version itself is already published; retry only the Feishu announce with --uploaded-key ${policyKey}.`
+        );
+      }
     }
-    try {
-      await publishToFeishu(o.baseUrl, o.feishuPath, versionId, token);
-    } catch (e) {
-      throw new PublishError(
-        `${e.message} The version itself is already published; retry only the Feishu announce with --uploaded-key ${policyKey}.`
-      );
+  }
+
+  // ---- ⑤ q助理群通知（qzhuliEnabled 时执行，独立渠道，失败不阻断发布结果）----
+  if (qzhuliEnabled) {
+    const qzhuliMsg = buildQzhuliMessage({
+      displayName,
+      platform: o.platform,
+      architecture,
+      version,
+      buildNumber,
+      policyKey: policyKey || '{key}'
+    });
+    if (o.dryRun) {
+      await sendQzhuliMessage(qzhuliToken, qzhuliConversationId, qzhuliMsg, { dryRun: true });
+    } else {
+      try {
+        await sendQzhuliMessage(qzhuliToken, qzhuliConversationId, qzhuliMsg);
+      } catch (e) {
+        console.error(`WARNING: 发送 q助理群消息失败（IPA 版本已发布，不影响发布结果）: ${e.message}`);
+      }
     }
   }
 
@@ -646,6 +792,8 @@ module.exports = {
   successIsTrue,
   decodeJson,
   buildFeishuUrl,
+  buildQzhuliMessage,
+  sendQzhuliMessage,
   parseArgs,
   locateInstaller,
   inferArchitecture,
@@ -653,6 +801,8 @@ module.exports = {
   DEFAULT_POLICY_PATH,
   DEFAULT_COMPLETE_PATH,
   DEFAULT_FEISHU_PATH,
+  DEFAULT_QZHULI_WEBHOOK_URL,
+  QZHULI_MESSAGE_TYPES,
   DISTRIBUTION_BASE,
   PublishError
 };

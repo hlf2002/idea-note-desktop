@@ -142,12 +142,21 @@ test('locateInstaller: win 匹配 *Setup*.exe，排除 blockmap', () => {
   assert.equal(path.basename(found), 'idea-note-Setup-1.2.4.exe');
 });
 
-test('locateInstaller: mac 匹配 *.dmg', () => {
+test('locateInstaller: mac 默认 x64（排除 arm64）', () => {
   const dir = tempDir({
-    '灵感笔记-1.2.4-arm64.dmg': 'dmg',
-    'idea-note-1.2.4-arm64.zip': 'zip'
+    '灵感笔记-1.2.4.dmg': 'x64',
+    '灵感笔记-1.2.4-arm64.dmg': 'arm64'
   });
-  const found = ipa.locateInstaller({ platform: 'mac', dir });
+  const found = ipa.locateInstaller({ platform: 'mac', dir, architecture: 'intel' });
+  assert.equal(path.basename(found), '灵感笔记-1.2.4.dmg');
+});
+
+test('locateInstaller: mac 指定 apple_silicon 选 arm64', () => {
+  const dir = tempDir({
+    '灵感笔记-1.2.4.dmg': 'x64',
+    '灵感笔记-1.2.4-arm64.dmg': 'arm64'
+  });
+  const found = ipa.locateInstaller({ platform: 'mac', dir, architecture: 'apple_silicon' });
   assert.equal(path.basename(found), '灵感笔记-1.2.4-arm64.dmg');
 });
 
@@ -175,4 +184,71 @@ test('inferArchitecture: win 平台返回空串', () => {
 test('parseArgs: 解析 --architecture', () => {
   const o = ipa.parseArgs(['--platform', 'mac', '--architecture', 'apple_silicon']);
   assert.equal(o.architecture, 'apple_silicon');
+});
+
+// ------------------------------------------------------------ q助理群通知
+
+test('buildQzhuliMessage: mac x64 标题与结构含平台/类型，url 正确', () => {
+  const msg = ipa.buildQzhuliMessage({
+    displayName: '灵感笔记',
+    platform: 'mac',
+    architecture: 'intel',
+    version: '1.2.4',
+    buildNumber: '20261123101059',
+    policyKey: 'dmg/xxx/intel/1795401101852.dmg'
+  });
+  assert.equal(msg.title, '📱 新版本发布 — 灵感笔记（macOS · x64）');
+  assert.equal(
+    msg.content,
+    ['**类型**: 新版本发布', '**平台**: macOS · x64', '**Version / Build**: 1.2.4 / 20261123101059'].join('\n')
+  );
+  assert.equal(msg.url, `${ipa.DISTRIBUTION_BASE}/dmg/xxx/intel/1795401101852.dmg`);
+});
+
+test('buildQzhuliMessage: mac arm64 明确标注架构', () => {
+  const msg = ipa.buildQzhuliMessage({
+    displayName: '灵感笔记',
+    platform: 'mac',
+    architecture: 'apple_silicon',
+    version: '1.2.4',
+    buildNumber: '123',
+    policyKey: 'dmg/xxx/apple_silicon/1.dmg'
+  });
+  assert.equal(msg.title, '📱 新版本发布 — 灵感笔记（macOS · arm64）');
+  assert.match(msg.content, /\*\*平台\*\*: macOS · arm64/);
+});
+
+test('buildQzhuliMessage: win 标题与平台行使用 Windows', () => {
+  const msg = ipa.buildQzhuliMessage({
+    displayName: '灵感笔记',
+    platform: 'win',
+    version: '1.2.4',
+    buildNumber: '123',
+    policyKey: 'exe/xxx'
+  });
+  assert.equal(msg.title, '📱 新版本发布 — 灵感笔记（Windows · x64）');
+  assert.match(msg.content, /\*\*平台\*\*: Windows · x64/);
+});
+
+test('buildQzhuliMessage: 不同平台/架构生成的标题互不相同（可区分）', () => {
+  const base = { displayName: '灵感笔记', version: '1.2.4', buildNumber: '1', policyKey: 'k' };
+  const macX64 = ipa.buildQzhuliMessage({ ...base, platform: 'mac', architecture: 'intel' });
+  const macArm = ipa.buildQzhuliMessage({ ...base, platform: 'mac', architecture: 'apple_silicon' });
+  const win = ipa.buildQzhuliMessage({ ...base, platform: 'win' });
+  assert.equal(new Set([macX64.title, macArm.title, win.title]).size, 3);
+});
+
+test('parseArgs: 解析 --qzhuli-conversation-id / --qzhuli-token', () => {
+  const o = ipa.parseArgs([
+    '--qzhuli-conversation-id', 'conv-123',
+    '--qzhuli-token', 'qzw_test'
+  ]);
+  assert.equal(o.qzhuliConversationId, 'conv-123');
+  assert.equal(o.qzhuliToken, 'qzw_test');
+});
+
+test('parseArgs: --mode 默认 publish-feishu，可覆盖', () => {
+  assert.equal(ipa.parseArgs([]).mode, 'publish-feishu');
+  assert.equal(ipa.parseArgs(['--mode', 'publish-qzhuli']).mode, 'publish-qzhuli');
+  assert.equal(ipa.parseArgs(['--mode', 'publish-both']).mode, 'publish-both');
 });
