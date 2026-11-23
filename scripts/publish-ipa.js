@@ -55,6 +55,11 @@ const DISTRIBUTION_BASE = 'https://ipadistribution.qzhuli.cn';
 // q助理开放平台群消息 webhook（独立于 IPA 的 publish-feishu 渠道）
 const DEFAULT_QZHULI_WEBHOOK_URL = 'https://open.qzhuli.com/open/webhook/message/push';
 
+// q助理群消息类型 → 展示标识（预留扩展：hotfix / beta 等）
+const QZHULI_MESSAGE_TYPES = {
+  release: { emoji: '📱', label: '新版本发布' }
+};
+
 const REQUEST_TIMEOUT_MS = 60 * 1000;          // 普通 JSON 请求
 const UPLOAD_TIMEOUT_MS = 60 * 60 * 1000;      // 上传大文件
 const COMPLETE_RETRY_DELAY_MS = 3 * 1000;      // 上传后到 complete 之间留 3s
@@ -103,16 +108,26 @@ function readPackageJson() {
   return readJsonSafe(path.join(ROOT, 'package.json')) || {};
 }
 
-/** 读 .release.config.json 的 ipa 段（不存在时返回空对象，不报错）。 */
-function readIpaConfig() {
-  const cfg = readJsonSafe(CONFIG_FILE) || {};
-  return cfg.ipa || {};
+/** 读整个 .release.config.json（不存在时返回空对象，不报错）。 */
+function readReleaseConfig() {
+  return readJsonSafe(CONFIG_FILE) || {};
 }
 
-/** 读 .release.config.json 的 qzhuli 段（q助理群通知凭据，不存在时返回空对象）。 */
-function readQzhuliConfig() {
-  const cfg = readJsonSafe(CONFIG_FILE) || {};
-  return cfg.qzhuli || {};
+/**
+ * 从 .release.config.json 取一个凭据值：
+ *   扁平键优先（与 CLI 参数一一对应：appId / token / qzhuliConversationId / qzhuliToken），
+ *   其次兼容历史嵌套段（ipa.appId / ipa.token / qzhuli.conversationId / qzhuli.token）。
+ * 两者都空则返回 ''。
+ */
+function pickConfig(cfg, flatKey, section, sectionKey) {
+  const flat = cfg[flatKey];
+  if (flat != null && flat !== '') return String(flat);
+  const sec = cfg[section];
+  if (sec && typeof sec === 'object') {
+    const nested = sec[sectionKey];
+    if (nested != null && nested !== '') return String(nested);
+  }
+  return '';
 }
 
 // ---------------------------------------------------------------- 参数解析
@@ -432,13 +447,23 @@ async function publishToFeishu(baseUrl, feishuPath, versionId, token, { dryRun }
 
 /**
  * 构造发往 q助理群聊的消息内容（纯函数，便于测试）。
- * url 用 IPA 下载地址 https://ipadistribution.qzhuli.cn/{key}。
+ * 明确体现「来源平台」（Windows/macOS + 架构）与「消息类型」（release 等），
+ * 使不同平台/类型的消息在群里可一眼区分。url 用 IPA 下载地址。
  */
-function buildQzhuliMessage({ displayName, platform, version, buildNumber, policyKey }) {
+function buildQzhuliMessage({ displayName, platform, architecture, version, buildNumber, policyKey, type = 'release' }) {
+  const typeDef = QZHULI_MESSAGE_TYPES[type] || QZHULI_MESSAGE_TYPES.release;
   const platformLabel = platform === 'win' ? 'Windows' : 'macOS';
+  const archLabel = platform === 'win'
+    ? 'x64'
+    : (architecture === 'apple_silicon' ? 'arm64' : 'x64');
+
   return {
-    title: `📱 新版本发布 — ${displayName}（${platformLabel}）`,
-    content: `**Version / Build**: ${version} / ${buildNumber}`,
+    title: `${typeDef.emoji} ${typeDef.label} — ${displayName}（${platformLabel} · ${archLabel}）`,
+    content: [
+      `**类型**: ${typeDef.label}`,
+      `**平台**: ${platformLabel} · ${archLabel}`,
+      `**Version / Build**: ${version} / ${buildNumber}`
+    ].join('\n'),
     url: `${DISTRIBUTION_BASE}/${policyKey}`
   };
 }
@@ -553,16 +578,16 @@ async function main() {
     usage();
   }
 
-  // ---- 凭据：CLI > 环境变量 > 配置文件 ----
-  const cfg = readIpaConfig();
+  // ---- 凭据：CLI > 环境变量 > .release.config.json（扁平键优先，兼容 ipa./qzhuli. 嵌套段）----
+  const cfg = readReleaseConfig();
   const env = process.env;
-  const appId = o.appId || env.IPA_APP_ID || cfg.appId || '';
-  const token = o.token || env.IPA_TOKEN || env.PUBLISH_TOKEN || cfg.token || '';
+  const appId = o.appId || env.IPA_APP_ID || pickConfig(cfg, 'appId', 'ipa', 'appId');
+  const token = o.token || env.IPA_TOKEN || env.PUBLISH_TOKEN || pickConfig(cfg, 'token', 'ipa', 'token');
   if (!appId) {
-    die('缺少 IPA appId：传 --app-id，或设环境变量 IPA_APP_ID，或在 .release.config.json 的 ipa.appId 配置', EXIT_USAGE);
+    die('缺少 IPA appId：传 --app-id，或设环境变量 IPA_APP_ID，或在 .release.config.json 配置 "appId"（兼容 "ipa.appId"）', EXIT_USAGE);
   }
   if (!token) {
-    die('缺少 IPA 发布令牌：传 --token，或设环境变量 IPA_TOKEN（或 PUBLISH_TOKEN），或在 .release.config.json 的 ipa.token 配置', EXIT_USAGE);
+    die('缺少 IPA 发布令牌：传 --token，或设环境变量 IPA_TOKEN（或 PUBLISH_TOKEN），或在 .release.config.json 配置 "token"（兼容 "ipa.token"）', EXIT_USAGE);
   }
 
   // ---- 发布模式：独立控制飞书 / q助理两条通知渠道 ----
@@ -575,14 +600,18 @@ async function main() {
   const qzhuliEnabled = mode === 'publish-qzhuli' || mode === 'publish-both';
 
   // ---- q助理群通知凭据（仅 qzhuliEnabled 时必填）：CLI > 环境变量 > 配置文件 ----
-  const qzhuliCfg = readQzhuliConfig();
-  const qzhuliConversationId = o.qzhuliConversationId || env.QZHULI_CONVERSATION_ID || qzhuliCfg.conversationId || '';
-  const qzhuliToken = o.qzhuliToken || env.QZHULI_PUSH_TOKEN || env.qzhuli_push || qzhuliCfg.token || '';
+  const qzhuliConversationId = o.qzhuliConversationId
+    || env.QZHULI_CONVERSATION_ID
+    || pickConfig(cfg, 'qzhuliConversationId', 'qzhuli', 'conversationId');
+  const qzhuliToken = o.qzhuliToken
+    || env.QZHULI_PUSH_TOKEN
+    || env.qzhuli_push
+    || pickConfig(cfg, 'qzhuliToken', 'qzhuli', 'token');
   if (qzhuliEnabled && !qzhuliConversationId) {
-    die('--mode 需要 q助理群会话ID：传 --qzhuli-conversation-id，或设环境变量 QZHULI_CONVERSATION_ID，或在 .release.config.json 的 qzhuli.conversationId 配置', EXIT_USAGE);
+    die('--mode 需要 q助理群会话ID：传 --qzhuli-conversation-id，或设环境变量 QZHULI_CONVERSATION_ID，或在 .release.config.json 配置 "qzhuliConversationId"（兼容 "qzhuli.conversationId"）', EXIT_USAGE);
   }
   if (qzhuliEnabled && !qzhuliToken) {
-    die('--mode 需要 q助理 push token：传 --qzhuli-token，或设环境变量 QZHULI_PUSH_TOKEN，或在 .release.config.json 的 qzhuli.token 配置', EXIT_USAGE);
+    die('--mode 需要 q助理 push token：传 --qzhuli-token，或设环境变量 QZHULI_PUSH_TOKEN，或在 .release.config.json 配置 "qzhuliToken"（兼容 "qzhuli.token"）', EXIT_USAGE);
   }
 
   // ---- 架构确定（mac 专用）----
@@ -733,6 +762,7 @@ async function main() {
     const qzhuliMsg = buildQzhuliMessage({
       displayName,
       platform: o.platform,
+      architecture,
       version,
       buildNumber,
       policyKey: policyKey || '{key}'
@@ -781,11 +811,13 @@ module.exports = {
   parseArgs,
   locateInstaller,
   inferArchitecture,
+  pickConfig,
   DEFAULT_BASE_URL,
   DEFAULT_POLICY_PATH,
   DEFAULT_COMPLETE_PATH,
   DEFAULT_FEISHU_PATH,
   DEFAULT_QZHULI_WEBHOOK_URL,
+  QZHULI_MESSAGE_TYPES,
   DISTRIBUTION_BASE,
   PublishError
 };

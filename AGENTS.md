@@ -29,7 +29,7 @@
 - 多机打包 + 投放：`PLATFORM=mac MODE=publish REF=main deploy/deploy.sh`（与 q_assistant 的 deploy.sh 同一套 PLATFORM/MODE/REF；`PLATFORM=all` 为双机扩展；`DRY_RUN=1` 只演练）。`MODE` 三种：`local` 只构建、`publish` 投七牛（自动更新仓）、`publish-feishu` 上传 IPA + 飞书公告（与七牛互斥，各管一个发布面）
 - 只投放七牛：`npm run upload:qiniu -- --dir dist/package`（凭据读 `.release.config.json` 的 `qiniu` 段或 `QINIU_*` 环境变量，`--dry-run` 可预演；传完会修清单 Content-Type 并提交 CDN 刷新，`--no-cdn` / `--strict-cdn` 控制）
 - 产物单传：`npm run upload:artifact -- <文件|目录>… [--dated] [--subdir qa] [--dry-run]`（独立链路，不读 latest\*.yml、默认不刷 CDN；前缀 `artifacts/`，配置键 `qiniu.artifactPrefix`）
-- IPA 发布（`ipa.qzhuli.cn` + 飞书公告）：`npm run publish:ipa -- --platform mac --dir dist/package --app-id <id>`（四步 API：policy→upload→complete→feishu，`X-IPA-TOKEN` 鉴权；凭据 `--token` / 环境变量 `IPA_TOKEN`（或 `PUBLISH_TOKEN`）/ `.release.config.json` 的 `ipa` 段；`--dry-run` 预演、`--uploaded-key <key>` 只补飞书公告）。可加 `--qzhuli-conversation-id <群ID> --qzhuli-token <t>` 把发布消息同步发到 q助理群聊（`open.qzhuli.com/open/webhook/message/push`，`Authorization: Bearer` 鉴权，独立于飞书、失败不阻断）
+- IPA 发布（`ipa.qzhuli.cn` + 飞书公告）：`npm run publish:ipa -- --platform mac --dir dist/package`（四步 API：policy→upload→complete→feishu，`X-IPA-TOKEN` 鉴权；凭据与目标群配置在 `.release.config.json` 的 `appId` / `token` / `qzhuliConversationId` / `qzhuliToken`（兼容旧写法 `ipa.*` / `qzhuli.*`），优先级 **命令行 > 环境变量 > 配置文件**；`--dry-run` 预演、`--uploaded-key <key>` 只补飞书公告）。`--mode publish-feishu|publish-qzhuli|publish-both` 控制通知渠道（默认只飞书）；q助理群走 `open.qzhuli.com/open/webhook/message/push`（`Authorization: Bearer` 鉴权，独立于飞书、失败不阻断）。`--architecture apple_silicon` 发 arm64，默认 x64
 
 ## 架构速览
 
@@ -42,3 +42,4 @@
 ## 关键约束
 
 - 生产网关 `https://client.qzhuli.com` 只能做只读探测，不得向生产服务端发送无效 token 探测错误契约（用户明确拒绝过）。
+- **`.release.config.json` 含 IPA / q助理 / 七牛凭据，已在 `.gitignore` 中，禁止提交**；模板见 `.release.config.example.json`，`git status` 中出现该文件即说明 ignore 失效，先修 `.gitignore` 再操作。
