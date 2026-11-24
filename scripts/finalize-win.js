@@ -107,6 +107,20 @@ function checkPayloadArch(distDir, productName, expectArch) {
   }
 }
 
+/** 纯函数：把 Get-AuthenticodeSignature 的 Status 归一化。
+ *
+ *  Status 是 .NET 枚举 SignatureStatus。PowerShell 用 Select-Object 取属性再
+ *  ConvertTo-Json 时会把它序列化成**数字**（Valid = 0），而不是枚举名。2026-11-24
+ *  打包机实测：签名真实通过，却因为 0 !== 'Valid' 被判成「签名状态异常」并 exit 1。
+ *  这里同时接受枚举名与数字，其余值一律交给调用方 fail —— 校验不做乐观猜测。
+ */
+function signatureVerdict(raw) {
+  const text = String(raw == null ? '' : raw).trim().toLowerCase();
+  if (text === 'valid' || text === '0') return 'valid';
+  if (text === 'notsigned' || text === '2') return 'notsigned';
+  return 'unknown';
+}
+
 function checkSignature(opts) {
   if (opts.skipSign) { skip('签名检查已按要求跳过（--skip-sign）'); return; }
   if (process.platform !== 'win32') {
@@ -122,7 +136,9 @@ function checkSignature(opts) {
       '-NoProfile', '-Command',
       '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' +
       `(Get-AuthenticodeSignature -LiteralPath "${target}" | ` +
-      'Select-Object Status,StatusMessage,@{n="Signer";e={$_.SignerCertificate.Subject}},' +
+      // 显式 [string]：不让 ConvertTo-Json 把枚举写成数字
+      'Select-Object @{n="Status";e={[string]$_.Status}},StatusMessage,' +
+      '@{n="Signer";e={$_.SignerCertificate.Subject}},' +
       '@{n="Timestamp";e={$_.TimeStamperCertificate.Subject}} | ConvertTo-Json -Compress)'
     ], { encoding: 'utf8', timeout: 60000 });
     info = JSON.parse(json);
@@ -130,10 +146,11 @@ function checkSignature(opts) {
     skip('签名校验未能执行（PowerShell 失败：' + String(e.message).split('\n')[0] + '）');
     return;
   }
-  if (info.Status === 'Valid') {
+  const verdict = signatureVerdict(info.Status);
+  if (verdict === 'valid') {
     pass('Authenticode 有效 · 签发者 ' + (info.Signer || '(未知)') +
       ' · 时间戳 ' + (info.Timestamp ? '有' : '无（证书过期即失效）'));
-  } else if (info.Status === 'NotSigned') {
+  } else if (verdict === 'notsigned') {
     if (opts.allowUnsigned) {
       skip('未签名（--allow-unsigned 已显式接受）：首次安装会被 SmartScreen 拦截，需手动"仍要运行"，升级推的新包同样会被拦');
     } else {
@@ -232,5 +249,5 @@ function finish(opts) {
   console.log('[finalize-win] 产物目录 ' + path.relative(ROOT, opts.out) + '/ 可直接投放');
 }
 
-module.exports = { peMachine, MACHINE_NAMES };
+module.exports = { peMachine, MACHINE_NAMES, signatureVerdict };
 if (require.main === module) main();
