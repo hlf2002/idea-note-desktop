@@ -254,10 +254,18 @@ remote_checkout() {
   fi
   if [ "$platform" = "win" ]; then
     # cmd 方言做 SHA 串比较语法脆弱且无法在本机验证；无条件 detach 检出同样保证
-    # 工作区处于最新，git rev-parse HEAD 即留痕证明
+    # 工作区处于最新，git rev-parse HEAD 即留痕证明。
     # [deps] 标记：检出段历来是静默的，npm ci 若被跳过或失败会表现为「检出完成但依赖缺失」
     # （后续 win-sign 报找不到 node_modules/electron-builder）。标记让每步在日志里可辨。
-    printf 'if not exist "%s\\.git" git clone %s "%s" & cd /d %s && git diff --exit-code -- . ":(exclude)**/.qzhuli-manifest.json" && git diff --cached --exit-code && echo [deps] git fetch && %s && echo [deps] checkout %s && git checkout --detach %s && echo [deps] HEAD && git rev-parse HEAD && echo [deps] npm ci start && call npm ci && echo [deps] npm ci done' \
+    #
+    # 关键约束（2026-11-24 实锤）：Windows OpenSSH 把远程命令交给 cmd.exe /c 时，命令里的
+    # 引号与 * 会被命令行引号规则破坏，导致整条命令静默失败、sshd 仍返回 0，deploy 误判
+    # 「检出完成」。因此 win 方言不写引号、不写 pathspec：
+    #   - 路径默认无空格，clone/checkout 都不需要引号
+    #   - .qzhuli-manifest.json 自 d92c47b 起已 untracked（.gitignore），git diff 天然忽略，
+    #     无需 :(exclude) pathspec
+    # 开头 echo [deps] start 是判据：连这行都没有 = 命令根本没被 cmd 执行，仍属 ssh 传输问题。
+    printf 'echo [deps] start & if not exist %s\\.git git clone %s %s & cd /d %s && git diff --exit-code && git diff --cached --exit-code && echo [deps] git fetch && %s && echo [deps] checkout %s && git checkout --detach %s && echo [deps] HEAD && git rev-parse HEAD && echo [deps] npm ci start && call npm ci && echo [deps] npm ci done' \
       "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref" "$tgt_ref"
   else
     # sh 方言：fetch 后显式比对 HEAD 与目标 ref——相同报「已是最新」跳过检出，
