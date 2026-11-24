@@ -14,6 +14,12 @@ deploy/artifacts-*/
 
 # qzhuli-cli 安装产物：installed_at 每次安装变化，属生成物不入库
 **/.qzhuli-manifest.json
+# qzhuli-cli 安装目录：SKILL.md 随 qzhuli-cli 版本升级被 postinstall 重写（2026-11-24
+# 打包机脏树实锤，同 d92c47b 的 manifest 一类）。四个目录仅含 qzhuli-cli 产物，整目录忽略。
+.agents/
+.claude/
+.codex/
+skills/
 
 # 打包机登录脚本的运行产物
 __pycache__/

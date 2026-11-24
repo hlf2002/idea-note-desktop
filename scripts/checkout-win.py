@@ -62,7 +62,13 @@ def main(argv=None) -> int:
             return 1
         run(["git", "clone", args.clone_url, str(proj)], proj.parent, "clone")
 
-    # ② 脏树直接失败，不覆盖打包机上的修改
+    # ② 还原 npm 安装漂移的 lock：npm install（而非 ci）会重写 package-lock.json，
+    #    无人值守打包机必须严格等于仓库版本（npm ci 按它装依赖），否则下次检出
+    #    被脏树守卫拦下。
+    if (proj / "package-lock.json").exists():
+        run(["git", "checkout", "--", "package-lock.json"], proj, "restore package-lock.json")
+
+    # ③ 脏树直接失败，不覆盖打包机上的修改
     run(["git", "diff", "--exit-code"], proj, "worktree clean")
     run(["git", "diff", "--cached", "--exit-code"], proj, "index clean")
 
