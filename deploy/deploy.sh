@@ -17,6 +17,16 @@
 # 可选：
 #   DRY_RUN               1 = 只打印远程命令，不连机
 #   UPLOAD / UPLOAD_QINIU 0|1，覆盖由 MODE 推导的上传开关
+#   WIN_SIMPLYSIGN_LOGIN  off|auto|force（默认 auto，仅 win）：打包机上 SimplySign 自动登录
+#                         auto  = 无可用证书时才登录（避免重复消耗 TOTP）
+#                         force = 无视现有证书强制重登
+#                         off   = 完全不碰，要求机上已人工登录（排障/回滚用）
+#   WIN_SIMPLYSIGN_LOGIN_TIMEOUT  登录等待上限秒数（默认 180）
+#   WIN_SIMPLYSIGN_LOGIN_TOOL     打包机上 login_signing_tool.py 的绝对路径
+#                                 （默认 D:\work\sign\login_signing_tool.py；
+#                                  该脚本含打包机专有配置，不随本仓库分发）
+#   WIN_SIMPLYSIGN_PYTHON         打包机上的 Python 解释器（默认 python；
+#                                 依赖 pywinauto + pillow，路径不在 PATH 时给绝对路径）
 #
 # 位置参数（可选，等价于同名环境变量）：platform / mode / ref / dry，或裸 win|mac|all|local|publish
 #
@@ -53,6 +63,11 @@ PLATFORM="${PLATFORM:-${platform:-${TARGET:-${target:-win}}}}"
 MODE="${MODE:-${mode:-local}}"
 DRY_RUN="${DRY_RUN:-0}"
 UPLOAD_OVERRIDE="${UPLOAD:-${UPLOAD_QINIU:-}}"
+# SimplySign 自动登录开关：由 win-sign.js 读取；默认 auto，TOOL 路径固定在仓库内，
+# 因此这里只透传策略，不需要把打包机上的绝对路径拼进远程命令。
+WIN_SIMPLYSIGN_LOGIN="${WIN_SIMPLYSIGN_LOGIN:-auto}"
+WIN_SIMPLYSIGN_LOGIN_TIMEOUT="${WIN_SIMPLYSIGN_LOGIN_TIMEOUT:-180}"
+WIN_SIMPLYSIGN_LOGIN_TOOL="${WIN_SIMPLYSIGN_LOGIN_TOOL:-}"
 
 # ---- 位置参数（每个键吃掉一个值；裸 win|mac|all 视为 PLATFORM，裸 local|publish 视为 MODE）----
 REF_ARG=""
@@ -132,6 +147,34 @@ for flag in "$DRY_RUN" "$UPLOAD"; do
   esac
 done
 
+# SimplySign 策略值会进入远程 cmd 的 set "K=V"，只允许固定枚举，杜绝引号注入
+case "$WIN_SIMPLYSIGN_LOGIN" in
+  off|auto|force) ;;
+  *)
+    printf 'WIN_SIMPLYSIGN_LOGIN 仅支持 off/auto/force，当前=%s\n' "$WIN_SIMPLYSIGN_LOGIN" >&2
+    exit 2
+    ;;
+esac
+case "$WIN_SIMPLYSIGN_LOGIN_TIMEOUT" in
+  ''|*[!0-9]*)
+    printf 'WIN_SIMPLYSIGN_LOGIN_TIMEOUT 必须是整数秒，当前=%s\n' "$WIN_SIMPLYSIGN_LOGIN_TIMEOUT" >&2
+    exit 2
+    ;;
+esac
+
+# 远程路径可能含空格（set "K=V" 能安全承载），但 cmd 元字符会破坏该赋值——
+# 提前拒绝，而不是让远程命令静默变形
+check_remote_path() {  # 变量名 值
+  case "$2" in
+    *'"'*|*'&'*|*'|'*|*'<'*|*'>'*|*'^'*|*'%'*)
+      printf '%s 含 cmd 元字符（" & | < > ^ %%）：%s\n' "$1" "$2" >&2
+      exit 2
+      ;;
+  esac
+}
+check_remote_path WIN_SIMPLYSIGN_PYTHON "${WIN_SIMPLYSIGN_PYTHON:-}"
+check_remote_path WIN_SIMPLYSIGN_LOGIN_TOOL "$WIN_SIMPLYSIGN_LOGIN_TOOL"
+
 # REF：位置参数 > 显式环境变量；未传时由本仓库实际 HEAD 推断，不猜版本号
 # 不用 git -C：需要 git >= 1.8.5，Jenkins 主控（CentOS 7）的 git 1.8.3.1 报 Unknown option
 REF="${REF_ARG:-${TAG:-${tag:-${BRANCH:-${branch:-${GIT_BRANCH:-}}}}}}"
@@ -162,6 +205,8 @@ fi
 echo "========== 构建参数 =========="
 printf 'PLATFORM=%s MODE=%s REF=%s UPLOAD=%s DRY_RUN=%s\n' \
   "$PLATFORM" "$MODE" "$REF" "$UPLOAD" "$DRY_RUN"
+printf 'WIN_SIMPLYSIGN_LOGIN=%s TIMEOUT=%ss\n' \
+  "$WIN_SIMPLYSIGN_LOGIN" "$WIN_SIMPLYSIGN_LOGIN_TIMEOUT"
 if [ "$PLATFORM_GIVEN" = "0" ]; then
   printf '提示：未指定 PLATFORM，按默认只构建 %s；要双平台请传 PLATFORM=all\n' "$PLATFORM"
 fi
@@ -237,7 +282,16 @@ run_task() {
   if [ "$platform" = "win" ]; then
     checkout_cmd="$(remote_checkout win "$proj")"
     # win 校验在 finalize-win.js 收尾三断言（latest.yml 存在 + files[] 逐条 sha512/size 配对）
-    package_cmd="cd /d $proj && call npm run package:win"
+    # SimplySign 策略经远程 cmd 的 set 透传（值已限定为 off|auto|force，无注入面）；
+    # 登录入口固定在仓库内 scripts/simplysign-login.py，无需传绝对路径。
+    package_cmd="cd /d $proj && set \"WIN_SIMPLYSIGN_LOGIN=$WIN_SIMPLYSIGN_LOGIN\" && set \"WIN_SIMPLYSIGN_LOGIN_TIMEOUT=$WIN_SIMPLYSIGN_LOGIN_TIMEOUT\""
+    if [ -n "${WIN_SIMPLYSIGN_LOGIN_TOOL:-}" ]; then
+      package_cmd="$package_cmd && set \"WIN_SIMPLYSIGN_LOGIN_TOOL=$WIN_SIMPLYSIGN_LOGIN_TOOL\""
+    fi
+    if [ -n "${WIN_SIMPLYSIGN_PYTHON:-}" ]; then
+      package_cmd="$package_cmd && set \"WIN_SIMPLYSIGN_PYTHON=$WIN_SIMPLYSIGN_PYTHON\""
+    fi
+    package_cmd="$package_cmd && call npm run package:win"
     [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package-win"
     [ "$MODE_FEISHU" = "1" ] && package_cmd="$package_cmd && node scripts/publish-ipa.js --platform win --dir dist/package-win"
   else

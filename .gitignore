@@ -14,3 +14,11 @@ deploy/artifacts-*/
 
 # qzhuli-cli 安装产物：installed_at 每次安装变化，属生成物不入库
 **/.qzhuli-manifest.json
+
+# 打包机登录脚本的运行产物
+__pycache__/
+*.pyc
+
+# 打包机专有登录脚本：含 GUI 驱动逻辑与设备配置，禁止入库（本仓库公开）。
+# 打包机放在 D:\work\sign\，或用 WIN_SIMPLYSIGN_LOGIN_TOOL 指定路径。
+scripts/login_signing_tool.py

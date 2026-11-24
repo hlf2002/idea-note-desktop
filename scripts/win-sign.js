@@ -21,20 +21,31 @@
  * 签名失败/未登录的处理：默认停止（退出码 2），给出排查清单；要产出未签名包必须显式
  * --allow-unsigned（或 method:"none" / --no-sign），finalize 阶段会记录 SmartScreen 后果。
  *
+ * SimplySign 登录（证书来源为云签名时必需）：证书在 SimplySign token 里，只有桌面端
+ * 登录后才会挂载进 Cert:\CurrentUser\My。登录逻辑在打包机本地的 login_signing_tool.py
+ * 里（用 pywinauto 驱动 GUI + adb 读手机验证码），该脚本不随本仓库分发：默认从
+ * D:\work\sign\ 读取，可用 WIN_SIMPLYSIGN_LOGIN_TOOL 指定其它路径。
+ * 它只能跑在交互桌面会话，而 SSH/CI 落在 session 0，看不到窗口，因此由
+ * scripts/simplysign-login.py 负责「投递到交互会话」（schtasks）；本脚本只按退出码
+ * 判定，并在登录后重新枚举证书做断言。
+ * 开关 WIN_SIMPLYSIGN_LOGIN=off|auto|force（默认 auto：仅在无可用证书时登录）。
+ *
  * PIN 预热（SimplySign）：自动签名前先对 makecab 现做的全新 CAB（合法未签名）真签一次，
  * 把 OTP/PIN 交互前置；超过 120s 视为预热失败并停止（对应技能 M7：卡在 Submitting digest for signing 的预防）。
- * --warmup 仅预热不构建。
+ * --warmup 仅预热不构建；--login-only 仅登录不构建。
  *
  * 用法：
  *   node scripts/win-sign.js [--sign-sha1 <指纹>] [--sign-subject <Subject>]
- *        [--publisher-name <不含空白的CN值>] [--allow-unsigned] [--no-sign] [--warmup] [--dry-run]
+ *        [--publisher-name <不含空白的CN值>] [--allow-unsigned] [--no-sign]
+ *        [--warmup] [--login-only] [--dry-run]
  *
  * 约束：所有 builder 参数都会以 argv 数组形式传给 electron-builder，含空白/引号的
  * 参数在 shell 拼串路径上会被拆词（yargs strict → Unknown arguments）。runBuilder
  * 会先断言并在命中时 fail-fast。自动模式不注入 publisherName，由 electron-builder
  * 从证书取 commonName。
  *
- * 退出码：0 成功；1 构建或校验失败；2 签名来源无法确定（未登录/多证书/缺私钥）；3 预热超时。
+ * 退出码：0 成功；1 构建或校验失败；2 签名来源无法确定（未登录/多证书/缺私钥）；
+ *         3 预热超时；4 SimplySign 登录失败或登录后证书仍未出现。
  */
 
 const fs = require('fs');
@@ -48,12 +59,13 @@ const MACHINE_NAMES = { 0x8664: 'x64', 0xAA64: 'arm64', 0x014c: 'x86' };
 
 function usage() {
   console.error('用法: node scripts/win-sign.js [--sign-sha1 <指纹>] [--sign-subject <Subject>]');
-  console.error('                  [--publisher-name <完整DN>] [--allow-unsigned] [--no-sign] [--warmup]');
+  console.error('                  [--publisher-name <完整DN>] [--allow-unsigned] [--no-sign]');
+  console.error('                  [--warmup] [--login-only] [--dry-run]');
   process.exit(2);
 }
 
 function parseArgs(argv) {
-  const o = { signSha1: '', signSubject: '', publisherName: '', allowUnsigned: false, noSign: false, warmupOnly: false, dryRun: false };
+  const o = { signSha1: '', signSubject: '', publisherName: '', allowUnsigned: false, noSign: false, warmupOnly: false, loginOnly: false, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--sign-sha1') o.signSha1 = (argv[++i] || '').trim();
@@ -62,6 +74,7 @@ function parseArgs(argv) {
     else if (a === '--allow-unsigned') o.allowUnsigned = true;
     else if (a === '--no-sign') o.noSign = true;
     else if (a === '--warmup') o.warmupOnly = true;
+    else if (a === '--login-only') o.loginOnly = true;
     else if (a === '--dry-run') o.dryRun = true;
     else usage();
   }
@@ -177,6 +190,99 @@ function enumerateCerts() {
   } finally {
     try { fs.unlinkSync(out); } catch (e) { /* 清理失败不阻断 */ }
   }
+}
+
+/** 纯函数：本轮是否需要尝试 SimplySign 登录。
+ *
+ *  登录必须发生在枚举证书之前（auto 模式依赖证书已挂载），但以下情况不应产生副作用：
+ *    - --no-sign / .electron-release.json method:"none"：明确不签名
+ *    - --dry-run：只打印决策
+ *    - WIN_SIMPLYSIGN_LOGIN=off：排障时临时关掉
+ *  auto 且已有可用证书时同样跳过——重复登录会消耗一次 TOTP，Certum 对同一 30s
+ *  窗口内的二次登录可能直接拒绝。
+ */
+function decideLogin({ cli, cfgWin, env, certs, platform }) {
+  const raw = String(env.WIN_SIMPLYSIGN_LOGIN || 'auto').trim().toLowerCase();
+  const base = { mode: raw, attempt: false, reason: '' };
+
+  if (cli.noSign || (cfgWin && cfgWin.method === 'none')) {
+    return { ...base, reason: '签名已显式关闭，不触碰 SimplySign' };
+  }
+  if (cli.dryRun) return { ...base, reason: 'dry-run 只打印决策，不执行登录' };
+  // 非 Windows 宿主不尝试登录：让 resolveSigning 走 unavailable 分支（原因更准确），
+  // 而不是在这里报「只能在 Windows 打包机执行」把交叉构建的语义搞混。
+  if (platform && platform !== 'win32') {
+    return { ...base, reason: '非 Windows 宿主，跳过登录（由签名来源解析给出不可用原因）' };
+  }
+  if (raw !== 'off' && raw !== 'auto' && raw !== 'force') {
+    return { ...base, mode: 'off', reason: 'WIN_SIMPLYSIGN_LOGIN=' + raw + ' 非法（仅 off|auto|force），按 off 处理' };
+  }
+  if (raw === 'off') return { ...base, reason: 'WIN_SIMPLYSIGN_LOGIN=off' };
+
+  const count = Array.isArray(certs) ? certs.length : 0;
+  if (raw === 'auto' && count > 0) {
+    return { ...base, reason: '已有 ' + count + ' 张可用证书，跳过登录（避免重复消耗 TOTP）' };
+  }
+  return {
+    ...base,
+    attempt: true,
+    reason: raw === 'force' ? 'force：强制重新登录' : 'auto：证书缺失，触发登录'
+  };
+}
+
+/** 调用 scripts/simplysign-login.py：由它把 GUI 登录脚本投递到交互桌面会话。
+ *  本函数只负责解释器选择、超时与退出码；证书是否真的挂上由调用方重新枚举断言。 */
+function ensureSimplySignLogin() {
+  if (process.platform !== 'win32') {
+    console.error('✗ SimplySign 登录只能在 Windows 打包机执行（当前 ' + process.platform + '）');
+    return false;
+  }
+  const script = path.join(ROOT, 'scripts', 'simplysign-login.py');
+  if (!fs.existsSync(script)) {
+    console.error('✗ 未找到登录入口：scripts/simplysign-login.py');
+    console.error('  它负责把 login_signing_tool.py 投递到交互桌面会话；缺失时无法自动登录。');
+    return false;
+  }
+
+  const timeoutSec = Number(process.env.WIN_SIMPLYSIGN_LOGIN_TIMEOUT || 180);
+  if (!Number.isFinite(timeoutSec) || timeoutSec < 30) {
+    console.error('✗ WIN_SIMPLYSIGN_LOGIN_TIMEOUT 非法：' + process.env.WIN_SIMPLYSIGN_LOGIN_TIMEOUT);
+    return false;
+  }
+  const python = process.env.WIN_SIMPLYSIGN_PYTHON || 'python';
+  // login_signing_tool.py 不随仓库分发（公开仓库，脚本含打包机专有配置）：
+  // 默认由包装器从 D:\work\sign\ 读取，路径经 WIN_SIMPLYSIGN_LOGIN_TOOL 覆盖。
+  const loginTool = (process.env.WIN_SIMPLYSIGN_LOGIN_TOOL || '').trim();
+  const args = [script];
+  if (loginTool) args.push('--tool', loginTool);
+  args.push('--timeout', String(timeoutSec));
+
+  console.log('▸ SimplySign 登录：' + python + ' scripts/simplysign-login.py --timeout ' + timeoutSec +
+    (loginTool ? '（tool=' + loginTool + '）' : '（tool 取默认 D:\\work\\sign\\login_signing_tool.py）'));
+  const r = spawnSync(python, args, {
+    stdio: 'inherit',
+    cwd: ROOT,
+    timeout: (timeoutSec + 60) * 1000
+  });
+
+  if (r.error) {
+    if (r.error.code === 'ENOENT') {
+      console.error('✗ 找不到 Python 解释器：' + python);
+      console.error('  用 WIN_SIMPLYSIGN_PYTHON 指定绝对路径（如 C:\\Python311\\python.exe），');
+      console.error('  并确认依赖已装：pip install pywinauto pillow');
+    } else if (r.error.code === 'ETIMEDOUT') {
+      console.error('✗ 登录入口总耗时超过 ' + (timeoutSec + 60) + 's 被终止（正常应在上限内自行退出）');
+    } else {
+      console.error('✗ 启动登录入口失败：' + r.error.message);
+    }
+    return false;
+  }
+  if (r.status !== 0) {
+    console.error('✗ SimplySign 登录失败（退出码 ' + r.status + '）。详细输出见上方 sign.log 片段。');
+    console.error('  排查：① 桌面会话是否已登录 ② adb devices 是否有目标手机 ③ SimplySign 托盘状态');
+    return false;
+  }
+  return true;
 }
 
 /** 定位 Windows SDK 的 signtool.exe（取版本号最高的） */
@@ -302,9 +408,38 @@ function main() {
   console.log('[win-sign] ' + (pkg.name || '?') + ' v' + (pkg.version || '?') +
     ' · 签名来源解析（显式 > env > .electron-release.json > package.json > 证书存储自动发现）');
 
+  // ① SimplySign 登录前置：必须在枚举证书之前完成（auto 模式依赖证书已挂载）。
+  //    decideLogin 判「该不该登」，ensureSimplySignLogin 管「怎么登、成没成」。
+  const certsBefore = enumerateCerts();
+  const login = decideLogin({ cli, cfgWin, env, certs: certsBefore, platform: process.platform });
+  console.log('▸ SimplySign 登录：' + login.reason);
+  if (login.attempt && !ensureSimplySignLogin()) {
+    // --allow-unsigned 的语义是「签不了也出包」，登录失败属于同一类，不额外升级成硬中止；
+    // 未显式接受时才停，避免默默产出被 SmartScreen 拦截的包。
+    if (!cli.allowUnsigned) {
+      console.error('  登录失败且未接受未签名产物：本次构建中止（确要出未签名包请加 --allow-unsigned）。');
+      process.exit(4);
+    }
+    console.error('▸ 登录失败，但已显式接受未签名产物（--allow-unsigned）：继续构建，SmartScreen 会拦截。');
+  }
+  const certs = login.attempt ? enumerateCerts() : certsBefore;
+  if (login.attempt) {
+    console.log('▸ 登录后可用代码签名证书：' + (Array.isArray(certs) ? certs.length : 0) + ' 张');
+  }
+
+  // 仅登录模式：供打包机手工验证登录链路（不构建、不预热）
+  if (cli.loginOnly) {
+    const available = Array.isArray(certs) ? certs.length : 0;
+    if (available === 0) {
+      console.error('✗ 登录后 Cert:\\CurrentUser\\My 仍无可用证书，判据不成立');
+      process.exit(4);
+    }
+    console.log('✓ 登录完成，证书可用：' + available + ' 张');
+    process.exit(0);
+  }
+
   // 仅预热模式
   if (cli.warmupOnly) {
-    const certs = enumerateCerts();
     const resolution = resolveSigning({ cli, env, config, pkgSigntool: pkg.build && pkg.build.win && pkg.build.win.signtoolOptions, platform: process.platform, certs });
     if (!resolution.sha1) {
       console.error('✗ 无可预热证书：' + resolution.reason);
@@ -314,7 +449,6 @@ function main() {
     process.exit(ok ? 0 : 3);
   }
 
-  const certs = enumerateCerts();
   const resolution = resolveSigning({ cli, env, config, pkgSigntool: pkg.build && pkg.build.win && pkg.build.win.signtoolOptions, platform: process.platform, certs });
 
   console.log('▸ 签名模式：' + resolution.mode + ' —— ' + resolution.reason);
@@ -375,5 +509,5 @@ function main() {
   console.log('[win-sign] 完成');
 }
 
-module.exports = { resolveSigning, enumerateCerts, MACHINE_NAMES, DEFAULT_TIMESTAMP, findUnsafeArgs };
+module.exports = { resolveSigning, decideLogin, enumerateCerts, MACHINE_NAMES, DEFAULT_TIMESTAMP, findUnsafeArgs };
 if (require.main === module) main();

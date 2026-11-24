@@ -21,7 +21,7 @@
 - 构建（裸，无收尾）：`npm run build` / `build:mac` / `build:win`
 - 打包 mac：`npm run package`（测试 → electron-builder → **dmg 就地签名+公证+装订** → 命名收尾：dmg 留中文、zip/blockmap 转 ASCII → 清单 sha512 校验）
 - 打包机 mac 入口：`npm run package:mac`（`scripts/package-mac.sh`：载入 `.env` → 解锁签名钥匙串 → 真签自测 → 打包（内含 dmg 装订）→ 票据复核；`SKIP_SIGNING=1` 出未签名包）
-- 打包 win：`npm run package:win`（win-sign.js 解析签名来源：显式 > env > 配置 > 证书存储自动发现，SimplySign 登录即自动签名+PIN 预热；构建 → 收尾三断言校验；须 Windows 宿主；`--dry-run` 可预演决策）
+- 打包 win：`npm run package:win`（win-sign.js：SimplySign 自动登录（`WIN_SIMPLYSIGN_LOGIN=off|auto|force`，经 `scripts/simplysign-login.py` 投递到交互桌面会话；无证书才登；登录脚本 `login_signing_tool.py` 不随仓库分发，默认读 `D:\work\sign\`）→ 解析签名来源（显式 > env > 配置 > 证书存储自动发现）→ PIN 预热 → 构建 → 收尾三断言校验；须 Windows 宿主；`--dry-run` 预演决策、`--login-only` 只验登录）
 - dmg 装订机制：`scripts/dmg-notarize.sh`（对目录内 dmg：签名 → **notarytool 提交 dmg 本体** → staple，幂等）。根治点是 `release.sh` 的 `notarize_dmgs` 在 **stage 之前** 就地处理 `dist/*.dmg`，因此 stage 复制进 `dist/package` 的就是最终字节、清单 sha512 一次算准 —— 命名由 `assetName()` 统一决定（dmg 保留中文名，其余转 `idea-note-*`），不需要事后重命名。
 - dmg 补票入口（历史产物 / 事后改目录才用）：`npm run staple` = `npm run notarize:dmg`（`scripts/notarize-dmg.sh`：调 dmg-notarize.sh + 重生成 blockmap + 重算清单）
 - 交付目录纪律：**投放只认 `dist/package/`**。dmg 保留中文名 `灵感笔记-*`（人工下载用），zip / blockmap 是 ASCII `idea-note-*`（自动更新链路）；`dist/` 根目录是同一份字节但缺清单，不要直接分发

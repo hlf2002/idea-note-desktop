@@ -72,10 +72,18 @@
 | 项 | 要求 |
 |---|---|
 | Node.js | ≥ 21 |
-| SimplySign | 已登录（证书挂进 `Cert:\CurrentUser\My`），首跑执行 `node scripts/win-sign.js --warmup` 缓存 OTP/PIN（约 3 小时有效） |
+| SimplySign | 安装于默认路径；证书只有在**桌面客户端登录后**才挂进 `Cert:\CurrentUser\My` |
+| SimplySign 自动登录 | `scripts/simplysign-login.py` 负责投递：Python 3.9+、`pip install pywinauto pillow`、`adb` 在 PATH、目标手机 USB 在线并已授权调试、打包机保留一个已登录的桌面会话（SSH 落在 session 0，脚本经 schtasks 投递到交互会话）。手机序列号 / 客户端路径等参数以打包机上那份脚本内的取值为准 |
+| 登录脚本（不入库） | `login_signing_tool.py` 含 GUI 驱动与设备配置，**不随本仓库分发**：放到 `D:\work\sign\`，或用 `WIN_SIMPLYSIGN_LOGIN_TOOL` 指定绝对路径 |
+| PIN 缓存 | 登录成功后首跑 `node scripts/win-sign.js --warmup`，把 OTP/PIN 交互前置（约 3 小时有效） |
 | Windows SDK | 含 `signtool.exe` |
 | SSH | OpenSSH Server；管理员组账号的公钥要写 `C:\ProgramData\ssh\administrators_authorized_keys` 并收紧 ACL |
 | 七牛凭据 | **仅 `MODE=publish` 需要**：`.release.config.json` 的 `qiniu` 段或 `QINIU_*` 环境变量（打包机本地） |
+
+> **Windows 流水线不要并行**：q_assistant 与本项目共用同一台打包机、同一部手机、同一个
+> SimplySign 账号。两条流水线同时登录会抢 adb 前台，并可能在同一 30s TOTP 窗口内二次
+> 登录而被 Certum 拒绝。计划任务名已按项目区分（`IdeaNoteSigningLogin` vs
+> `QAssistantSigningLogin`），但手机只有一部。
 
 ---
 
@@ -132,6 +140,10 @@ deploy/deploy.sh mac publish                          # 裸平台 + 裸模式
 | `REF` / `TAG` / `BRANCH` / `GIT_BRANCH` | 由调度机 HEAD 推断 | 只接受 `main` 或**调度机本地已存在**的 tag |
 | `DRY_RUN` | `0` | `1` = 只打印远程命令，不连机 |
 | `UPLOAD` / `UPLOAD_QINIU` | 由 `MODE` 推导 | `1` 强制上传，`0` 强制不传（覆盖 `MODE`） |
+| `WIN_SIMPLYSIGN_LOGIN` | `auto` | 仅 win：`off` 完全不碰；`auto` 无可用证书才登录；`force` 无视现有证书强制重登 |
+| `WIN_SIMPLYSIGN_LOGIN_TIMEOUT` | `180` | 登录脚本投递到交互会话后的等待上限（秒） |
+| `WIN_SIMPLYSIGN_LOGIN_TOOL` | `D:\work\sign\login_signing_tool.py` | 打包机上登录脚本的绝对路径（该脚本不入库） |
+| `WIN_SIMPLYSIGN_PYTHON` | `python` | 打包机上的解释器；不在 PATH 时给绝对路径（含 `& " < > ^ %` 会被拒） |
 | `TARGET` | 无 | 旧调用方式别名，等价 `PLATFORM` |
 | `CLONE_URL` | GitHub origin | 打包机首跑目录缺失时的 clone 地址 |
 | `WINDOWS_HOST` / `_PORT` / `_USER` / `_PROJECT_DIR` | `106.52.168.174:23491 keke D:\work\test\idea-note-desktop` | win 打包机 |
@@ -150,6 +162,7 @@ deploy/deploy.sh mac publish                          # 裸平台 + 裸模式
 | 只重跑 mac | `PLATFORM=mac MODE=local REF=main deploy/deploy.sh` |
 | 构建并投七牛（打包机上传） | `PLATFORM=all MODE=publish REF=main deploy/deploy.sh` |
 | 只投、不想重建（在打包机手动跑） | `node scripts/qiniu-upload.js --dir dist/package` |
+| 只验证 SimplySign 登录（在打包机跑） | `python scripts\simplysign-login.py` 或 `node scripts/win-sign.js --login-only` |
 
 ### 3.5 产物结构
 
@@ -523,7 +536,10 @@ curl -sI "https://ideanote.7373.com.cn/autoupdates/灵感笔记-1.2.5-arm64.dmg"
 | `试签失败：no identity found`（package-mac.sh） | 指定钥匙串里只有证书、没有配对私钥 | 换到含私钥的钥匙串，或重新导入 `.p12` |
 | `试签失败：时间戳服务不可达` | `--timestamp` 需要 `timestamp.apple.com:80` | 放通该域名（代理/TUN 加直连）；不能去掉时间戳，公证要求安全时间戳 |
 | 构建日志 `skipped macOS notarization` | 三类：`.env` 未载入（`build:mac` 不读 `.env`）、未配 `APPLE_*` 三件套、或 `notarize:false` | 预期行为之一。需要公证则用 `bash scripts/package-mac.sh`（会 source `.env`）并补齐三件套；补票用 `npm run notarize:dmg` |
-| Windows 报「证书存储中没有可用代码签名证书」 | SimplySign 未登录 / PIN 过期 | 登录后 `node scripts/win-sign.js --warmup`；急用可 `--allow-unsigned` |
+| Windows 报「证书存储中没有可用代码签名证书」 | SimplySign 未登录 / 自动登录失败 / PIN 过期 | 先看登录脚本同目录的 `sign.log`（默认 `D:\work\sign\sign.log`）尾部与 deploy 日志；手工验证 `python scripts\simplysign-login.py` → `node scripts/win-sign.js --login-only`。临时关自动登录：`WIN_SIMPLYSIGN_LOGIN=off`（要求机上已人工登录）；急用可 `--allow-unsigned` |
+| 登录报「未找到登录脚本」 | `login_signing_tool.py` 没放到打包机，或路径没传对 | `mkdir D:\work\sign` 后把脚本放进去；或传 `WIN_SIMPLYSIGN_LOGIN_TOOL=D:\work\sign\login_signing_tool.py` |
+| `SimplySign 登录超时` / 「任务未在交互会话完成」 | 桌面会话未登录、adb 设备掉线、或计划任务没落到 session 1 | `query user` 确认打包用户处于活动会话；`adb devices` 确认手机为 `device`；`schtasks /query /tn IdeaNoteSigningLogin` 看任务是否存在；重跑 `python scripts/simplysign-login.py` |
+| 自动登录报「找不到 Python 解释器」 | 打包机 PATH 里没有 `python`，或只有 Microsoft Store 别名 | deploy 时传 `WIN_SIMPLYSIGN_PYTHON=C:\Python311\python.exe`（含 `& " < > ^ %` 会被拒绝） |
 | `no such bucket` / 631 | bucket 名或区域不符 | 核对 `QINIU_BUCKET`；换 `upload-z*.qiniup.com` |
 | 产物单传报「产物前缀与更新源前缀重叠」 | `artifactPrefix` 配到了 `autoupdates/` 下 | 改成独立前缀（默认 `artifacts/`）；确需落更新源目录时用 `--prefix` 显式指定（仅告警） |
 | 产物单传报「拒绝单传发布清单 latest*.yml」 | 把发版清单喂给了产物链路 | 发版用 `npm run upload:qiniu -- --dir <产物目录>`；仅留档时加 `--allow-manifest` |

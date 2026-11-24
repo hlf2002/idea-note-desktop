@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { resolveSigning, DEFAULT_TIMESTAMP, findUnsafeArgs } = require('../scripts/win-sign');
+const { resolveSigning, decideLogin, DEFAULT_TIMESTAMP, findUnsafeArgs } = require('../scripts/win-sign');
 
 const CLI_EMPTY = { signSha1: '', signSubject: '', publisherName: '' };
 const ENV_EMPTY = {};
@@ -134,3 +134,61 @@ test('默认时间戳服务器为 RFC3161 (digicert)，可被环境变量覆盖'
   assert.equal(r.timestampServer, 'http://ts.local');
   assert.match(argByPrefix(r.builderArgs, 'rfc3161TimeStampServer'), /ts\.local/);
 });
+
+// ------------------------------------------------------------ SimplySign 登录决策
+
+test('登录 auto：无证书 → 触发（缺证书是唯一需要登录的信号）', () => {
+  const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: {}, certs: [] });
+  assert.equal(d.attempt, true);
+  assert.equal(d.mode, 'auto');
+  assert.match(d.reason, /证书缺失/);
+});
+
+test('登录 auto：已有证书 → 跳过，不重复消耗 TOTP', () => {
+  const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: {}, certs: ONE_CERT });
+  assert.equal(d.attempt, false);
+  assert.match(d.reason, /已有 1 张/);
+});
+
+test('登录 force：无视现有证书强制重登（证书过期/指纹变更时用）', () => {
+  const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: { WIN_SIMPLYSIGN_LOGIN: 'force' }, certs: ONE_CERT });
+  assert.equal(d.attempt, true);
+  assert.equal(d.mode, 'force');
+});
+
+test('登录 off：完全不碰 SimplySign，排障与回滚用', () => {
+  const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: { WIN_SIMPLYSIGN_LOGIN: 'off' }, certs: [] });
+  assert.equal(d.attempt, false);
+});
+
+test('登录：非法取值按 off 处理，不因拼写错误产生副作用', () => {
+  const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: { WIN_SIMPLYSIGN_LOGIN: 'yes' }, certs: [] });
+  assert.equal(d.attempt, false);
+  assert.equal(d.mode, 'off');
+  assert.match(d.reason, /非法/);
+});
+
+test('登录：--no-sign / method:none / --dry-run 一律不触发（force 也不越过）', () => {
+  const force = { WIN_SIMPLYSIGN_LOGIN: 'force' };
+  assert.equal(decideLogin({ cli: { ...CLI_EMPTY, noSign: true }, cfgWin: {}, env: force, certs: [] }).attempt, false);
+  assert.equal(decideLogin({ cli: CLI_EMPTY, cfgWin: { method: 'none' }, env: force, certs: [] }).attempt, false);
+  assert.equal(decideLogin({ cli: { ...CLI_EMPTY, dryRun: true }, cfgWin: {}, env: {}, certs: [] }).attempt, false);
+});
+
+test('登录：大小写与空白容错（deploy.sh 透传值不保证规范化）', () => {
+  const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: { WIN_SIMPLYSIGN_LOGIN: ' FORCE ' }, certs: ONE_CERT });
+  assert.equal(d.attempt, true);
+  assert.equal(d.mode, 'force');
+});
+
+test('登录：非 Windows 宿主 certs=null 不崩，按「无证书」处理', () => {
+  const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: {}, certs: null });
+  assert.equal(d.attempt, true);
+});
+
+test('登录：非 Windows 宿主直接跳过，把原因留给 unavailable 分支', () => {
+  const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: {}, certs: null, platform: 'darwin' });
+  assert.equal(d.attempt, false);
+  assert.match(d.reason, /非 Windows/);
+});
+
