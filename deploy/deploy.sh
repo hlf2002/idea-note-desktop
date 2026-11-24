@@ -244,6 +244,19 @@ ensure_known_host() {  # host port
 # win 打包机若报同类错误，按提示人工在机上前置还原一次即可。
 remote_checkout() {
   local platform="$1" proj="$2"
+
+  if [ "$platform" = "win" ]; then
+    # 复杂检出逻辑在打包机的 scripts/checkout-win.py 里执行：argv 数组不做 shell 拼接、
+    # 每步校验真实退出码、最后显式断言 HEAD == 目标 ref。历史上 win 检出用内联 cmd
+    # 字符串，引号/星号被 cmd.exe /c 的引号规则破坏，整条命令静默失败且 sshd 返回 0，
+    # 打包机一直跑旧代码（2026-11-24 实锤）。此处只做单行触发，不再拼接。
+    # 首次使用需在打包机手动 checkout 一次，让 checkout-win.py 随仓库到位。
+    printf 'cd /d %s && python scripts\\checkout-win.py --ref %s --clone-url %s' \
+      "$proj" "$REF" "$CLONE_URL"
+    return
+  fi
+
+  # ---- mac 侧（sh 方言，保持不变）----
   local git_fetch tgt_ref
   if [ "$REF" = "main" ]; then
     git_fetch="git fetch origin +refs/heads/main:refs/remotes/origin/main"
@@ -252,28 +265,11 @@ remote_checkout() {
     git_fetch="git fetch --force origin refs/tags/$REF:refs/tags/$REF"
     tgt_ref="refs/tags/$REF"
   fi
-  if [ "$platform" = "win" ]; then
-    # cmd 方言做 SHA 串比较语法脆弱且无法在本机验证；无条件 detach 检出同样保证
-    # 工作区处于最新，git rev-parse HEAD 即留痕证明。
-    # [deps] 标记：检出段历来是静默的，npm ci 若被跳过或失败会表现为「检出完成但依赖缺失」
-    # （后续 win-sign 报找不到 node_modules/electron-builder）。标记让每步在日志里可辨。
-    #
-    # 关键约束（2026-11-24 实锤）：Windows OpenSSH 把远程命令交给 cmd.exe /c 时，命令里的
-    # 引号与 * 会被命令行引号规则破坏，导致整条命令静默失败、sshd 仍返回 0，deploy 误判
-    # 「检出完成」。因此 win 方言不写引号、不写 pathspec：
-    #   - 路径默认无空格，clone/checkout 都不需要引号
-    #   - .qzhuli-manifest.json 自 d92c47b 起已 untracked（.gitignore），git diff 天然忽略，
-    #     无需 :(exclude) pathspec
-    # 开头 echo [deps] start 是判据：连这行都没有 = 命令根本没被 cmd 执行，仍属 ssh 传输问题。
-    printf 'echo [deps] start & if not exist %s\\.git git clone %s %s & cd /d %s && git diff --exit-code && git diff --cached --exit-code && echo [deps] git fetch && %s && echo [deps] checkout %s && git checkout --detach %s && echo [deps] HEAD && git rev-parse HEAD && echo [deps] npm ci start && call npm ci && echo [deps] npm ci done' \
-      "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref" "$tgt_ref"
-  else
-    # sh 方言：fetch 后显式比对 HEAD 与目标 ref——相同报「已是最新」跳过检出，
-    # 不同则 detach 检出并报「已更新」，两种情况均以 rev-parse HEAD 收口留痕。
-    # mac 侧 $proj 不加引号：路径含 ~ 时需在远程 shell 展开；因此 MAC_PROJECT_DIR 不支持空格
-    printf '([ -d %s/.git ] || git clone %s %s) && cd %s && git ls-files -z "*/.qzhuli-manifest.json" | xargs -0 git checkout -- && git diff --exit-code && git diff --cached --exit-code && echo "[deps] git fetch" && %s && tgt=$(git rev-parse %s) && cur=$(git rev-parse HEAD) && { [ "$cur" = "$tgt" ] && echo "仓库已是最新：$tgt" || { git checkout --detach "$tgt" && echo "已更新至最新：$cur -> $tgt"; }; } && echo "[deps] HEAD $cur -> $tgt" && git rev-parse HEAD && echo "[deps] npm ci start" && npm ci && echo "[deps] npm ci done"' \
-      "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref"
-  fi
+  # sh 方言：fetch 后显式比对 HEAD 与目标 ref——相同报「已是最新」跳过检出，
+  # 不同则 detach 检出并报「已更新」，两种情况均以 rev-parse HEAD 收口留痕。
+  # mac 侧 $proj 不加引号：路径含 ~ 时需在远程 shell 展开；因此 MAC_PROJECT_DIR 不支持空格
+  printf '([ -d %s/.git ] || git clone %s %s) && cd %s && git ls-files -z "*/.qzhuli-manifest.json" | xargs -0 git checkout -- && git diff --exit-code && git diff --cached --exit-code && echo "[deps] git fetch" && %s && tgt=$(git rev-parse %s) && cur=$(git rev-parse HEAD) && { [ "$cur" = "$tgt" ] && echo "仓库已是最新：$tgt" || { git checkout --detach "$tgt" && echo "已更新至最新：$cur -> $tgt"; }; } && echo "[deps] HEAD $cur -> $tgt" && git rev-parse HEAD && echo "[deps] npm ci start" && npm ci && echo "[deps] npm ci done"' \
+    "$proj" "$CLONE_URL" "$proj" "$proj" "$git_fetch" "$tgt_ref"
 }
 
 # 单平台任务：远程检出 -> 远程打包（打包 + 校验 + 可选上传，全部在打包机）。状态写入 STATUS_<PLATFORM>
@@ -334,6 +330,9 @@ run_task() {
     else
       echo "  原因：远程命令返回非 0（多为打包机工作区有未提交改动；git 原始输出见上）。处置：" >&2
       echo "    · 若最后一条 [deps] 标记是 npm ci start，则为依赖安装失败（锁文件/网络/磁盘），不是仓库脏" >&2
+      if [ "$platform" = "win" ]; then
+        echo "    · win 检出走 scripts/checkout-win.py；若报「找不到该脚本」，先在打包机手动 checkout 一次让它随仓库到位" >&2
+      fi
       echo "--- 打包机工作区快照（只读取证）---" >&2
       if [ "$platform" = "win" ]; then
         ssh "${SSH_OPTS[@]}" -p "$port" "$user@$host" "cd /d $proj && git status --short && git rev-parse --short HEAD" >&2 || true
