@@ -38,8 +38,7 @@ import time
 from pathlib import Path
 
 # login_signing_tool.py 含打包机专有的 GUI 驱动与设备配置，不随本仓库开源，因此不放在
-# scripts/ 下。默认读打包机的固定部署目录；换位置或多份并存时用
-# SIMPLYSIGN_LOGIN_TOOL / --tool 指定。
+# scripts/ 下。默认读打包机的固定部署目录；换位置或多份并存时用环境变量或命令行指定。
 TOOL_ENV = "SIMPLYSIGN_LOGIN_TOOL"
 # raw string 保留反斜杠字面量：普通字符串里的 \s \l 虽当前不是转义序列，但一旦路径
 # 换成 \t \n \b 开头就会静默变形，这里不给自己留坑。
@@ -65,8 +64,7 @@ def resolve_login_tool(cli_value: str = "") -> Path:
     """定位 login_signing_tool.py：--tool > SIMPLYSIGN_LOGIN_TOOL > D:\\work\\sign\\。
 
     该脚本不随仓库分发（含 GUI 驱动逻辑与打包机专有配置），路径由打包机本地提供。
-    相对路径按当前工作目录解析——deploy.sh 已 cd 到项目根，因此传
-    ``scripts\\login_signing_tool.py`` 也有效，便于临时改用仓库内的副本。
+    相对路径按当前工作目录解析——deploy.sh 已 cd 到项目根。
     """
     raw = (cli_value or os.environ.get(TOOL_ENV, "")).strip()
     if raw:
@@ -154,10 +152,10 @@ def run_in_process(tool: Path) -> int:
 def run_via_scheduled_task(tool: Path, timeout: int) -> int:
     """把 login_signing_tool.py 投递到已登录用户的交互桌面会话执行。
 
-    ``verify_signature_tool`` 用 pywinauto 驱动 SimplySign Desktop 窗口，而该窗口只
-    存在于交互桌面会话。SSH 会话直接运行会导致「托盘里没找到图标」。这里用
-    schtasks 注册「仅当前用户登录时运行」（无 /ru、无密码 = 交互令牌）的一次性任务，
-    让它在控制台会话里执行；登录脚本的退出码由一个临时 cmd 包一层写进结果文件，再回读。
+    登录脚本用 pywinauto 驱动 SimplySign Desktop 窗口，而该窗口只存在于交互桌面会话。
+    SSH 会话直接运行会落到 session 0，看不到托盘图标。这里用 schtasks 注册「仅当前
+    用户登录时运行」（无 /ru、无密码 = 交互令牌）的一次性任务，让它在控制台会话里
+    执行；登录脚本的退出码由一个临时 cmd 包一层写进结果文件，再回读。
     """
     schtasks = shutil.which("schtasks.exe") or shutil.which("schtasks")
     if not schtasks:
@@ -171,14 +169,11 @@ def run_via_scheduled_task(tool: Path, timeout: int) -> int:
 
     python_exe = os.environ.get("SIMPLYSIGN_PYTHON") or sys.executable
 
-    # 批处理以 UTF-8 写入；先切代码页，路径含中文时 cmd 才不会按系统代码页（GBK）
-    # 解析成乱码。chcp 只作用于这个 cmd 进程，任务结束即失效。
-    # %errorlevel% 逐行展开：写结果文件那行取的就是登录脚本的退出码，chcp 在其之前不影响。
+    # 包一层 cmd：跑完登录脚本后把退出码写进结果文件（批处理按行展开 %errorlevel%）。
     wrapper_file.write_text(
         "\r\n".join(
             [
                 "@echo off",
-                "chcp 65001 >nul",
                 f'"{python_exe}" "{tool}"',
                 f'> "{result_file}" echo %errorlevel%',
             ]
@@ -209,6 +204,7 @@ def run_via_scheduled_task(tool: Path, timeout: int) -> int:
         print(f"✗ {error}", file=sys.stderr)
         return 1
 
+    # 记录 sign.log 当前偏移，轮询时把登录脚本新增的日志逐段打印出来（近似 tail）。
     log_offset = sign_log_size()
     print(f"    已登记计划任务 {TASK_NAME}，投递到交互桌面会话（超时 {timeout}s）", flush=True)
 
@@ -239,11 +235,10 @@ def run_via_scheduled_task(tool: Path, timeout: int) -> int:
         print_new_log()
         time.sleep(1)
 
-    # 先 /end 再 /delete：/delete 只删任务定义，不会终止已启动的进程。超时场景下
-    # 登录脚本可能还卡在 adb 上，留下的僵尸进程会继续占用手机（两条流水线共用一部）。
-    # 任务未在运行时 /end 会报错，这里忽略返回码，清理失败也不掩盖真正的登录结果。
-    subprocess.run([schtasks, "/end", "/tn", TASK_NAME], capture_output=True)
+    # 清理任务（尽力而为，删除失败不掩盖真正的登录结果）。
     subprocess.run([schtasks, "/delete", "/tn", TASK_NAME, "/f"], capture_output=True)
+
+    # 收尾：打印轮询结束前可能残留的最后一段日志。
     print_new_log()
 
     if not result_file.exists():
@@ -292,7 +287,7 @@ def main(argv=None) -> int:
     tool = resolve_login_tool(args.tool)
     if not tool.is_file():
         print(f"✗ 未找到登录脚本：{tool}", file=sys.stderr)
-        print("  该文件不随本仓库分发（含 GUI 驱动与打包机专有配置），需在打包机上单独放置：", file=sys.stderr)
+        print("  该脚本不随本仓库分发（含 GUI 驱动与打包机专有配置），需在打包机上单独放置：", file=sys.stderr)
         print(r"    mkdir D:\work\sign", file=sys.stderr)
         print(r"    copy <来源>\login_signing_tool.py D:\work\sign", file=sys.stderr)
         print(f"  或用 {TOOL_ENV} / --tool 指定绝对路径。", file=sys.stderr)

@@ -137,17 +137,20 @@ test('默认时间戳服务器为 RFC3161 (digicert)，可被环境变量覆盖'
 
 // ------------------------------------------------------------ SimplySign 登录决策
 
-test('登录 auto：无证书 → 触发（缺证书是唯一需要登录的信号）', () => {
+test('登录 auto：无证书 → 触发', () => {
   const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: {}, certs: [] });
   assert.equal(d.attempt, true);
   assert.equal(d.mode, 'auto');
-  assert.match(d.reason, /证书缺失/);
+  assert.match(d.reason, /连接状态/);
 });
 
-test('登录 auto：已有证书 → 跳过，不重复消耗 TOTP', () => {
+test('登录 auto：证书残留也触发（证书在 ≠ 会话已连接）', () => {
+  // 2026-11-24 打包机实测：SimplySign 断开后证书仍留在 Cert:\CurrentUser\My，
+  // HasPrivateKey 仍为 true，但 signtool 报 No certificates were found。
+  // 判据只能是连接状态，不能是证书数量——否则会跳过登录直接进入预热失败。
   const d = decideLogin({ cli: CLI_EMPTY, cfgWin: {}, env: {}, certs: ONE_CERT });
-  assert.equal(d.attempt, false);
-  assert.match(d.reason, /已有 1 张/);
+  assert.equal(d.attempt, true);
+  assert.match(d.reason, /残留/);
 });
 
 test('登录 force：无视现有证书强制重登（证书过期/指纹变更时用）', () => {

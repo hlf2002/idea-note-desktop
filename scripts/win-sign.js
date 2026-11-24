@@ -194,12 +194,16 @@ function enumerateCerts() {
 
 /** 纯函数：本轮是否需要尝试 SimplySign 登录。
  *
- *  登录必须发生在枚举证书之前（auto 模式依赖证书已挂载），但以下情况不应产生副作用：
+ *  登录必须发生在枚举证书之前，但以下情况不应产生副作用：
  *    - --no-sign / .electron-release.json method:"none"：明确不签名
  *    - --dry-run：只打印决策
  *    - WIN_SIMPLYSIGN_LOGIN=off：排障时临时关掉
- *  auto 且已有可用证书时同样跳过——重复登录会消耗一次 TOTP，Certum 对同一 30s
- *  窗口内的二次登录可能直接拒绝。
+ *
+ *  auto 不看「证书在不在存储里」——这是关键。SimplySign 会话断开后证书仍会残留在
+ *  Cert:\CurrentUser\My（HasPrivateKey 仍为 true），但私钥不可用，signtool 会报
+ *  「No certificates were found that met all the given criteria」。判据只能是
+ *  SimplySign Desktop 的连接状态，而它只能通过 GUI 读取，所以交给登录脚本自己判断：
+ *  已连接时 login_signing_tool.py 的 open_from_tray 直接返回，不会重复提交验证码。
  */
 function decideLogin({ cli, cfgWin, env, certs, platform }) {
   const raw = String(env.WIN_SIMPLYSIGN_LOGIN || 'auto').trim().toLowerCase();
@@ -220,13 +224,15 @@ function decideLogin({ cli, cfgWin, env, certs, platform }) {
   if (raw === 'off') return { ...base, reason: 'WIN_SIMPLYSIGN_LOGIN=off' };
 
   const count = Array.isArray(certs) ? certs.length : 0;
-  if (raw === 'auto' && count > 0) {
-    return { ...base, reason: '已有 ' + count + ' 张可用证书，跳过登录（避免重复消耗 TOTP）' };
-  }
+  const hint = count > 0
+    ? '；存储中有 ' + count + ' 张证书，可能是断开后的残留，不能当作已连接'
+    : '';
   return {
     ...base,
     attempt: true,
-    reason: raw === 'force' ? 'force：强制重新登录' : 'auto：证书缺失，触发登录'
+    reason: (raw === 'force'
+      ? 'force：强制重新登录'
+      : 'auto：先确保连接状态（脚本幂等，已连接直接返回）') + hint
   };
 }
 
@@ -251,6 +257,7 @@ function ensureSimplySignLogin() {
   }
   const python = process.env.WIN_SIMPLYSIGN_PYTHON || 'python';
   // login_signing_tool.py 不随仓库分发（公开仓库，脚本含打包机专有配置）：
+  // 登录脚本不随仓库分发（公开仓库，含打包机专有配置）：
   // 默认由包装器从 D:\work\sign\ 读取，路径经 WIN_SIMPLYSIGN_LOGIN_TOOL 覆盖。
   const loginTool = (process.env.WIN_SIMPLYSIGN_LOGIN_TOOL || '').trim();
   const args = [script];

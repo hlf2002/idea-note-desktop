@@ -85,6 +85,17 @@
 > 登录而被 Certum 拒绝。计划任务名已按项目区分（`IdeaNoteSigningLogin` vs
 > `QAssistantSigningLogin`），但手机只有一部。
 
+`D:\work\sign\` 目录（全部不入库）：
+
+```
+D:\work\sign\
+├─ login_signing_tool.py     # 登录脚本，win-sign.js 默认调它
+├─ sign.log                  # 运行日志（脚本自动写）
+└─ sign_file.bat             # 手动签名验证（可选，供排障）
+```
+
+登录脚本通过 schtasks 投递到交互桌面会话执行，退出码由临时 cmd 写进结果文件回读。
+
 ---
 
 ## 3. `deploy/deploy.sh`
@@ -142,7 +153,7 @@ deploy/deploy.sh mac publish                          # 裸平台 + 裸模式
 | `UPLOAD` / `UPLOAD_QINIU` | 由 `MODE` 推导 | `1` 强制上传，`0` 强制不传（覆盖 `MODE`） |
 | `WIN_SIMPLYSIGN_LOGIN` | `auto` | 仅 win：`off` 完全不碰；`auto` 无可用证书才登录；`force` 无视现有证书强制重登 |
 | `WIN_SIMPLYSIGN_LOGIN_TIMEOUT` | `180` | 登录脚本投递到交互会话后的等待上限（秒） |
-| `WIN_SIMPLYSIGN_LOGIN_TOOL` | `D:\work\sign\login_signing_tool.py` | 打包机上登录脚本的绝对路径（该脚本不入库） |
+| `WIN_SIMPLYSIGN_LOGIN_TOOL` | `D:\work\sign\login_signing_tool.py` | 打包机登录脚本的绝对路径（该脚本不入库） |
 | `WIN_SIMPLYSIGN_PYTHON` | `python` | 打包机上的解释器；不在 PATH 时给绝对路径（含 `& " < > ^ %` 会被拒） |
 | `TARGET` | 无 | 旧调用方式别名，等价 `PLATFORM` |
 | `CLONE_URL` | GitHub origin | 打包机首跑目录缺失时的 clone 地址 |
@@ -537,7 +548,8 @@ curl -sI "https://ideanote.7373.com.cn/autoupdates/灵感笔记-1.2.5-arm64.dmg"
 | `试签失败：时间戳服务不可达` | `--timestamp` 需要 `timestamp.apple.com:80` | 放通该域名（代理/TUN 加直连）；不能去掉时间戳，公证要求安全时间戳 |
 | 构建日志 `skipped macOS notarization` | 三类：`.env` 未载入（`build:mac` 不读 `.env`）、未配 `APPLE_*` 三件套、或 `notarize:false` | 预期行为之一。需要公证则用 `bash scripts/package-mac.sh`（会 source `.env`）并补齐三件套；补票用 `npm run notarize:dmg` |
 | Windows 报「证书存储中没有可用代码签名证书」 | SimplySign 未登录 / 自动登录失败 / PIN 过期 | 先看登录脚本同目录的 `sign.log`（默认 `D:\work\sign\sign.log`）尾部与 deploy 日志；手工验证 `python scripts\simplysign-login.py` → `node scripts/win-sign.js --login-only`。临时关自动登录：`WIN_SIMPLYSIGN_LOGIN=off`（要求机上已人工登录）；急用可 `--allow-unsigned` |
-| 登录报「未找到登录脚本」 | `login_signing_tool.py` 没放到打包机，或路径没传对 | `mkdir D:\work\sign` 后把脚本放进去；或传 `WIN_SIMPLYSIGN_LOGIN_TOOL=D:\work\sign\login_signing_tool.py` |
+| 预热报 `No certificates were found that met all the given criteria` | SimplySign 会话已断开，但证书仍残留在存储里（`HasPrivateKey` 仍为 true）；旧逻辑按证书数量跳过登录就会走到这一步 | 当前版本每次打包都先拉起连接，日志应有 `▸ SimplySign 登录：auto：先确保连接状态` 与 `session: non-interactive → scheduled task`。若两者都没有，说明打包机代码没更新到含该逻辑的提交 |
+| 登录报「未找到登录脚本」 | `login_signing_tool.py` 没放到打包机，或路径没传对 | 放到 `D:\work\sign\`；或传 `WIN_SIMPLYSIGN_LOGIN_TOOL=D:\work\sign\login_signing_tool.py` |
 | `SimplySign 登录超时` / 「任务未在交互会话完成」 | 桌面会话未登录、adb 设备掉线、或计划任务没落到 session 1 | `query user` 确认打包用户处于活动会话；`adb devices` 确认手机为 `device`；`schtasks /query /tn IdeaNoteSigningLogin` 看任务是否存在；重跑 `python scripts/simplysign-login.py` |
 | 自动登录报「找不到 Python 解释器」 | 打包机 PATH 里没有 `python`，或只有 Microsoft Store 别名 | deploy 时传 `WIN_SIMPLYSIGN_PYTHON=C:\Python311\python.exe`（含 `& " < > ^ %` 会被拒绝） |
 | `no such bucket` / 631 | bucket 名或区域不符 | 核对 `QINIU_BUCKET`；换 `upload-z*.qiniup.com` |
