@@ -177,7 +177,7 @@ deploy/deploy.sh mac publish                          # 裸平台 + 裸模式
 
 ### 3.5 产物结构
 
-产物不再回收到跳板机：mac 落在打包机 `dist/package/`，win 落在 `dist/package-win/`，`MODE=publish` 时由打包机直接投七牛。
+产物不再回收到跳板机：mac 落在打包机 `dist/package/`，win 落在 `dist/package-win/`，`MODE=publish` 时由打包机直接投七牛。每次打包成功收尾后会自动按 SemVer 排序清理 `dist/` 与投放目录的历史版本（仅保留最近 2 个版本，且保护本次构建版本；清理失败只打告警日志，不阻断打包结果）。
 
 ```
 （mac 打包机）dist/package/
@@ -461,6 +461,7 @@ npm run upload:artifact -- --dir reports --check
 5. `build`：`npx electron-builder --mac`
 6. `notarize_dmgs`：就地对 `dist/*.dmg` 签名 → notarytool 提交 dmg 本体 → staple（有凭据才跑）
 7. `stage_assets`：收 dmg/zip/blockmap；dmg 保留中文名，zip/blockmap 转 ASCII
+8. `cleanup_old_artifacts`：保留最近 2 个版本（保护当前版本），清理更早旧包及衍生产物（非阻断）
 8. `push_git`：**push 分支与 tag**
 9. `publish_release`：`gh release create` + `upload --clobber`
 10. `write_deploy_manifest`：清单 url 改 GitHub 绝对地址，并按磁盘实际重算 sha512

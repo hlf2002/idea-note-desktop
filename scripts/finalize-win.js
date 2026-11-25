@@ -34,6 +34,7 @@ const {
   buildRelativeManifest,
   verifyDigests
 } = require('./release-manifest');
+const { cleanupOldArtifacts } = require('./cleanup-artifacts');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -232,10 +233,10 @@ function main() {
   // 附加：签名状态
   checkSignature(opts);
 
-  finish(opts);
+  finish(opts, expectVersion);
 }
 
-function finish(opts) {
+function finish(opts, expectVersion) {
   const nFail = results.filter((r) => r[0] === 'FAIL').length;
   const nSkip = results.filter((r) => r[0] === 'SKIP').length;
   const nPass = results.filter((r) => r[0] === 'PASS').length;
@@ -245,6 +246,15 @@ function finish(opts) {
   if (opts.strict && nSkip > 0) {
     console.error('[finalize-win] --strict：存在 SKIP，按发布门禁视为失败');
     process.exit(3);
+  }
+  try {
+    cleanupOldArtifacts([opts.dist, opts.out], {
+      keepCount: 2,
+      protectVersions: expectVersion ? [expectVersion] : []
+    });
+  } catch (e) {
+    console.warn('[cleanup][WARN] 清理历史产物异常（已忽略，不影响本次打包结果）: ' +
+      (e && e.message ? e.message : e));
   }
   console.log('[finalize-win] 产物目录 ' + path.relative(ROOT, opts.out) + '/ 可直接投放');
 }

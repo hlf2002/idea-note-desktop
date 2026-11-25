@@ -242,6 +242,13 @@ verify_feed() {
   log "线上清单已是 v$VERSION（$FEED_BASE）"
 }
 
+cleanup_old_artifacts() {
+  log "清理历史产物（保留最近 2 个版本）"
+  if ! node scripts/cleanup-artifacts.js --dir dist --dir "$OUT_DIR" --keep 2 --protect "$VERSION"; then
+    printf '\033[33m!\033[0m 历史产物清理失败（已忽略，不影响本次打包结果）\n' >&2
+  fi
+}
+
 read_config
 preflight
 resolve_version
@@ -253,6 +260,7 @@ case "$MODE" in
     notarize_dmgs
     stage_assets
     write_package_manifest
+    cleanup_old_artifacts
     cat <<EOF
 
 打包完成 ${PRODUCT_NAME} v${VERSION}（未提交、未上传）
@@ -279,6 +287,7 @@ EOF
     verify_assets
     deploy_manifest
     verify_feed
+    cleanup_old_artifacts
     cat <<EOF
 
 发布完成 ${PRODUCT_NAME} v${VERSION}
