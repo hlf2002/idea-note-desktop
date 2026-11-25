@@ -1943,8 +1943,35 @@
     }
   }
 
+  // ---------- 无边框窗口（Windows/Linux）：右上角自绘三按钮 ----------
+  function initWindowControls() {
+    const isWin = !!(window.ideaNote && window.ideaNote.platform === 'win32');
+    if (!isWin) return;
+    document.body.classList.add('platform-win');
+    const box = $('#win-controls');
+    if (!box) return;
+    box.classList.remove('hidden');
+    const ctl = window.ideaNote.windowControls || {};
+    const min = $('#win-minimize');
+    const maxBtn = $('#win-maximize');
+    const close = $('#win-close');
+    if (min) min.addEventListener('click', () => { if (ctl.minimize) ctl.minimize(); });
+    if (maxBtn) maxBtn.addEventListener('click', () => { if (ctl.toggleMaximize) ctl.toggleMaximize(); });
+    if (close) close.addEventListener('click', () => { if (ctl.close) ctl.close(); });
+    const icoMax = box.querySelector('.ico-max');
+    const icoRestore = box.querySelector('.ico-restore');
+    const applyMaximized = (maximized) => {
+      if (icoMax) icoMax.classList.toggle('hidden', maximized);
+      if (icoRestore) icoRestore.classList.toggle('hidden', !maximized);
+      if (maxBtn) maxBtn.setAttribute('data-tip', maximized ? '还原' : '最大化');
+      document.body.classList.toggle('win-maximized', !!maximized);
+    };
+    if (ctl.onMaximized) ctl.onMaximized(applyMaximized);
+  }
+
   // ---------- 启动 ----------
   async function init() {
+    initWindowControls();
     bindEvents();
     initUpdaterUi();
     await refreshMediaIndex(); // 本地图片映射：决定卡片能否显示本机缩略图

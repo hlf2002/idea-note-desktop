@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, globalShortcut, shell, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, globalShortcut, shell, nativeImage, screen, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { initApp } = require('./app-core');
@@ -119,7 +119,7 @@ function migrateLegacyDataDir() {
 
 function createWindow() {
   const state = loadWindowState() || {};
-  mainWindow = new BrowserWindow({
+  const winOptions = {
     width: state.width || 1040,
     height: state.height || 720,
     minWidth: MIN_W,
@@ -128,20 +128,33 @@ function createWindow() {
     backgroundColor: '#f4e9d3',
     show: false,
     icon: APP_ICON(),
-    // 无边框窗口：隐藏原生标题栏，保留 macOS 红黄绿交通灯按钮
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 14 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
     }
-  });
+  };
+  if (process.platform === 'darwin') {
+    // macOS：隐藏原生标题栏，保留红黄绿交通灯按钮
+    winOptions.titleBarStyle = 'hiddenInset';
+    winOptions.trafficLightPosition = { x: 16, y: 14 };
+  } else {
+    // Windows/Linux：完全无边框（没有系统标题栏/菜单条），右上角自绘三按钮
+    winOptions.frame = false;
+  }
+  mainWindow = new BrowserWindow(winOptions);
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    pushMaximizedState();
+  });
+
+  // 最大化/还原状态推给渲染层，用于切换右上角按钮图标
+  mainWindow.on('maximize', pushMaximizedState);
+  mainWindow.on('unmaximize', pushMaximizedState);
 
   // 点击关闭按钮 -> 隐藏到托盘（保持后台快速记录能力）；隐藏/退出时保存窗口宽高
   mainWindow.on('close', (e) => {
@@ -198,6 +211,27 @@ function toggleWindow() {
   }
 }
 
+// ---- 无边框窗口（Windows/Linux）：右上角自绘三按钮 ----
+function pushMaximizedState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('window:maximized', mainWindow.isMaximized());
+}
+
+function registerWindowControls() {
+  ipcMain.on('window:minimize', () => {
+    if (mainWindow) mainWindow.minimize();
+  });
+  ipcMain.on('window:toggle-maximize', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+  });
+  // 关闭走 close 事件 → 沿用「隐藏到托盘、不退出」的既有语义
+  ipcMain.on('window:close', () => {
+    if (mainWindow) mainWindow.close();
+  });
+}
+
 function focusInput() {
   if (mainWindow && mainWindow.webContents) {
     mainWindow.webContents.send('app:focus-input');
@@ -221,6 +255,8 @@ function registerGlobalShortcut() {
 // ---- 应用生命周期 ----
 app.whenReady().then(async () => {
   migrateLegacyDataDir();
+  // Windows/Linux：去掉系统菜单条（File/Edit/…）；macOS 保留默认菜单（Cmd+C/V/Q 依赖它）
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
   // macOS Dock 图标（开发/运行期即替换为产品图标）
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(APP_ICON());
@@ -238,6 +274,7 @@ app.whenReady().then(async () => {
   }
   createTray();
   registerGlobalShortcut();
+  registerWindowControls();
 
   // 自动化升级：启动后自动检查、后台下载、就绪后提示重启安装（打包版生效）
   initUpdater({

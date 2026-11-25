@@ -236,6 +236,25 @@ app.whenReady().then(async () => {
       out.sidebarTagCount = document.querySelectorAll('.tag-item').length;
       out.memoCount = document.getElementById('stat-memos').textContent;
 
+      // 无边框窗口三按钮（Windows 自绘；macOS 隐藏、走原生红黄绿）
+      const wc = document.getElementById('win-controls');
+      out.winControlsExists = !!wc;
+      out.winControlsVisible = !!(wc && !wc.classList.contains('hidden') && getComputedStyle(wc).display !== 'none');
+      out.winCtlCount = wc ? wc.querySelectorAll('.win-ctl').length : 0;
+      out.platformWinClass = document.body.classList.contains('platform-win');
+      const firstCtl = wc ? wc.querySelector('.win-ctl') : null;
+      if (wc) out.winCtlRightGap = Math.round(window.innerWidth - wc.getBoundingClientRect().right);
+      if (firstCtl) {
+        const rect = firstCtl.getBoundingClientRect();
+        const st = getComputedStyle(firstCtl);
+        out.winCtlSize = Math.round(rect.width) + 'x' + Math.round(rect.height);
+        out.winCtlRegion = st.getPropertyValue('-webkit-app-region') || st.getPropertyValue('app-region') || '';
+        out.winCtlIcons = Array.prototype.map.call(
+          wc.querySelectorAll('.win-ctl svg'),
+          (s) => (s.classList.contains('hidden') ? 'hidden:' : '') + (s.classList.contains('ico-max') ? 'max' : s.classList.contains('ico-restore') ? 'restore' : 'plain')
+        ).join('|');
+      }
+
       // 图片渲染：mock 的 image_url 是假七牛域名（必然加载失败）→ 应降级为占位且保留原地址
       out.hasLightbox = !!document.getElementById('image-lightbox');
       out.imgCount = document.querySelectorAll('.memo-image-thumb').length;
@@ -490,6 +509,12 @@ app.whenReady().then(async () => {
 
     const pass =
       result.loginHidden && result.appVisible &&
+      result.winControlsExists === true && result.winCtlCount === 3 &&
+      result.winCtlRegion === 'no-drag' &&
+      (result.platformWinClass === true
+        ? (result.winControlsVisible === true && /^36x30$/.test(result.winCtlSize || '')
+           && typeof result.winCtlRightGap === 'number' && result.winCtlRightGap >= 0 && result.winCtlRightGap <= 60)
+        : result.winControlsVisible === false) &&
       result.userName === '测试用户' &&
       result.cardCount === 2 &&
       result.sidebarTagCount === 2 &&
