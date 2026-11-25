@@ -151,7 +151,7 @@ function withScheme(host, fallback) {
  * 解析生效配置：环境变量 > .release.config.json > 默认值。
  * 返回 from 记录每项的实际来源，便于排障时确认「到底读到了哪份配置」。
  */
-function resolveConfig({ env = process.env, config = readConfigFile(), requireCredentials = true } = {}) {
+function resolveConfig({ env = process.env, config = readConfigFile(env.QINIU_CONFIG_FILE), requireCredentials = true } = {}) {
   const fileQiniu = (config && config.qiniu) || {};
   const pick = (envKey, fileKey, fallback) => {
     const envValue = env[envKey];

@@ -24,6 +24,10 @@ const CFG = {
   publicBase: ''
 };
 
+// main() 会读仓库根的 .release.config.json（打包机上真有这个文件时会把测试带偏）；
+// 所有走 main() 的用例都指向一个不存在的路径，保证用例只受 env 控制。
+const MISSING_CONFIG_FILE = path.join(os.tmpdir(), 'no-such-qiniu-config.json');
+
 function tempDir(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qiniu-upload-'));
   for (const [name, content] of Object.entries(files)) {
@@ -492,7 +496,8 @@ test('main: 安装包先传、清单最后传，之后才修 MIME 并刷 CDN', a
     QINIU_SECRET_KEY: CFG.secretKey,
     QINIU_BUCKET: CFG.bucket,
     QINIU_PREFIX: CFG.prefix,
-    QINIU_PUBLIC_BASE: 'https://cdn.example.com'
+    QINIU_PUBLIC_BASE: 'https://cdn.example.com',
+    QINIU_CONFIG_FILE: MISSING_CONFIG_FILE
   });
   globalThis.fetch = fetchImpl;
   try {
@@ -552,7 +557,8 @@ test('main: --no-cdn 时不发 chgm / refresh', async () => {
   const saved = { ...process.env };
   Object.assign(process.env, {
     QINIU_ACCESS_KEY: CFG.accessKey, QINIU_SECRET_KEY: CFG.secretKey,
-    QINIU_BUCKET: CFG.bucket, QINIU_PREFIX: CFG.prefix
+    QINIU_BUCKET: CFG.bucket, QINIU_PREFIX: CFG.prefix,
+    QINIU_CONFIG_FILE: MISSING_CONFIG_FILE
   });
   try {
     assert.equal(await qiniu.main(['--dir', dir, '--no-cdn']), 0);
@@ -583,7 +589,8 @@ test('main: 清单 sha512 与产物不符时直接失败，且一个对象都不
   };
   const saved = { ...process.env };
   Object.assign(process.env, {
-    QINIU_ACCESS_KEY: CFG.accessKey, QINIU_SECRET_KEY: CFG.secretKey, QINIU_BUCKET: CFG.bucket
+    QINIU_ACCESS_KEY: CFG.accessKey, QINIU_SECRET_KEY: CFG.secretKey, QINIU_BUCKET: CFG.bucket,
+    QINIU_CONFIG_FILE: MISSING_CONFIG_FILE
   });
   try {
     await assert.rejects(() => qiniu.main(['--dir', dir]), /sha512 与清单不一致/);
