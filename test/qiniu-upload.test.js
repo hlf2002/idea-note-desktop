@@ -501,7 +501,7 @@ test('main: 安装包先传、清单最后传，之后才修 MIME 并刷 CDN', a
   });
   globalThis.fetch = fetchImpl;
   try {
-    const code = await qiniu.main(['--dir', dir]);
+    const code = await qiniu.main(['--dir', dir, '--with-manifest']);
     assert.equal(code, 0);
 
     const uploads = calls.filter((c) => c.kind === 'upload').map((c) => c.key);
@@ -516,6 +516,56 @@ test('main: 安装包先传、清单最后传，之后才修 MIME 并刷 CDN', a
     const refreshed = calls[refreshAt].body.urls;
     assert.equal(refreshed.length, 2);
     assert.ok(refreshed.some((u) => u.includes('%E7%81%B5%E6%84%9F%E7%AC%94%E8%AE%B0')), '中文 dmg 的刷新 URL 必须编码');
+  } finally {
+    globalThis.fetch = realFetch;
+    process.env = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('main: 默认不上传 latest*.yml（自动升级未开启），只传安装包', async () => {
+  const dmg = 'dmg-bytes';
+  const manifest = [
+    'version: 1.2.4',
+    'files:',
+    '  - url: idea-note-1.2.4-arm64.dmg',
+    `    sha512: ${crypto.createHash('sha512').update(dmg).digest('base64')}`,
+    `    size: ${Buffer.byteLength(dmg)}`,
+    'path: idea-note-1.2.4-arm64.dmg'
+  ].join('\n');
+  const dir = tempDir({ 'idea-note-1.2.4-arm64.dmg': dmg, 'latest-mac.yml': manifest });
+
+  const uploads = [];
+  const chgmCalls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    if (url === 'https://upload.qiniup.com/') {
+      const key = init.body.get('key');
+      uploads.push(key);
+      return response(200, { key, hash: 'F' });
+    }
+    if (url.startsWith('https://rs.qiniu.com/stat/')) {
+      const entry = url.split('/stat/')[1];
+      const decoded = Buffer.from(entry.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+      const key = decoded.slice(decoded.indexOf(':') + 1);
+      const name = key.replace(/^autoupdates\//, '');
+      return response(200, { fsize: fs.statSync(path.join(dir, name)).size });
+    }
+    if (url.includes('/chgm/')) { chgmCalls.push(url); return response(200, '{}'); }
+    if (url.includes('/v2/tune/refresh')) return response(200, '{}');
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+  const saved = { ...process.env };
+  Object.assign(process.env, {
+    QINIU_ACCESS_KEY: CFG.accessKey, QINIU_SECRET_KEY: CFG.secretKey,
+    QINIU_BUCKET: CFG.bucket, QINIU_PREFIX: CFG.prefix,
+    QINIU_PUBLIC_BASE: 'https://cdn.example.com',
+    QINIU_CONFIG_FILE: MISSING_CONFIG_FILE
+  });
+  try {
+    assert.equal(await qiniu.main(['--dir', dir]), 0);
+    assert.deepEqual(uploads, ['autoupdates/idea-note-1.2.4-arm64.dmg'], '默认只传安装包，latest*.yml 保持远端旧值');
+    assert.equal(chgmCalls.length, 0, '清单没上传就不该去改它的 Content-Type');
   } finally {
     globalThis.fetch = realFetch;
     process.env = saved;

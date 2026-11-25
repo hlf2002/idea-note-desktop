@@ -41,7 +41,7 @@
 
 - **跳板机纯触发、零 Node、零产物落盘**：只做参数解析 + SSH 调度 + 读退出码，只需 `bash/git/ssh`，不需要 Node、`shasum`、`node_modules`、七牛凭据。
 - **校验在打包机**：mac 走 `release.sh` 内的 `refresh` + `verify`（base64 sha512 权威摘要）；win 走 `finalize-win.js` 收尾三断言（`latest.yml` 存在 + `files[]` 逐条 sha512/size 配对）。跳板机不做任何校验。
-- **上传在打包机**：`MODE=publish` 时打包机本地追加 `node scripts/qiniu-upload.js --dir dist/package[-win]`，凭据读打包机本地的 `.release.config.json`（qiniu 段）或 `QINIU_*` 环境变量。
+- **上传在打包机**：`MODE=publish` 时打包机本地追加 `node scripts/qiniu-upload.js --dir dist/package[-win]`（默认**不带** `--with-manifest`，只传安装包、不动 `latest*.yml`；发自动升级才用 `MODE=publish-manifest`），凭据读打包机本地的 `.release.config.json`（qiniu 段）或 `QINIU_*` 环境变量。
 - **打包机本地状态不可覆盖**：打包机的 `.env`（公证凭据）、`.release.config.json`（七牛凭据）、`node_modules`、`dist` 都是不入库的本地状态；检出守卫只按 HEAD 归一生成物，绝不覆盖源码或这些未跟踪文件。
 
 ---
@@ -108,7 +108,7 @@ D:\work\sign\
 
 - 单平台失败**不影响**另一平台，最终按汇总表决定退出码。
 - 打包、校验、上传都在**打包机**上执行，跳板机只下发命令、读退出码，不回收产物。
-- 上传在打包机打包命令尾部，仅 `MODE=publish`（或 `UPLOAD=1`）追加：`node scripts/qiniu-upload.js --dir dist/package[-win]`。
+- 上传在打包机打包命令尾部，仅 `MODE=publish` / `MODE=publish-manifest`（或 `UPLOAD=1`）追加：`node scripts/qiniu-upload.js --dir dist/package[-win]`；只有 `publish-manifest` 会再带 `--with-manifest`（覆盖 `latest*.yml`）。
 
 ### 3.2 调用方式（与 `q_assistant_desktop_dev/deploy/deploy.sh` 一致）
 
@@ -120,7 +120,7 @@ PLATFORM=win MODE=local   REF=v1.2.4 bash deploy/deploy.sh
 | 参数 | 取值 | 说明 |
 |---|---|---|
 | `PLATFORM` / `platform` | `win`（默认）\| `mac` \| `all` | 与样本一致：默认只构建 Windows。双平台须显式传 `PLATFORM=all`（未显式指定时脚本会打印提示），双机串行、互不阻塞 |
-| `MODE` / `mode` | `local`（默认）\| `publish` \| `publish-feishu` | `local` 只构建（打包 + 校验）；`publish` 追加打包机上传七牛；`publish-feishu` 本项目未接飞书，传入即报错退出 2 |
+| `MODE` / `mode` | `local`（默认）\| `publish` \| `publish-manifest` \| `publish-feishu` | `local` 只构建（打包 + 校验）；`publish` 追加打包机上传七牛**安装包**（不带 `--with-manifest`，即不动 `latest*.yml`，客户端不触发自动升级）；`publish-manifest` 同上并额外上传 `latest*.yml`（**发自动升级才用**）；`publish-feishu` 本项目未接飞书，传入即报错退出 2 |
 | `REF` | `main` 或已存在的 tag | `TAG` / `tag` / `BRANCH` / `branch` / `GIT_BRANCH` 同样有效；缺省由调度机 HEAD 推断 |
 
 `MODE` 与上传开关的对应：`local` → `UPLOAD=0`，`publish` → `UPLOAD=1`；显式传 `UPLOAD=0|1` 可覆盖（兼容旧调用）。
@@ -147,7 +147,7 @@ deploy/deploy.sh mac publish                          # 裸平台 + 裸模式
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PLATFORM` | `win` | `win` / `mac` / `all`（双机串行） |
-| `MODE` | `local` | `local` 只构建（打包 + 校验）；`publish` 追加打包机上传七牛 |
+| `MODE` | `local` | `local` 只构建（打包 + 校验）；`publish` 追加打包机上传七牛安装包（不动 `latest*.yml`）；`publish-manifest` 额外上传 `latest*.yml`（发自动升级） |
 | `REF` / `TAG` / `BRANCH` / `GIT_BRANCH` | 由调度机 HEAD 推断 | 只接受 `main` 或**调度机本地已存在**的 tag |
 | `DRY_RUN` | `0` | `1` = 只打印远程命令，不连机 |
 | `UPLOAD` / `UPLOAD_QINIU` | 由 `MODE` 推导 | `1` 强制上传，`0` 强制不传（覆盖 `MODE`） |
@@ -255,6 +255,7 @@ SKIP_SIGNING=1 bash scripts/package-mac.sh  # 未签名包，同时清掉公证�
 | `--dry-run` | 只打印上传计划，不联网、不要求凭据 |
 | `--check` | 不写数据，只核对远端是否存在且大小一致 |
 | `--skip-unchanged` | 远端同名同大小则跳过上传 |
+| `--with-manifest` | **同时上传 `latest*.yml`**（开启客户端自动升级）。默认只传安装包/blockmap、不动清单——用户 2026-11-25 要求：只有明确「发自动升级」时才换清单 |
 | `--strict-public` | 公网 HEAD 失败即判失败（默认只告警） |
 | `--no-cdn` | 跳过清单 Content-Type 修正与 CDN 刷新 |
 | `--strict-cdn` | Content-Type / CDN 刷新失败即判失败（默认只告警） |
@@ -504,8 +505,9 @@ PLATFORM=all MODE=publish REF=v1.2.5 deploy/deploy.sh
 产物始终留在打包机 `dist/package[-win]`。补传/重传只需在打包机手动对产物目录跑一次上传（幂等，按 key 覆盖写）：
 
 ```bash
-node scripts/qiniu-upload.js --dir dist/package       # 在 mac 打包机上
-node scripts/qiniu-upload.js --dir dist/package-win   # 在 win 打包机上
+node scripts/qiniu-upload.js --dir dist/package       # 在 mac 打包机上（只传包，不动 latest*.yml）
+node scripts/qiniu-upload.js --dir dist/package-win   # 在 win 打包机上（同上）
+node scripts/qiniu-upload.js --dir dist/package --with-manifest   # 发自动升级：连 latest*.yml 一起覆盖
 ```
 
 ### 6.4 只重试上传

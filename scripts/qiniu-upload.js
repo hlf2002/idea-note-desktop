@@ -451,6 +451,7 @@ const HELP = `用法：node scripts/qiniu-upload.js --dir <产物目录> [选项
   --dry-run            只打印计划，不联网、不要求凭据
   --check              不写数据，只核对远端是否已有同名同大小对象
   --skip-unchanged     远端已存在且大小一致时跳过上传（省流量，默认仍覆盖写）
+  --with-manifest      同时上传 latest*.yml（开启客户端自动升级；默认只传安装包，不动清单）
   --strict-public      公网 HEAD 失败即判失败（默认仅告警，避免 CDN 缓存误伤发布）
   --no-cdn             跳过清单 Content-Type 修正与 CDN 刷新
   --strict-cdn         Content-Type / CDN 刷新失败即判失败（默认仅告警）
@@ -477,6 +478,7 @@ function parseArgs(argv) {
     else if (arg === '--dry-run') opts.dryRun = true;
     else if (arg === '--check') opts.check = true;
     else if (arg === '--skip-unchanged') opts.skipUnchanged = true;
+    else if (arg === '--with-manifest') opts.withManifest = true;
     else if (arg === '--strict-public') opts.strictPublic = true;
     else if (arg === '--no-cdn') opts.noCdn = true;
     else if (arg === '--strict-cdn') opts.strictCdn = true;
@@ -501,23 +503,30 @@ async function main(argv) {
   if (opts.prefix) cfg.prefix = normalizePrefix(opts.prefix);
 
   const plan = planUploads(dir);
+  // 默认只传安装包与 blockmap，不上传 latest*.yml —— 清单是「自动升级开关」，
+  // 由用户明确要求发自动升级时才用 --with-manifest 覆盖（2026-11-25 用户要求）。
+  if (!opts.withManifest && plan.payload.length === 0) {
+    throw new ConfigError(`目录 ${dir} 里只有清单没有安装包，拒绝上传（会造成清单指向 404）`);
+  }
+  const uploadNames = opts.withManifest ? plan.all : plan.payload;
   say(`\u001b[36m\u25b8\u001b[0m 七牛投放 · bucket=${cfg.bucket || '（未配置）'} · 前缀=${cfg.prefix || '（桶根）'} · 目标=${cfg.uploadHost}`);
-  say(`  凭据 ${mask(cfg.accessKey)}（${cfg.from.accessKey}）· 共 ${plan.all.length} 个对象 · 清单最后上传`);
+  say(`  凭据 ${mask(cfg.accessKey)}（${cfg.from.accessKey}）· 共 ${uploadNames.length} 个对象 · 清单${opts.withManifest ? '最后上传（自动升级已开启）' : '不上传（自动升级未开启）'}`);
 
   if (!opts.dryRun) verifyLocalDigests(dir, plan.manifests);
 
   if (opts.dryRun) {
-    for (const name of plan.all) {
+    for (const name of uploadNames) {
       const size = fs.statSync(path.join(dir, name)).size;
       const suffix = MANIFEST_PATTERN.test(name) ? '  （清单，最后上传）' : '';
       say(`  \u00b7 ${objectKey(cfg.prefix, name)}  ${formatSize(size)}${suffix}`);
     }
+    if (!opts.withManifest) say('  \u00b7 latest*.yml 本次不上传（自动升级未开启，需 --with-manifest）');
     say('dry-run 结束：未联网、未写入');
     return 0;
   }
 
   const failures = [];
-  for (const name of plan.all) {
+  for (const name of uploadNames) {
     const key = objectKey(cfg.prefix, name);
     const localSize = fs.statSync(path.join(dir, name)).size;
     try {
@@ -556,8 +565,10 @@ async function main(argv) {
 
   // ---- 发布生效的最后一步：清单 Content-Type + CDN 刷新
   // 上传成功不等于客户端能看到新版本：清单若被 CDN 缓存，客户端会继续拿旧版本。
+  // 清单没上传时（未开启自动升级）不去动它的 MIME，只刷新本次真正上传的包。
   if (!failures.length && !opts.check && !opts.noCdn) {
-    for (const name of plan.manifests) {
+    if (opts.withManifest) {
+      for (const name of plan.manifests) {
       const key = objectKey(cfg.prefix, name);
       try {
         await changeMime({ cfg, key });
@@ -566,9 +577,10 @@ async function main(argv) {
         if (opts.strictCdn) failures.push(`${key}：${e.message}`);
         else warn(`${key} 的 Content-Type 未修正（不影响 electron-updater）：${e.message}`);
       }
+      }
     }
 
-    const urls = plan.all.map((name) => publicUrlFor(cfg, objectKey(cfg.prefix, name))).filter(Boolean);
+    const urls = uploadNames.map((name) => publicUrlFor(cfg, objectKey(cfg.prefix, name))).filter(Boolean);
     if (urls.length === 0) {
       warn('未配置 QINIU_PUBLIC_BASE，跳过 CDN 刷新（没有公网域名可刷新）');
     } else {
@@ -589,8 +601,12 @@ async function main(argv) {
     return 1;
   }
 
-  say(`\u001b[36m\u25b8\u001b[0m 完成：${plan.all.length} 个对象已就位并校验（bucket=${cfg.bucket} 前缀=${cfg.prefix || '桶根'}）`);
-  say(`  更新源前缀 ${cfg.prefix || '（桶根）'} —— 客户端拉取 latest*.yml 时按清单内相对文件名取包`);
+  say(`\u001b[36m\u25b8\u001b[0m 完成：${uploadNames.length} 个对象已就位并校验（bucket=${cfg.bucket} 前缀=${cfg.prefix || '桶根'}）`);
+  if (opts.withManifest) {
+    say(`  更新源前缀 ${cfg.prefix || '（桶根）'} —— 客户端拉取 latest*.yml 时按清单内相对文件名取包`);
+  } else {
+    say('  latest*.yml 未更新：客户端自动升级不触发（用户要求只在明确“发自动升级”时才换清单）');
+  }
   return 0;
 }
 
