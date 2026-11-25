@@ -44,11 +44,12 @@ function response(status, body, headers = {}) {
 
 // ------------------------------------------------------------ 编码与签名
 
-test('urlSafeBase64: 去掉 padding 并把 + / 换成 - _', () => {
-  const encoded = qiniu.urlSafeBase64(Buffer.from([0xfb, 0xff, 0xbf]));
-  assert.match(encoded, /^[A-Za-z0-9_-]+$/);
-  assert.ok(!encoded.includes('='));
-  assert.equal(Buffer.from(encoded, 'base64').toString('hex'), 'fbffbf');
+test('urlSafeBase64: 保留 padding 并把 + / 换成 - _（七牛按带 padding 的值校验，实测去 padding 必 BadToken）', () => {
+  const encoded = qiniu.urlSafeBase64(Buffer.from([0xfb, 0xff]));
+  assert.match(encoded, /^[A-Za-z0-9_-]+=*$/);
+  assert.ok(encoded.endsWith('='), '尾部 padding 必须保留');
+  assert.equal(encoded, Buffer.from([0xfb, 0xff]).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'));
+  assert.equal(Buffer.from(encoded, 'base64').toString('hex'), 'fbff');
 });
 
 test('normalizePrefix: 去首斜杠、补尾斜杠，空值表示桶根', () => {
@@ -64,7 +65,6 @@ test('uploadToken: 三段结构，policy 含 scope/deadline/insertOnly=0，签�
   const token = qiniu.uploadToken({ ...CFG, key: 'autoupdates/latest-mac.yml', expiresIn: 600, now: 1700000000 });
   const [ak, sign, policyB64] = token.split(':');
   assert.equal(ak, CFG.accessKey);
-  assert.equal(policyB64.includes('='), false);
 
   const policy = JSON.parse(Buffer.from(policyB64, 'base64').toString('utf8'));
   assert.equal(policy.scope, 'ideanote-release:autoupdates/latest-mac.yml');
@@ -72,7 +72,7 @@ test('uploadToken: 三段结构，policy 含 scope/deadline/insertOnly=0，签�
   assert.equal(policy.insertOnly, 0, 'insertOnly=0 是可重复执行（覆盖写）的前提');
 
   const expected = crypto.createHmac('sha1', CFG.secretKey).update(policyB64).digest('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    .replace(/\+/g, '-').replace(/\//g, '_');
   assert.equal(sign, expected);
 });
 
@@ -89,7 +89,7 @@ test('managementToken: QBox 前缀，签名基于 path + 换行', () => {
 
   const sign = token.slice(`QBox ${CFG.accessKey}:`.length);
   const expected = crypto.createHmac('sha1', CFG.secretKey).update(`${requestPath}\n`).digest('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    .replace(/\+/g, '-').replace(/\//g, '_');
   assert.equal(sign, expected);
   assert.equal(Buffer.from(entry, 'base64').toString('utf8'), 'ideanote-release:autoupdates/latest-mac.yml');
 });
@@ -232,6 +232,30 @@ test('putObject: 成功时返回 key/size/hash', async () => {
   }
 });
 
+test('putObject: incorrect region 时自动改用七牛提示的域名重试一次', async () => {
+  const dir = tempDir({ 'a.dmg': 'x' });
+  const urls = [];
+  try {
+    const result = await qiniu.putObject({
+      cfg: { ...CFG },
+      dir,
+      name: 'a.dmg',
+      sleepImpl: async () => {},
+      fetchImpl: async (url) => {
+        urls.push(url);
+        if (url === 'https://upload.qiniup.com/') {
+          return response(400, { error: 'incorrect region, please use up-z2.qiniup.com, bucket is: ideanote-release' });
+        }
+        return response(200, { key: 'autoupdates/a.dmg', hash: 'Fok' });
+      }
+    });
+    assert.equal(result.hash, 'Fok');
+    assert.deepEqual(urls, ['https://upload.qiniup.com/', 'https://up-z2.qiniup.com/'], '换域名后应重试并成功');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('putObject: 401 属致命错误，不重试并给出凭据处置', async () => {
   const dir = tempDir({ 'a.dmg': 'x' });
   let calls = 0;
@@ -340,7 +364,7 @@ test('changeMime: 走 rs 域名 /chgm/<encEntry>/mime/<encMime>，签名只覆�
   // 复算签名：管理凭证只签 path，不签 body（此处 body 为空）
   const requestPath = new URL(calls[0].url).pathname;
   const expected = crypto.createHmac('sha1', CFG.secretKey).update(`${requestPath}\n`).digest('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    .replace(/\+/g, '-').replace(/\//g, '_');
   assert.equal(calls[0].init.headers.Authorization, `QBox ${CFG.accessKey}:${expected}`);
 });
 
@@ -372,7 +396,7 @@ test('refreshCdn: POST /v2/tune/refresh，body 是 urls 且不参与签名', asy
 
   // 关键：签名串只有 path + \n。官方 SDK 用空 body 生成凭证，把 JSON 算进去会被拒
   const expected = crypto.createHmac('sha1', CFG.secretKey).update('/v2/tune/refresh\n').digest('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    .replace(/\+/g, '-').replace(/\//g, '_');
   assert.equal(calls[0].init.headers.Authorization, `QBox ${CFG.accessKey}:${expected}`);
   assert.equal(result.requestId, 'req-1');
 });

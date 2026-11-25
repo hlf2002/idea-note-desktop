@@ -72,13 +72,18 @@ const die = (msg) => {
 
 // ---------------------------------------------------------------- 编码与签名
 
-/** 七牛要求的 URL 安全 Base64：+ / 换成 - _，且去掉尾部 padding */
+/**
+ * 七牛要求的 URL 安全 Base64：+ / 换成 - _，**保留尾部 padding**。
+ * 2026-11-25 真机实测：去掉 padding 后上传凭证、stat 管理凭证一律返回
+ * `401 {"error":"bad token","error_code":"BadToken"}`——七牛按带 padding 的
+ * urlsafe base64 校验签名；官方 SDK（qiniu-python 等）同样保留 padding。
+ * 以前这里是去 padding 的，导致真实链路从未上传成功过（单测只比对自算值，没连过七牛）。
+ */
 function urlSafeBase64(input) {
   return Buffer.from(input)
     .toString('base64')
     .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+    .replace(/\//g, '_');
 }
 
 /** 对象 key 的前缀归一：去首部斜杠、补尾部斜杠；空串表示桶根 */
@@ -271,6 +276,7 @@ function formatSize(bytes) {
 /** 把七牛的错误码翻译成能直接照做的处置建议 */
 function explainFailure(reason, status) {
   const text = String(reason || '');
+  if (/incorrect region/i.test(text)) return '上传区域不符：脚本会自动按七牛提示的域名重试一次；仍失败请核对 QINIU_UPLOAD_HOST';
   if (/no such bucket|631/i.test(text)) return 'bucket 不存在：核对 QINIU_BUCKET 拼写与账号归属';
   if (/file exists|614/i.test(text)) return '对象已存在且禁用了覆盖：确认 putPolicy.insertOnly=0（脚本已默认设置）';
   if (/bad token|invalid token|401|403/i.test(text)) {
@@ -290,6 +296,7 @@ async function putObject({ cfg, dir, name, fetchImpl = globalThis.fetch, sleepIm
   const buffer = fs.readFileSync(path.join(dir, name));
   let lastError;
   let lastStatus = 0;
+  let regionCorrected = false;
 
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     try {
@@ -311,8 +318,17 @@ async function putObject({ cfg, dir, name, fetchImpl = globalThis.fetch, sleepIm
       const reason = body.error || text.slice(0, 200) || `HTTP ${res.status}`;
       lastStatus = res.status;
       const error = new UploadError(`${key} 上传失败（HTTP ${res.status}）：${reason}`);
-      // 4xx 是凭据/桶/策略问题，重试只会得到同样结果
+      // 4xx 一般是凭据/桶/策略问题，重试只会得到同样结果；唯一例外是「上传区域不符」：
+      // 七牛会明文告知正确域名（如 up-z2.qiniup.com），换成它再试一次即可，别当致命错误。
       if (res.status >= 400 && res.status < 500) {
+        const regionHint = /incorrect region.*?please use\s+([a-z0-9.-]+)/i.exec(reason);
+        if (regionHint && !regionCorrected && cfg.uploadHost !== `https://${regionHint[1]}`) {
+          regionCorrected = true;
+          warn(`${key} 上传区域不符，改用七牛提示的域名 https://${regionHint[1]}（原 ${cfg.uploadHost}）重试`);
+          cfg.uploadHost = `https://${regionHint[1]}`;
+          attempt -= 1; // 换域名这一次不消耗重试次数
+          continue;
+        }
         error.fatal = true;
         error.hint = explainFailure(reason, res.status);
         throw error;
