@@ -358,6 +358,20 @@ function findUnsafeArgs(args) {
   return args.filter((a) => /[\s"]/.test(a));
 }
 
+function runPackageFilesCheck() {
+  const script = path.join(__dirname, 'check-package-files.js');
+  if (!fs.existsSync(script)) {
+    console.error('✗ 缺少 scripts/check-package-files.js（打包前白名单复核脚本），拒绝在未复核的情况下打包');
+    return false;
+  }
+  const r = spawnSync(process.execPath, [script], { stdio: 'inherit', cwd: ROOT });
+  if (r.error || r.status !== 0) {
+    console.error('✗ 打包前白名单复核未通过：修好 package.json 的 build.files（或根目录多出的 .js）再打包');
+    return false;
+  }
+  return true;
+}
+
 function runBuilder(builderArgs) {
   const cliJs = path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
   const args = ['--win'].concat(builderArgs);
@@ -508,6 +522,10 @@ function main() {
   if (resolution.mode === 'auto') {
     if (!prewarm(resolution, resolution.timestampServer)) process.exit(3);
   }
+
+  // 打包前白名单复核（用户要求：每次打包前都要复核别漏文件）。
+  // 2026-11-26 事故：新模块漏了 build.files → asar 缺文件、Windows 包启动 Cannot find module。
+  if (!runPackageFilesCheck()) process.exit(5);
 
   if (!runBuilder(resolution.builderArgs)) process.exit(1);
 

@@ -302,13 +302,17 @@ run_task() {
     if [ -n "${WIN_SIMPLYSIGN_PYTHON:-}" ]; then
       package_cmd="$package_cmd && set \"WIN_SIMPLYSIGN_PYTHON=$WIN_SIMPLYSIGN_PYTHON\""
     fi
+    # 打包前白名单复核（用户要求：每次打包前都要复核别漏文件）。
+    # 脚本不存在时跳过（兼容老 ref），存在则失败即中断打包。
+    package_cmd="$package_cmd && if exist \"scripts\\check-package-files.js\" node scripts\\check-package-files.js"
     package_cmd="$package_cmd && call npm run package:win"
     [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package-win${MANIFEST_FLAG}"
     [ "$MODE_FEISHU" = "1" ] && package_cmd="$package_cmd && node scripts/publish-ipa.js --platform win --dir dist/package-win"
   else
     checkout_cmd="$(remote_checkout mac "$proj")"
     # mac 校验在 release.sh 内（refresh + verify）；老 ref 无 package-mac.sh 时回退裸 npm run package
-    package_cmd="cd $proj && if [ -f scripts/package-mac.sh ]; then bash scripts/package-mac.sh; else npm run package; fi"
+    # 打包前白名单复核（用户要求：每次打包前都要复核别漏文件）；脚本不存在时跳过（兼容老 ref）
+    package_cmd="cd $proj && if [ -f scripts/check-package-files.js ]; then node scripts/check-package-files.js; fi && if [ -f scripts/package-mac.sh ]; then bash scripts/package-mac.sh; else npm run package; fi"
     [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package${MANIFEST_FLAG}"
     [ "$MODE_FEISHU" = "1" ] && package_cmd="$package_cmd && node scripts/publish-ipa.js --platform mac --dir dist/package"
   fi
