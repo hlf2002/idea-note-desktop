@@ -9,12 +9,13 @@
  */
 'use strict';
 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const http = require('http');
 const { initApp } = require('./app-core');
+const { registerWindowControls } = require('./window-controls');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'idea-note-smoke-'));
 app.setPath('userData', tmpDir); // 独立数据目录，不污染真实数据
@@ -207,6 +208,14 @@ app.whenReady().then(async () => {
     // 登录 IPC 必须在渲染层加载前注册（渲染层 init 会立刻调 auth:start）
     core.registerAuthIpc(() => win);
 
+    // 窗口操作 IPC（自绘三按钮 + 边缘拖拽缩放）：用与 main.js 同一模块，才能真实验证 setBounds 生效。
+    // 只在 Windows 专属模式下有意义（macOS 上自绘按钮/热区不显示），但注册本身无副作用。
+    registerWindowControls({
+      getWindow: () => win,
+      onResizeEnd: () => {},
+      minSize: { width: 760, height: 520 }
+    });
+
     win.webContents.on('console-message', (_e, level, message) => {
       console.log('[renderer]', level, message);
     });
@@ -237,23 +246,60 @@ app.whenReady().then(async () => {
       out.memoCount = document.getElementById('stat-memos').textContent;
 
       // 无边框窗口三按钮（Windows 自绘；macOS 隐藏、走原生红黄绿）
-      const wc = document.getElementById('win-controls');
-      out.winControlsExists = !!wc;
-      out.winControlsVisible = !!(wc && !wc.classList.contains('hidden') && getComputedStyle(wc).display !== 'none');
-      out.winCtlCount = wc ? wc.querySelectorAll('.win-ctl').length : 0;
+      // 关键约定：容器必须挂在 drag 容器（.main-header / #login-view）内部，
+      // body 顶层的 no-drag 会被上层拖拽区覆盖（Windows 非最大化时按钮点不动）
+      const wcs = Array.prototype.slice.call(document.querySelectorAll('.win-controls'));
+      out.winCtlBoxCount = wcs.length;
+      out.winCtlCounts = wcs.map((b) => b.querySelectorAll('.win-ctl').length);
+      out.winCtlInDragParent = wcs.map((b) => !!b.closest('.main-header, #login-view'));
+      out.winCtlSelfShown = wcs.map((b) => !b.classList.contains('hidden'));
       out.platformWinClass = document.body.classList.contains('platform-win');
-      const firstCtl = wc ? wc.querySelector('.win-ctl') : null;
-      if (wc) out.winCtlRightGap = Math.round(window.innerWidth - wc.getBoundingClientRect().right);
-      if (firstCtl) {
-        const rect = firstCtl.getBoundingClientRect();
-        const st = getComputedStyle(firstCtl);
-        out.winCtlSize = Math.round(rect.width) + 'x' + Math.round(rect.height);
-        out.winCtlRegion = st.getPropertyValue('-webkit-app-region') || st.getPropertyValue('app-region') || '';
-        out.winCtlIcons = Array.prototype.map.call(
-          wc.querySelectorAll('.win-ctl svg'),
+      out.winCtlBoxRects = wcs.map((b) => {
+        const r = b.getBoundingClientRect();
+        return [Math.round(r.width), Math.round(r.height)];
+      });
+      out.winCtlRectMax = out.winCtlBoxRects.reduce((m, r) => Math.max(m, r[0]), 0);
+      out.winCtlSizes = wcs.map((b) => {
+        const btn = b.querySelector('.win-ctl');
+        if (!btn) return '';
+        const rect = btn.getBoundingClientRect();
+        return Math.round(rect.width) + 'x' + Math.round(rect.height);
+      });
+      out.winCtlRegions = wcs.map((b) => {
+        const btn = b.querySelector('.win-ctl');
+        if (!btn) return '';
+        const st = getComputedStyle(btn);
+        return st.getPropertyValue('-webkit-app-region') || st.getPropertyValue('app-region') || '';
+      });
+      out.winCtlRightGap = wcs.length
+        ? Math.round(window.innerWidth - Math.max.apply(null, wcs.map((b) => b.getBoundingClientRect().right)))
+        : -1;
+      // 可见容器的按钮必须是 36x30；祖先隐藏（登录视图在 app 态下 hidden）测不出尺寸，跳过
+      out.winCtlSizeOk = wcs.every((b) => {
+        const btn = b.querySelector('.win-ctl');
+        if (!btn) return false;
+        const r = btn.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) return true;
+        return Math.round(r.width) === 36 && Math.round(r.height) === 30;
+      });
+      out.winCtlIcons = wcs.length
+        ? Array.prototype.map.call(
+          wcs[0].querySelectorAll('.win-ctl svg'),
           (s) => (s.classList.contains('hidden') ? 'hidden:' : '') + (s.classList.contains('ico-max') ? 'max' : s.classList.contains('ico-restore') ? 'restore' : 'plain')
-        ).join('|');
-      }
+        ).join('|')
+        : '';
+
+      // 边缘拖拽缩放热区（8 条：四边 + 四角）
+      const grips = document.getElementById('win-resize-grips');
+      out.gripsExists = !!grips;
+      out.gripCount = grips ? grips.querySelectorAll('.win-grip').length : 0;
+      out.gripEdges = grips ? Array.prototype.map.call(grips.querySelectorAll('.win-grip'), (g) => g.getAttribute('data-edge')).join('|') : '';
+      out.gripCursors = grips ? Array.prototype.map.call(grips.querySelectorAll('.win-grip'), (g) => getComputedStyle(g).cursor).join('|') : '';
+      out.gripRegion = grips && grips.querySelector('.win-grip')
+        ? (getComputedStyle(grips.querySelector('.win-grip')).getPropertyValue('-webkit-app-region') || '') : '';
+      out.gripContainerPE = grips ? getComputedStyle(grips).pointerEvents : '';
+      out.gripDisplay = grips ? getComputedStyle(grips).display : '';
+      out.winCtlModeText = !!(window.ideaNote.windowControls && window.ideaNote.windowControls.resizeStart) ? 'resize-api' : 'none';
 
       // 图片渲染：mock 的 image_url 是假七牛域名（必然加载失败）→ 应降级为占位且保留原地址
       out.hasLightbox = !!document.getElementById('image-lightbox');
@@ -367,6 +413,54 @@ app.whenReady().then(async () => {
     win.show();
     win.focus();
     await new Promise((r) => setTimeout(r, 500));
+
+    // ---- 边缘拖拽缩放（Windows 专属交互；force 模式在 macOS 上验证 pointer → IPC → setBounds 全链路）----
+    let resizeResult = { skipped: true };
+    if (process.env.IDEA_NOTE_FORCE_WIN_CONTROLS === '1') {
+      const resizeIpc = [];
+      ipcMain.on('window:resize-start', (_e, p) => resizeIpc.push(['start', p]));
+      ipcMain.on('window:resize-move', (_e, p) => resizeIpc.push(['move', p]));
+      ipcMain.on('window:resize-end', () => resizeIpc.push(['end']));
+      const startSize = win.getSize();
+      const fsResize = await win.webContents.executeJavaScript(`(async () => {
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        const out = {};
+        try {
+          const grip = document.querySelector('.win-grip[data-edge="right"]');
+          out.gripFound = !!grip;
+          if (!grip) return out;
+          const sx = Math.round(window.screenX + window.outerWidth - 4);
+          const sy = Math.round(window.screenY + 300);
+          out.before = [window.screenX, window.screenY, window.outerWidth, window.outerHeight];
+          out.seen = [];
+          ['pointerdown', 'pointermove', 'pointerup'].forEach((t) => {
+            document.addEventListener(t, (ev) => out.seen.push(t + ':' + ((ev.target && (ev.target.className || ev.target.nodeName)) || '?')), true);
+          });
+          grip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, isPrimary: true, screenX: sx, screenY: sy }));
+          await wait(50);
+          document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, isPrimary: true, screenX: sx + 60, screenY: sy }));
+          await wait(80);
+          document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, isPrimary: true, screenX: sx + 60, screenY: sy }));
+          await wait(80);
+          out.after = [window.screenX, window.screenY, window.outerWidth, window.outerHeight];
+        } catch (e) { out.err = String((e && e.stack) || e); }
+        return out;
+      })()`);
+      await new Promise((r) => setTimeout(r, 250));
+      const endSize = win.getSize();
+      resizeResult = {
+        skipped: false,
+        gripFound: fsResize.gripFound,
+        err: fsResize.err || null,
+        ipc: resizeIpc,
+        rendererBefore: fsResize.before || null,
+        rendererAfter: fsResize.after || null,
+        startSize,
+        endSize,
+        grewRight: (endSize[0] - startSize[0]) >= 55 && endSize[1] === startSize[1]
+      };
+    }
+    console.log('SMOKE_RESIZE=' + JSON.stringify(resizeResult));
 
     // 标签联想（窗口显示后 selection/focus 才正常，隐藏窗口 addRange 不生效）：
     // 编辑卡片时内容末尾带标签 → 光标进入后下拉弹出；
@@ -509,12 +603,27 @@ app.whenReady().then(async () => {
 
     const pass =
       result.loginHidden && result.appVisible &&
-      result.winControlsExists === true && result.winCtlCount === 3 &&
-      result.winCtlRegion === 'no-drag' &&
+      result.winCtlBoxCount === 2 &&
+      JSON.stringify(result.winCtlCounts) === JSON.stringify([3, 3]) &&
+      JSON.stringify(result.winCtlInDragParent) === JSON.stringify([true, true]) &&
+      result.gripsExists === true && result.gripCount === 8 &&
+      result.gripEdges === 'top|bottom|left|right|top-left|top-right|bottom-left|bottom-right' &&
+      result.gripRegion === 'no-drag' &&
+      result.gripContainerPE === 'none' &&
+      result.winCtlModeText === 'resize-api' &&
+      (process.env.IDEA_NOTE_FORCE_WIN_CONTROLS === '1'
+        ? (resizeResult.skipped === false && resizeResult.grewRight === true)
+        : resizeResult.skipped === true) &&
       (result.platformWinClass === true
-        ? (result.winControlsVisible === true && /^36x30$/.test(result.winCtlSize || '')
-           && typeof result.winCtlRightGap === 'number' && result.winCtlRightGap >= 0 && result.winCtlRightGap <= 60)
-        : result.winControlsVisible === false) &&
+        ? (JSON.stringify(result.winCtlSelfShown) === JSON.stringify([true, true])
+           && result.winCtlRectMax > 0
+           && result.winCtlSizeOk === true
+           && JSON.stringify(result.winCtlRegions) === JSON.stringify(['no-drag', 'no-drag'])
+           && typeof result.winCtlRightGap === 'number' && result.winCtlRightGap >= 0 && result.winCtlRightGap <= 60
+           && result.gripDisplay === 'block')
+        : (JSON.stringify(result.winCtlSelfShown) === JSON.stringify([false, false])
+           && result.winCtlRectMax === 0
+           && result.gripDisplay === 'none')) &&
       result.userName === '测试用户' &&
       result.cardCount === 2 &&
       result.sidebarTagCount === 2 &&

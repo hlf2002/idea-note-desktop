@@ -7,11 +7,12 @@
  */
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, globalShortcut, shell, nativeImage, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, globalShortcut, shell, nativeImage, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { initApp } = require('./app-core');
 const { initUpdater } = require('./updater');
+const { registerWindowControls } = require('./window-controls');
 
 let mainWindow = null;
 let tray = null;
@@ -217,18 +218,13 @@ function pushMaximizedState() {
   mainWindow.webContents.send('window:maximized', mainWindow.isMaximized());
 }
 
-function registerWindowControls() {
-  ipcMain.on('window:minimize', () => {
-    if (mainWindow) mainWindow.minimize();
-  });
-  ipcMain.on('window:toggle-maximize', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMaximized()) mainWindow.unmaximize();
-    else mainWindow.maximize();
-  });
-  // 关闭走 close 事件 → 沿用「隐藏到托盘、不退出」的既有语义
-  ipcMain.on('window:close', () => {
-    if (mainWindow) mainWindow.close();
+// 窗口操作 IPC（自绘三按钮 + 边缘拖拽缩放）统一由 window-controls.js 注册：
+// 抽成模块是为了 smoke-test 在自建窗口上复用同一套逻辑（能验证 setBounds 真的生效）
+function setupWindowControls() {
+  registerWindowControls({
+    getWindow: () => mainWindow,
+    onResizeEnd: saveWindowState,
+    minSize: { width: MIN_W, height: MIN_H }
   });
 }
 
@@ -274,7 +270,7 @@ app.whenReady().then(async () => {
   }
   createTray();
   registerGlobalShortcut();
-  registerWindowControls();
+  setupWindowControls();
 
   // 自动化升级：启动后自动检查、后台下载、就绪后提示重启安装（打包版生效）
   initUpdater({

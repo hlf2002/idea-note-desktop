@@ -1944,34 +1944,90 @@
   }
 
   // ---------- 无边框窗口（Windows/Linux）：右上角自绘三按钮 ----------
+  // 注意：按钮容器挂在 .main-header / #login-view 内部（都是 drag 容器），no-drag 才是「drag 元素后代」，
+  // 系统命中测试才会尊重它；放 body 顶层会被上层拖拽区吞掉点击/hover（Windows 非最大化时表现为按钮点不动）。
   function initWindowControls() {
     const isWin = !!(window.ideaNote && window.ideaNote.platform === 'win32');
     if (!isWin) return;
     document.body.classList.add('platform-win');
-    const box = $('#win-controls');
-    if (!box) return;
-    box.classList.remove('hidden');
     const ctl = window.ideaNote.windowControls || {};
-    const min = $('#win-minimize');
-    const maxBtn = $('#win-maximize');
-    const close = $('#win-close');
-    if (min) min.addEventListener('click', () => { if (ctl.minimize) ctl.minimize(); });
-    if (maxBtn) maxBtn.addEventListener('click', () => { if (ctl.toggleMaximize) ctl.toggleMaximize(); });
-    if (close) close.addEventListener('click', () => { if (ctl.close) ctl.close(); });
-    const icoMax = box.querySelector('.ico-max');
-    const icoRestore = box.querySelector('.ico-restore');
+    const boxes = Array.prototype.slice.call(document.querySelectorAll('.win-controls'));
+    if (!boxes.length) return;
+
+    const icoMaxes = [];
+    const icoRestores = [];
+    const maxBtns = [];
+    boxes.forEach((box) => {
+      box.classList.remove('hidden');
+      const min = box.querySelector('.win-min');
+      const maxBtn = box.querySelector('.win-max');
+      const close = box.querySelector('.win-close');
+      if (min) min.addEventListener('click', () => { if (ctl.minimize) ctl.minimize(); });
+      if (maxBtn) maxBtn.addEventListener('click', () => { if (ctl.toggleMaximize) ctl.toggleMaximize(); });
+      if (close) close.addEventListener('click', () => { if (ctl.close) ctl.close(); });
+      icoMaxes.push(box.querySelector('.ico-max'));
+      icoRestores.push(box.querySelector('.ico-restore'));
+      maxBtns.push(maxBtn);
+    });
+
     const applyMaximized = (maximized) => {
-      if (icoMax) icoMax.classList.toggle('hidden', maximized);
-      if (icoRestore) icoRestore.classList.toggle('hidden', !maximized);
-      if (maxBtn) maxBtn.setAttribute('data-tip', maximized ? '还原' : '最大化');
+      icoMaxes.forEach((el) => el && el.classList.toggle('hidden', maximized));
+      icoRestores.forEach((el) => el && el.classList.toggle('hidden', !maximized));
+      maxBtns.forEach((el) => el && el.setAttribute('data-tip', maximized ? '还原' : '最大化'));
       document.body.classList.toggle('win-maximized', !!maximized);
     };
     if (ctl.onMaximized) ctl.onMaximized(applyMaximized);
   }
 
+  // ---------- Windows/Linux：边缘拖拽缩放 ----------
+  // 系统对无边框窗口只留内侧 5px 命中区（实际抓不住），这里用 8px 热区接管 pointer，
+  // 渲染层只上报屏幕坐标，尺寸换算在主进程（window-resize.js 纯函数）。
+  function initWindowResizeGrips() {
+    const isWin = !!(window.ideaNote && window.ideaNote.platform === 'win32');
+    if (!isWin) return;
+    const grips = $('#win-resize-grips');
+    const ctl = window.ideaNote.windowControls || {};
+    if (!grips || !ctl.resizeStart) return;
+
+    let activeEdge = null;
+    let lastPointer = null;
+
+    grips.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (document.body.classList.contains('win-maximized')) return;
+      const el = e.target && e.target.closest ? e.target.closest('.win-grip') : null;
+      const edge = el && el.getAttribute('data-edge');
+      if (!edge) return;
+      e.preventDefault();
+      activeEdge = edge;
+      lastPointer = { x: e.screenX, y: e.screenY };
+      try { el.setPointerCapture(e.pointerId); } catch (err) { /* 捕获失败仍可靠 document 级事件 */ }
+      ctl.resizeStart(edge, e.screenX, e.screenY);
+    });
+
+    document.addEventListener('pointermove', (e) => {
+      if (!activeEdge) return;
+      lastPointer = { x: e.screenX, y: e.screenY };
+      // Chromium 的 pointermove 已按帧合并，直接转发即可（不要再套 rAF：隐藏窗口下 rAF 被节流会拖慢响应）
+      ctl.resizeMove(lastPointer.x, lastPointer.y);
+    }, true);
+
+    const endResize = () => {
+      if (!activeEdge) return;
+      activeEdge = null;
+      lastPointer = null;
+      ctl.resizeEnd();
+    };
+    document.addEventListener('pointerup', endResize, true);
+    document.addEventListener('pointercancel', endResize, true);
+    // 兜底：窗口失焦（如 Alt+Tab）时收尾，避免主进程残留 resize 会话
+    window.addEventListener('blur', endResize);
+  }
+
   // ---------- 启动 ----------
   async function init() {
     initWindowControls();
+    initWindowResizeGrips();
     bindEvents();
     initUpdaterUi();
     await refreshMediaIndex(); // 本地图片映射：决定卡片能否显示本机缩略图

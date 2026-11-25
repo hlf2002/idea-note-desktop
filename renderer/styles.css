@@ -969,6 +969,9 @@ html, body {
 
 /* ===== 无边框窗口（Windows/Linux）：右上角自绘三按钮 ===== */
 /* 设计语言沿用应用本体：纸底透出的暖棕描边图标、hover 才浮出浅棕底，关闭按钮 hover 用主题橙棕 */
+/* 关键：容器必须挂在可拖拽容器（.main-header / #login-view）内部。Chromium 的拖拽区命中测试
+   按绘制顺序叠加，body 顶层的 no-drag 会被上层的 drag 区域覆盖 → 点击被系统当成标题栏吞掉
+   （表现为「没有 hover、很难点动」，且只在窗口非最大化时出现，因为最大化时拖拽区失效）。 */
 .win-controls {
   position: fixed;
   top: 16px;
@@ -1029,3 +1032,32 @@ html, body {
 
 /* 最大化时按钮贴边，贴合 Windows 原生习惯 */
 .platform-win.win-maximized .win-controls { top: 8px; right: 8px; }
+
+/* ===== 无边框窗口（Windows/Linux）：边缘拖拽缩放热区 ===== */
+/* Electron 33 的无边框窗口只在内侧留 5px 缩放命中区（Windows 的 NC 边框被去掉），实际抓不住；
+   这里叠 8px 热区（四边 + 16px 四角），按下后由主进程按屏幕坐标算新 bounds，渲染层不做尺寸换算。
+   热区不参与窗口拖拽；最大化时整体隐藏（最大化窗口本来不可缩放）。 */
+#win-resize-grips {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;          /* 高于三按钮容器（1200）；热区只在边缘，与按钮不相交 */
+  pointer-events: none;   /* 容器透传，仅 8 条热区接管鼠标事件 */
+  display: none;
+}
+.platform-win #win-resize-grips { display: block; }
+.platform-win.win-maximized #win-resize-grips { display: none; }
+
+.win-grip {
+  position: absolute;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  background: transparent;
+}
+.win-grip.grip-t  { top: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; }
+.win-grip.grip-b  { bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; }
+.win-grip.grip-l  { left: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.win-grip.grip-r  { right: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.win-grip.grip-tl { top: 0; left: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+.win-grip.grip-tr { top: 0; right: 0; width: 16px; height: 16px; cursor: nesw-resize; }
+.win-grip.grip-bl { bottom: 0; left: 0; width: 16px; height: 16px; cursor: nesw-resize; }
+.win-grip.grip-br { bottom: 0; right: 0; width: 16px; height: 16px; cursor: nwse-resize; }
