@@ -140,4 +140,4 @@ idea-note-desktop/
 
 ## License
 
-[MIT](LICENSE) © 2026 射手科技
+[MIT](LICENSE) © 2026 换呗科技
