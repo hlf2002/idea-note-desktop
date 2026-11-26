@@ -2,7 +2,21 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { signatureVerdict } = require('../scripts/finalize-win');
+const { signatureVerdict, parsePublisherNames } = require('../scripts/finalize-win');
+
+test('parsePublisherNames: 打包机实际产出（列表形式）', () => {
+  const yml = 'provider: generic\nurl: https://ideanote.7373.com.cn/autoupdates/\n'
+    + 'updaterCacheDirName: idea-note-local-updater\npublisherName:\n  - 射手科技（珠海）有限公司\n';
+  assert.deepEqual(parsePublisherNames(yml), ['射手科技（珠海）有限公司']);
+});
+
+test('parsePublisherNames: 单值形式 / 缺失 / 非字符串', () => {
+  assert.deepEqual(parsePublisherNames('publisherName: Acme Inc\nurl: x\n'), ['Acme Inc']);
+  assert.deepEqual(parsePublisherNames('provider: generic\nurl: x\n'), []);
+  assert.deepEqual(parsePublisherNames(null), []);
+  // 列表项后面的其它顶层键不能被当成 publisherName
+  assert.deepEqual(parsePublisherNames('publisherName:\n  - A\nurl: x\n  - B\n'), ['A']);
+});
 
 test('签名状态：PowerShell 输出枚举名 Valid', () => {
   assert.equal(signatureVerdict('Valid'), 'valid');

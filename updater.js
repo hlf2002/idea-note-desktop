@@ -102,6 +102,40 @@ function resolveAutoDownload(cfg) {
 }
 
 /**
+ * 纯函数：app-update.yml 里的 publisherName 是否编码损坏（含 U+FFFD）。
+ *
+ * 2026-11-26 Windows 更新失败根因：打包环节把证书 CN 从 GBK 读成 UTF-8 写入 YAML，
+ * 中文全部变成 U+FFFD；electron-updater 下载完成后拿它比对 Authenticode Subject 的
+ * CN，永远不可能匹配 → ERR_UPDATER_INVALID_SIGNATURE（用户看到「下载 100% 后提示更新失败」）。
+ * 打包侧已修（win-sign.js 显式注入 CN），这里只做存量清单的自救降级。
+ */
+function hasBrokenPublisherName(text) {
+  if (typeof text !== 'string') return false;
+  let inList = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const inline = /^\s*publisherName\s*:\s*(.+)$/.exec(raw);
+    if (inline) {
+      if (inline[1].includes('\uFFFD')) return true;
+      inList = false;
+      continue;
+    }
+    if (/^\s*publisherName\s*:\s*$/.test(raw)) {
+      inList = true;
+      continue;
+    }
+    if (!inList) continue;
+    const item = /^\s*-\s+(.+)$/.exec(raw);
+    if (item) {
+      if (item[1].includes('\uFFFD')) return true;
+      continue;
+    }
+    if (/^\s*$/.test(raw)) continue;
+    inList = false;
+  }
+  return false;
+}
+
+/**
  * 把升级组件抛出的原始错误归一化为可展示的短句。
  * 原始消息常含 URL、HTTP 状态、堆栈（用户看到就是「一串很长的错误代码」），只留给日志。
  * 纯函数，供单测与 IPC/事件共用。
@@ -125,6 +159,12 @@ function friendlyUpdateError(err) {
     return '网络不可用，无法连接更新服务器';
   }
   if (/ETIMEDOUT|ESOCKETTIMEDOUT|timeout|timed out/i.test(raw)) return '连接更新服务器超时';
+  // 签名主体校验失败（原始串形如 "New version X is not signed by the application owner:
+  // publisherNames: …, raw info: {…}"）。判定放在 sha512 之前，因为 raw info 里可能带
+  // 算法名等无关字段，先按签名归类更准。
+  if (/not signed by the application owner|ERR_UPDATER_INVALID_SIGNATURE|publisherNames/i.test(raw)) {
+    return '新版本签名校验未通过，请到官网手动下载安装最新版';
+  }
   if (/sha512|checksum|integrity/i.test(raw)) return '更新包校验失败，请稍后重试';
   if (/EPERM|EACCES|permission denied/i.test(raw)) return '没有权限写入更新文件，请检查安装目录权限';
   const cut = firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
@@ -250,6 +290,24 @@ function bindEvents() {
   });
 }
 
+/** 读取安装目录的 app-update.yml；若 publisherName 编码损坏则跳过证书主体比对 */
+function tryDisableBrokenPublisherCheck(updater) {
+  try {
+    const resPath = process.resourcesPath;
+    if (!resPath) return false;
+    const file = path.join(resPath, 'app-update.yml');
+    if (!fs.existsSync(file)) return false;
+    if (!hasBrokenPublisherName(fs.readFileSync(file, 'utf8'))) return false;
+    updater.verifyUpdateCodeSignature = async () => null;
+    console.warn('[updater] app-update.yml 的 publisherName 编码损坏（U+FFFD）：'
+      + '已跳过证书主体比对，仍校验 sha512 与 HTTPS 清单来源');
+    return true;
+  } catch (e) {
+    console.warn('[updater] 检查 app-update.yml publisherName 失败: ' + e.message);
+    return false;
+  }
+}
+
 /**
  * 初始化升级模块（main.js 在 whenReady 后调用）
  * @param {object} opts
@@ -292,6 +350,9 @@ function initUpdater(opts) {
   autoUpdater.autoInstallOnAppQuit = true; // 已下载但用户未点安装时，退出应用自动完成安装
   autoUpdater.logger = console;
 
+  // 存量坏清单自救（必须在 bindEvents 之前设置，下载前就要生效）
+  tryDisableBrokenPublisherCheck(autoUpdater);
+
   bindEvents();
   registerIpc();
   enabled = true;
@@ -322,5 +383,6 @@ module.exports = {
   loadUserUpdateConfig,
   normalizeFeed,
   resolveAutoDownload,
-  friendlyUpdateError
+  friendlyUpdateError,
+  hasBrokenPublisherName
 };

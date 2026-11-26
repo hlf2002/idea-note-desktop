@@ -15,7 +15,8 @@ const {
   loadUserUpdateConfig,
   normalizeFeed,
   resolveAutoDownload,
-  friendlyUpdateError
+  friendlyUpdateError,
+  hasBrokenPublisherName
 } = require('../updater');
 
 // ============ parseVersion ============
@@ -152,4 +153,26 @@ test('friendlyUpdateError: 未知错误取首行并截断，空值兜底', () =>
   assert.ok(msg.endsWith('…'));
   assert.strictEqual(friendlyUpdateError(null), '升级组件异常');
   assert.strictEqual(friendlyUpdateError(new Error('')), '升级组件异常');
+});
+
+test('friendlyUpdateError: 签名主体校验失败 → 引导手动下载，不透出 publisherNames 与原始 JSON', () => {
+  // 2026-11-26 实测原文（1.2.8 客户端点更新，下载 100% 后失败）
+  const raw = 'New version 1.2.9 is not signed by the application owner: publisherNames: '
+    + '射手科技（珠海）有限公司, raw info: {"SignerCertificate":{"Subject":"CN=射手科技（珠海）有限公司, O=…"},'
+    + '"Status":0,"Path":"C:\\Users\\x\\AppData\\Local\\idea-note-local-updater\\pending\\x.exe"}';
+  const msg = friendlyUpdateError(new Error(raw));
+  assert.strictEqual(msg, '新版本签名校验未通过，请到官网手动下载安装最新版');
+  assert.ok(!/publisherNames|SignerCertificate|C:\\Users|raw info/i.test(msg), '不得把证书/路径原文透给用户');
+});
+
+test('hasBrokenPublisherName: 识别打包环节把中文 CN 写成 U+FFFD 的坏清单', () => {
+  // 打包机实测字节：UTF-8 的 YAML 里 publisherName 全是 EF BF BD
+  assert.strictEqual(hasBrokenPublisherName('publisherName:\n  - \ufffd\ufffd\ufffd\ufffd公司\n'), true);
+  assert.strictEqual(hasBrokenPublisherName('publisherName: \ufffd公司\n'), true);
+  // 正确中文 / 英文 / 缺失 都不算损坏
+  assert.strictEqual(hasBrokenPublisherName('publisherName:\n  - 射手科技（珠海）有限公司\n'), false);
+  assert.strictEqual(hasBrokenPublisherName('publisherName: Acme Inc\n'), false);
+  assert.strictEqual(hasBrokenPublisherName('provider: generic\nurl: https://x/\n'), false);
+  assert.strictEqual(hasBrokenPublisherName(''), false);
+  assert.strictEqual(hasBrokenPublisherName(null), false);
 });

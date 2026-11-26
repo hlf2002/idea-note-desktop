@@ -161,6 +161,69 @@ function checkSignature(opts) {
   }
 }
 
+/**
+ * 纯函数：从 app-update.yml 文本取 publisherName 列表（缺失返回 []）。
+ * 只支持 electron-builder 产出的两种写法：`publisherName: xxx` 与列表形式。
+ */
+function parsePublisherNames(text) {
+  if (typeof text !== 'string') return [];
+  const out = [];
+  let inList = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const inline = /^\s*publisherName\s*:\s*(.+)$/.exec(raw);
+    if (inline) {
+      out.push(inline[1].trim());
+      inList = false;
+      continue;
+    }
+    if (/^\s*publisherName\s*:\s*$/.test(raw)) {
+      inList = true;
+      continue;
+    }
+    if (!inList) continue;
+    const item = /^\s*-\s+(.+)$/.exec(raw);
+    if (item) {
+      out.push(item[1].trim());
+      continue;
+    }
+    if (/^\s*$/.test(raw)) continue;
+    inList = false;
+  }
+  return out.filter((s) => s !== '');
+}
+
+/**
+ * 附加断言④：app-update.yml 的 publisherName 必须是「能跟证书 Subject CN 比对上」的值。
+ * electron-updater 在 Windows 下载完成后会拿它比 Authenticode Subject 的 CN，
+ * 含 U+FFFD 的坏编码必然比对失败（ERR_UPDATER_INVALID_SIGNATURE，用户侧表现为
+ * 「下载 100% 后提示更新失败」）。
+ */
+function checkPublisherName(opts) {
+  const yml = path.join(opts.dist, 'win-unpacked', 'resources', 'app-update.yml');
+  if (!fs.existsSync(yml)) {
+    skip('断言④ app-update.yml 不存在（' + path.relative(ROOT, yml) + '），无法校验 publisherName');
+    return;
+  }
+  let names;
+  try {
+    names = parsePublisherNames(fs.readFileSync(yml, 'utf8'));
+  } catch (e) {
+    fail('断言④ 读取 app-update.yml 失败：' + e.message);
+    return;
+  }
+  if (names.length === 0) {
+    skip('断言④ app-update.yml 未配置 publisherName：客户端会跳过签名主体校验（仍校验 sha512）');
+    return;
+  }
+  const broken = names.filter((n) => n.includes('\uFFFD'));
+  if (broken.length > 0) {
+    fail('断言④ app-update.yml 的 publisherName 编码损坏（含 U+FFFD）：' + JSON.stringify(broken)
+      + ' —— 证书 CN 是 UTF-8 中文时，客户端签名校验必然失败，Windows 自动更新会 100% 下载后报错');
+    return;
+  }
+  pass('断言④ app-update.yml publisherName 可用：' + names.join(' | '));
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -232,6 +295,9 @@ function main() {
   // 附加：签名状态
   checkSignature(opts);
 
+  // 附加：app-update.yml 的 publisherName 可用性（Windows 自动更新签名校验的前提）
+  checkPublisherName(opts);
+
   finish(opts);
 }
 
@@ -249,5 +315,5 @@ function finish(opts) {
   console.log('[finalize-win] 产物目录 ' + path.relative(ROOT, opts.out) + '/ 可直接投放');
 }
 
-module.exports = { peMachine, MACHINE_NAMES, signatureVerdict };
+module.exports = { peMachine, MACHINE_NAMES, signatureVerdict, parsePublisherNames };
 if (require.main === module) main();
