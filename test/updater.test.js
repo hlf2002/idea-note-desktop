@@ -14,7 +14,8 @@ const {
   compareVersions,
   loadUserUpdateConfig,
   normalizeFeed,
-  resolveAutoDownload
+  resolveAutoDownload,
+  friendlyUpdateError
 } = require('../updater');
 
 // ============ parseVersion ============
@@ -119,4 +120,36 @@ test('resolveAutoDownload: 默认开启，配置可关闭', () => {
   assert.strictEqual(resolveAutoDownload({}), true);
   assert.strictEqual(resolveAutoDownload({ autoDownload: false }), false);
   assert.strictEqual(resolveAutoDownload({ autoDownload: true }), true);
+});
+
+// ============ friendlyUpdateError（用户报「更新失败 toast 显示一长串错误代码」）============
+test('friendlyUpdateError: 清单缺失/404 归一化为短句，不泄露 URL 与堆栈', () => {
+  const e404 = new Error(
+    'Cannot find latest.yml in the latest release artifacts (https://ideanote.7373.com.cn/autoupdates/latest.yml):\n' +
+    'HttpError: 404 Not Found\n    at GenericProvider.getLatestVersion (/app/node_modules/builder-util-runtime/out/provider.js:1:1)\n' +
+    '    at async Updater.checkForUpdates (/app/node_modules/electron-updater/out/AppUpdater.js:1:1)'
+  );
+  const msg = friendlyUpdateError(e404);
+  assert.strictEqual(msg, '更新服务器暂未提供更新清单，请稍后再试');
+  assert.ok(!/http|https|\.yml|at async/i.test(msg), '不得把 URL / 堆栈透给用户');
+});
+
+test('friendlyUpdateError: 网络 DNS 与超时分别归类', () => {
+  assert.strictEqual(friendlyUpdateError(new Error('getaddrinfo ENOTFOUND ideanote.7373.com.cn')), '网络不可用，无法连接更新服务器');
+  assert.strictEqual(friendlyUpdateError(new Error('request to https://x timed out')), '连接更新服务器超时');
+});
+
+test('friendlyUpdateError: 5xx / 校验失败 / 权限分别归类', () => {
+  assert.strictEqual(friendlyUpdateError(new Error('HttpError: 503 Service Unavailable')), '更新服务暂时不可用，请稍后再试');
+  assert.strictEqual(friendlyUpdateError(new Error('sha512 checksum mismatch, expected x got y')), '更新包校验失败，请稍后重试');
+  assert.strictEqual(friendlyUpdateError(new Error('EACCES: permission denied, open app.zip')), '没有权限写入更新文件，请检查安装目录权限');
+});
+
+test('friendlyUpdateError: 未知错误取首行并截断，空值兜底', () => {
+  const long = 'E'.repeat(200) + '\nsecond line';
+  const msg = friendlyUpdateError(new Error(long));
+  assert.ok(msg.length <= 61, '未知错误最多 60 字符 + 省略号，实际 ' + msg.length);
+  assert.ok(msg.endsWith('…'));
+  assert.strictEqual(friendlyUpdateError(null), '升级组件异常');
+  assert.strictEqual(friendlyUpdateError(new Error('')), '升级组件异常');
 });

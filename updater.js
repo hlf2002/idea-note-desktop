@@ -101,6 +101,36 @@ function resolveAutoDownload(cfg) {
   return true;
 }
 
+/**
+ * 把升级组件抛出的原始错误归一化为可展示的短句。
+ * 原始消息常含 URL、HTTP 状态、堆栈（用户看到就是「一串很长的错误代码」），只留给日志。
+ * 纯函数，供单测与 IPC/事件共用。
+ */
+function friendlyUpdateError(err) {
+  const raw = String((err && (err.message || err.code)) || '').trim();
+  const firstLine = raw.split(/\r?\n/)[0] || '';
+  // 顺序重要：404 的原文里通常也带 latest.yml，先按「清单缺失」归类
+  if (/latest(?:-mac)?\.yml|Cannot find .*release artifacts|no (?:latest|update) (?:yaml|yml)/i.test(raw)) {
+    return '更新服务器暂未提供更新清单，请稍后再试';
+  }
+  // 5xx 要先于 404 判定：原文形如 "HttpError: 503 Service Unavailable" 不含 404，
+  // 但 "HttpError" 关键字不能单独当 404 依据
+  if (/\b5\d\d\b|Internal Server Error|Bad Gateway|Service Unavailable/i.test(raw)) {
+    return '更新服务暂时不可用，请稍后再试';
+  }
+  if (/HttpError[^\n]*\b404\b|status code 404|\b404\b/i.test(raw)) {
+    return '更新服务返回异常（HTTP 404），请稍后再试';
+  }
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo|ENETUNREACH|ECONNREFUSED|ECONNRESET/i.test(raw)) {
+    return '网络不可用，无法连接更新服务器';
+  }
+  if (/ETIMEDOUT|ESOCKETTIMEDOUT|timeout|timed out/i.test(raw)) return '连接更新服务器超时';
+  if (/sha512|checksum|integrity/i.test(raw)) return '更新包校验失败，请稍后重试';
+  if (/EPERM|EACCES|permission denied/i.test(raw)) return '没有权限写入更新文件，请检查安装目录权限';
+  const cut = firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
+  return cut || '升级组件异常';
+}
+
 // ============ 主进程装配 ============
 
 let autoUpdater = null;
@@ -152,7 +182,7 @@ function registerIpc() {
       return { ok: true };
     } catch (err) {
       lastCheckManual = false;
-      return { ok: false, message: (err && err.message) || '检查更新失败' };
+      return { ok: false, message: friendlyUpdateError(err) };
     }
   });
 
@@ -163,7 +193,7 @@ function registerIpc() {
       if (!state.downloading) await autoUpdater.downloadUpdate();
       return { ok: true };
     } catch (err) {
-      return { ok: false, message: (err && err.message) || '下载更新失败' };
+      return { ok: false, message: friendlyUpdateError(err) };
     }
   });
 
@@ -212,7 +242,9 @@ function bindEvents() {
     state.checking = false;
     state.downloading = false;
     state.error = err;
-    emit('error', { message: (err && err.message) || '升级组件异常' });
+    // 静默检查失败不打扰用户：事件照发（渲染层只复位状态），展示文案走友好化短句，
+    // 原始长串（URL/HTTP/堆栈）只进日志。用户主动操作的失败由 IPC 返回值提示。
+    emit('error', { message: friendlyUpdateError(err), manual: lastCheckManual });
     lastCheckManual = false;
     console.warn('[updater] 错误: ' + ((err && err.message) || err));
   });
@@ -289,5 +321,6 @@ module.exports = {
   compareVersions,
   loadUserUpdateConfig,
   normalizeFeed,
-  resolveAutoDownload
+  resolveAutoDownload,
+  friendlyUpdateError
 };

@@ -583,6 +583,16 @@ app.whenReady().then(async () => {
     const pageUrlPassedToCli = /^https:\/\/ideanote\.7373\.com\.cn\/notes\/smoke_abc123$/.test(lastMsg.pageUrl || '');
     console.log('SMOKE_PAGEURL=' + JSON.stringify({ sentCount: cliMessages.length, pageUrl: lastMsg.pageUrl || '', pageUrlPassedToCli }));
 
+    // 静默更新检查失败不应弹 toast（2026-11-26 用户报：Windows 冷启动弹「更新失败：<一长串错误码>」）
+    await win.webContents.executeJavaScript("document.getElementById('toast').classList.add('hidden'); true");
+    win.webContents.send('updater:event', { event: 'error', message: '更新服务器暂未提供更新清单，请稍后再试', manual: false });
+    await new Promise((r) => setTimeout(r, 300));
+    const silentErrorToast = await win.webContents.executeJavaScript(`(() => {
+      const t = document.getElementById('toast');
+      return { visible: !!t && !t.classList.contains('hidden'), text: t ? t.textContent : '' };
+    })()`);
+    console.log('SMOKE_UPDATER_SILENT=' + JSON.stringify(silentErrorToast));
+
     const image = await win.webContents.capturePage();
     fs.writeFileSync(path.join(__dirname, 'screenshot.png'), image.toPNG());
 
@@ -674,6 +684,8 @@ app.whenReady().then(async () => {
       pageUrlPassedToCli === true &&
       // @ 分享页删除联动：删除含 @ 笔记时 unpublish 收到对应 id
       unpublishCalls.includes(String(atResult.mentionsCreatedId || '')) &&
+      // 静默更新检查失败不弹 toast（2026-11-26 用户报 Windows 冷启动「更新失败 + 长错误码」）
+      silentErrorToast.visible === false &&
       !atResult.atErr;
 
     console.log('SMOKE_PASS=' + pass);

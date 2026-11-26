@@ -1016,12 +1016,13 @@
     } else if (ev === 'not-available') {
       if (payload.manual) showToast('已是最新版本');
     } else if (ev === 'error') {
+      // 静默检查（启动 10s 后 / 每 4 小时）失败不弹 toast：用户没主动操作，不该被打扰，
+      // 也不该看到升级组件那一串 URL/HTTP/堆栈。手动检查/下载的失败走 IPC 返回值提示。
       hideUpdateBar();
       downloadDismissed = false;
       checkUpdateState = 'idle';
       el.checkUpdateLabel.textContent = '检查更新';
       el.checkUpdateX.classList.add('hidden');
-      showToast('更新失败：' + (payload.message || '网络异常，请稍后再试'));
     }
   }
 
