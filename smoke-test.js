@@ -596,6 +596,54 @@ app.whenReady().then(async () => {
     const pageUrlPassedToCli = /^https:\/\/ideanote\.7373\.com\.cn\/notes\/smoke_abc123$/.test(lastMsg.pageUrl || '');
     console.log('SMOKE_PAGEURL=' + JSON.stringify({ sentCount: cliMessages.length, pageUrl: lastMsg.pageUrl || '', pageUrlPassedToCli }));
 
+    // @ 联想空态要带出失败原因：用户只看到「暂无联系人」时无法判断是打包问题还是 qz CLI 未登录。
+    // 直接对一份新的 AtSuggester 挂载验证 emptyText 选项（主输入框那次已缓存联系人，无法复现失败态）
+    const atEmptyHint = await win.webContents.executeJavaScript(`(async () => {
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+      const out = {};
+      const fake = document.createElement('div');
+      fake.contentEditable = 'true';
+      fake.textContent = '@';
+      document.body.appendChild(fake);
+      const composerLike = {
+        el: fake,
+        value: () => fake.textContent,
+        rawValue: () => fake.textContent,
+        caretOffset: () => fake.textContent.length,
+        replaceText: () => {},
+        focus: () => {},
+        clear: () => {}
+      };
+      try {
+        let attempts = 0;
+        const detach = window.AtSuggester.attach(composerLike, {
+          loadContacts: () => {
+            attempts++;
+            return Promise.resolve(attempts === 1 ? [] : [{ uid: 'u1', nickname: '张三', linkType: 2 }]);
+          },
+          emptyText: () => '暂无联系人（qz CLI 未登录）'
+        });
+        await wait(200);
+        const boxes = document.querySelectorAll('.tag-suggest.at-suggest');
+        const box = boxes.length ? boxes[boxes.length - 1] : null;
+        out.shown = !!(box && !box.classList.contains('hidden'));
+        out.text = box ? (box.querySelector('.tag-suggest-empty') || {}).textContent || '' : '';
+        // 空结果不缓存：越过 1.5s 冷却后再触发一次，必须重新拉取并渲染出联系人
+        await wait(1700);
+        fake.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait(400);
+        out.retryItems = box ? box.querySelectorAll('.tag-suggest-item').length : 0;
+        out.retryFirstName = box && box.querySelector('.tag-suggest-item') ? box.querySelector('.tag-suggest-item').textContent : null;
+        detach();
+      } catch (e) {
+        out.err = String((e && e.message) || e);
+      } finally {
+        if (fake.parentNode) fake.parentNode.removeChild(fake);
+      }
+      return out;
+    })()`);
+    console.log('SMOKE_AT_EMPTY_HINT=' + JSON.stringify(atEmptyHint));
+
     // 静默更新检查失败不应弹 toast（2026-11-26 用户报：Windows 冷启动弹「更新失败：<一长串错误码>」）
     await win.webContents.executeJavaScript("document.getElementById('toast').classList.add('hidden'); true");
     win.webContents.send('updater:event', { event: 'error', message: '更新服务器暂未提供更新清单，请稍后再试', manual: false });
@@ -700,6 +748,10 @@ app.whenReady().then(async () => {
       atResult.notifySentCount === 1 &&
       atResult.notifySentName === '测试联系人' &&
       pageUrlPassedToCli === true &&
+      // 空态提示带原因（避免只看到「暂无联系人」无法定位）+ 空结果不缓存（下次触发重试）
+      atEmptyHint.shown === true &&
+      /qz CLI 未登录/.test(atEmptyHint.text || '') &&
+      atEmptyHint.retryItems === 1 &&
       // @ 分享页删除联动：删除含 @ 笔记时 unpublish 收到对应 id
       unpublishCalls.includes(String(atResult.mentionsCreatedId || '')) &&
       // 静默更新检查失败不弹 toast（2026-11-26 用户报 Windows 冷启动「更新失败 + 长错误码」）

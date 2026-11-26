@@ -106,12 +106,19 @@
   function attach(composer, opts) {
     opts = opts || {};
     var loadContacts = opts.loadContacts || function () { return Promise.resolve([]); };
+    // 空列表提示：可为字符串或函数（函数用于把「为什么没有联系人」带出来，如 qz CLI 未登录）
+    var emptyText = opts.emptyText || '暂无联系人';
+    function emptyTextNow() {
+      return typeof emptyText === 'function' ? emptyText() : emptyText;
+    }
 
     var box = null;        // 浮层元素（fixed 定位，挂在 body，独立于编辑器 DOM，reflow 不破坏）
     var queryState = null; // 当前 { query, start }
     var activeIndex = 0;
-    var contacts = null;   // 已加载的联系人缓存（首次成功后缓存，避免每次输入都拉 IPC）
+    var contacts = null;   // 已加载的联系人缓存（只在拿到非空列表时缓存）
     var loading = false;
+    var lastAttemptAt = 0; // 上次拉取时间（空结果重试冷却用）
+    var RETRY_COOLDOWN_MS = 1500;
     var detached = false;
 
     function ensureBox() {
@@ -237,26 +244,31 @@
       if (detached || !queryState || queryState.start !== state.start) return; // 光标已移动，丢弃过期结果
       var list = limitContacts(filterContacts(contacts, state.query), MAX_ITEMS);
       if (list.length) open(list, state);
-      else open([], state, contacts && contacts.length ? '没有匹配的联系人' : '暂无联系人');
+      else open([], state, contacts && contacts.length ? '没有匹配的联系人' : emptyTextNow());
     }
 
     /** 打开前确保联系人已加载（首次异步拉取，成功后缓存） */
     function ensureContacts(state) {
       if (contacts) { renderWithContacts(state); return; }
       if (loading) return;
+      var now = Date.now();
+      // 空结果/失败不缓存：冷却 1.5s 内沿用上次结果，超过则重新拉取。
+      // 否则 qz CLI 一次抽风（未登录 / 超时 / 冷启动未就绪）会让整个会话永久显示「暂无联系人」。
+      if (now - lastAttemptAt < RETRY_COOLDOWN_MS) { renderWithContacts(state); return; }
+      lastAttemptAt = now;
       loading = true;
       Promise.resolve()
         .then(function () { return loadContacts(); })
         .then(function (list) {
           loading = false;
           if (!Array.isArray(list)) list = [];
-          contacts = list;
+          contacts = list.length ? list : null; // 空列表不缓存，下次触发重新拉取
           renderWithContacts(state);
         })
         .catch(function (err) {
           loading = false;
           if (detached || !queryState || queryState.start !== state.start) return;
-          open([], state, '联系人加载失败');
+          open([], state, '联系人加载失败' + (err && err.message ? '：' + err.message : ''));
         });
     }
 

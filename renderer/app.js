@@ -863,9 +863,7 @@
         getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
       });
       // @联系人联想：编辑卡片与顶部输入框行为一致（此前只挂了标签联想，编辑态无法 @ 人）
-      const detachAtSuggester = window.AtSuggester.attach(composer, {
-        loadContacts: () => window.ideaNote.mentions.contacts().then((r) => (r && r.ok ? r.contacts : []))
-      });
+      const detachAtSuggester = window.AtSuggester.attach(composer, makeAtSuggesterOptions());
       function detachSuggesters() {
         detachTagSuggester();
         detachAtSuggester();
@@ -1400,9 +1398,7 @@
       getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
     });
     // @联系人联想：输入 @ 或点击工具栏 @ 后弹出 Q助理联系人（数据来自本机 qz CLI）
-    window.AtSuggester.attach(state.composer, {
-      loadContacts: () => window.ideaNote.mentions.contacts().then((r) => (r && r.ok ? r.contacts : []))
-    });
+    window.AtSuggester.attach(state.composer, makeAtSuggesterOptions());
     el.composer.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !e.isComposing) {
         state.composer.clear();
@@ -1905,6 +1901,27 @@
       }
       lastFeedTop = top;
     }).observe(composerZone);
+  }
+
+  /**
+   * @ 联系人联想的公共配置（顶部输入框与编辑卡片共用）。
+   * 联系人拉取失败时把原因带回浮层（「暂无联系人（qz CLI 未登录）」），
+   * 别只显示「暂无联系人」——分不清是没装 qz CLI、没登录，还是打包问题。
+   */
+  function makeAtSuggesterOptions() {
+    let lastError = '';
+    return {
+      loadContacts: () => window.ideaNote.mentions.contacts().then((r) => {
+        if (r && r.ok && Array.isArray(r.contacts)) {
+          lastError = '';
+          return r.contacts;
+        }
+        lastError = (r && r.error) ? String(r.error) : 'qz CLI 不可用';
+        console.warn('[mentions] 联系人加载失败: ' + lastError);
+        return [];
+      }),
+      emptyText: () => (lastError ? '暂无联系人（' + lastError + '）' : '暂无联系人')
+    };
   }
 
   /**
