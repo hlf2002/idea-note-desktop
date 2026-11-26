@@ -859,9 +859,15 @@
       });
       composer.setValue(memo.content);
       // 标签联想：与顶部输入框同一套交互
-      const detachSuggester = window.TagSuggester.attach(composer, {
+      const detachTagSuggester = window.TagSuggester.attach(composer, {
         getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
       });
+      // @联系人联想：编辑卡片与顶部输入框行为一致（此前只挂了标签联想，编辑态无法 @ 人）
+      const detachAtSuggester = window.AtSuggester.attach(composer, makeAtSuggesterOptions());
+      function detachSuggesters() {
+        detachTagSuggester();
+        detachAtSuggester();
+      }
 
       async function saveEdit(val) {
         // 允许纯图片笔记：没文字但有图也能保存
@@ -872,15 +878,18 @@
         }
         try {
           const updated = await window.ideaNote.sync.update(memo.id, val || '', uploadedImageIds(editImages));
-          detachSuggester();
+          detachSuggesters();
           state.editingId = null;
           upsertLocal(updated);
+          // @ 提及通知：只在本次编辑新增了 @联系人时发（原稿已有的 @ 不重复打扰）
+          const added = atNamesIn(val).filter((n) => atNamesIn(memo.content).indexOf(n) === -1);
+          if (added.length) await notifyMentions(val, memo.id);
         } catch (err) {
           handleSyncError(err, '保存失败');
         }
       }
       function cancelEdit() {
-        detachSuggester();
+        detachSuggesters();
         state.editingId = null;
         renderList();
       }
@@ -891,7 +900,7 @@
       tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
       tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
       tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
-      tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => showToast('提及 · 敬请期待'));
+      tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => composer.insertText(' @'));
       tb.querySelector('[data-edit-tool="save"]').addEventListener('click', () => saveEdit(composer.value()));
       tb.querySelector('[data-edit-tool="cancel"]').addEventListener('click', cancelEdit);
       // Esc 取消（composer 只处理 Enter，这里兜底）
@@ -1016,12 +1025,13 @@
     } else if (ev === 'not-available') {
       if (payload.manual) showToast('已是最新版本');
     } else if (ev === 'error') {
+      // 静默检查（启动 10s 后 / 每 4 小时）失败不弹 toast：用户没主动操作，不该被打扰，
+      // 也不该看到升级组件那一串 URL/HTTP/堆栈。手动检查/下载的失败走 IPC 返回值提示。
       hideUpdateBar();
       downloadDismissed = false;
       checkUpdateState = 'idle';
       el.checkUpdateLabel.textContent = '检查更新';
       el.checkUpdateX.classList.add('hidden');
-      showToast('更新失败：' + (payload.message || '网络异常，请稍后再试'));
     }
   }
 
@@ -1388,9 +1398,7 @@
       getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
     });
     // @联系人联想：输入 @ 或点击工具栏 @ 后弹出 Q助理联系人（数据来自本机 qz CLI）
-    window.AtSuggester.attach(state.composer, {
-      loadContacts: () => window.ideaNote.mentions.contacts().then((r) => (r && r.ok ? r.contacts : []))
-    });
+    window.AtSuggester.attach(state.composer, makeAtSuggesterOptions());
     el.composer.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !e.isComposing) {
         state.composer.clear();
@@ -1895,6 +1903,66 @@
     }).observe(composerZone);
   }
 
+  /**
+   * @ 联系人联想的公共配置（顶部输入框与编辑卡片共用）。
+   * 联系人拉取失败时把原因带回浮层（「暂无联系人（qz CLI 未登录）」），
+   * 别只显示「暂无联系人」——分不清是没装 qz CLI、没登录，还是打包问题。
+   */
+  function makeAtSuggesterOptions() {
+    let lastError = '';
+    return {
+      loadContacts: () => window.ideaNote.mentions.contacts().then((r) => {
+        if (r && r.ok && Array.isArray(r.contacts)) {
+          lastError = '';
+          return r.contacts;
+        }
+        lastError = (r && r.error) ? String(r.error) : 'qz CLI 不可用';
+        console.warn('[mentions] 联系人加载失败: ' + lastError);
+        return [];
+      }),
+      emptyText: () => (lastError ? '暂无联系人（' + lastError + '）' : '暂无联系人')
+    };
+  }
+
+  /**
+   * 正文里的 @昵称（与 qz/cli.js extractMentions 同一套规则：@ 前必须独立成词，避免邮箱误判）。
+   * 仅用于渲染层判断「有没有 @ 人」/「编辑时是否新增了 @ 人」。
+   */
+  function atNamesIn(text) {
+    const s = String(text == null ? '' : text);
+    const out = [];
+    const re = /@([\u4e00-\u9fa5A-Za-z0-9_-]+)/g;
+    let m;
+    while ((m = re.exec(s))) {
+      const prev = m.index > 0 ? s.charAt(m.index - 1) : '';
+      if (prev && /[\u4e00-\u9fa5A-Za-z0-9_-]/.test(prev)) continue;
+      out.push(m[1]);
+    }
+    return out;
+  }
+
+  /**
+   * @ 提及通知（新建与编辑共用）：想法已落库后调用，通知失败/不可用不阻塞。
+   * @param {string} text 想法全文
+   * @param {string} ideaId 笔记 id（分享页联动删除用）
+   */
+  async function notifyMentions(text, ideaId) {
+    try {
+      const notify = await window.ideaNote.mentions.notify(text, ideaId);
+      if (notify && notify.ok && Array.isArray(notify.sent) && notify.sent.length) {
+        const sent = notify.sent.filter((s) => s.ok);
+        const failed = notify.sent.filter((s) => !s.ok);
+        if (sent.length && !failed.length) showToast('已通知 ' + sent.length + ' 位联系人');
+        else if (sent.length && failed.length) showToast('已通知 ' + sent.length + ' 位，' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、') + ' 未送达', 4000);
+        else showToast('@通知未送达：' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、'), 4000);
+      } else if (notify && notify.error) {
+        showToast('已保存，但 @通知不可用：' + notify.error, 4000);
+      }
+    } catch (e) {
+      console.warn('[mentions] 通知失败: ' + ((e && e.message) || e));
+    }
+  }
+
   async function saveMemo() {
     if (state.view === 'trash') return; // 回收站视图下输入区已隐藏，防御
     const val = state.composer.value();
@@ -1921,30 +1989,98 @@
         updateFeedScrollbar();
       }
       // @ 提及通知：想法已发布，通知失败/不可用不阻塞（qz CLI 仅本机可用）
-      if (/@[^\s@#]/.test(val)) {
-        try {
-          const notify = await window.ideaNote.mentions.notify(val, memo.id);
-          if (notify && notify.ok && Array.isArray(notify.sent) && notify.sent.length) {
-            const sent = notify.sent.filter((s) => s.ok);
-            const failed = notify.sent.filter((s) => !s.ok);
-            if (sent.length && !failed.length) showToast('已通知 ' + sent.length + ' 位联系人');
-            else if (sent.length && failed.length) showToast('已通知 ' + sent.length + ' 位，' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、') + ' 未送达', 4000);
-            else showToast('@通知未送达：' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、'), 4000);
-          } else if (notify && notify.error) {
-            showToast('想法已发布，但 @通知不可用：' + notify.error, 4000);
-          }
-        } catch (e) {
-          console.warn('[mentions] 通知失败: ' + ((e && e.message) || e));
-        }
-      }
+      if (atNamesIn(val).length) await notifyMentions(val, memo.id);
       state.composer.focus();
     } catch (err) {
       handleSyncError(err, '保存失败');
     }
   }
 
+  // ---------- 无边框窗口（Windows/Linux）：右上角自绘三按钮 ----------
+  // 注意：按钮容器挂在 .main-header / #login-view 内部（都是 drag 容器），no-drag 才是「drag 元素后代」，
+  // 系统命中测试才会尊重它；放 body 顶层会被上层拖拽区吞掉点击/hover（Windows 非最大化时表现为按钮点不动）。
+  function initWindowControls() {
+    const isWin = !!(window.ideaNote && window.ideaNote.platform === 'win32');
+    if (!isWin) return;
+    document.body.classList.add('platform-win');
+    const ctl = window.ideaNote.windowControls || {};
+    const boxes = Array.prototype.slice.call(document.querySelectorAll('.win-controls'));
+    if (!boxes.length) return;
+
+    const icoMaxes = [];
+    const icoRestores = [];
+    const maxBtns = [];
+    boxes.forEach((box) => {
+      box.classList.remove('hidden');
+      const min = box.querySelector('.win-min');
+      const maxBtn = box.querySelector('.win-max');
+      const close = box.querySelector('.win-close');
+      if (min) min.addEventListener('click', () => { if (ctl.minimize) ctl.minimize(); });
+      if (maxBtn) maxBtn.addEventListener('click', () => { if (ctl.toggleMaximize) ctl.toggleMaximize(); });
+      if (close) close.addEventListener('click', () => { if (ctl.close) ctl.close(); });
+      icoMaxes.push(box.querySelector('.ico-max'));
+      icoRestores.push(box.querySelector('.ico-restore'));
+      maxBtns.push(maxBtn);
+    });
+
+    const applyMaximized = (maximized) => {
+      icoMaxes.forEach((el) => el && el.classList.toggle('hidden', maximized));
+      icoRestores.forEach((el) => el && el.classList.toggle('hidden', !maximized));
+      maxBtns.forEach((el) => el && el.setAttribute('data-tip', maximized ? '还原' : '最大化'));
+      document.body.classList.toggle('win-maximized', !!maximized);
+    };
+    if (ctl.onMaximized) ctl.onMaximized(applyMaximized);
+  }
+
+  // ---------- Windows/Linux：边缘拖拽缩放 ----------
+  // 系统对无边框窗口只留内侧 5px 命中区（实际抓不住），这里用 8px 热区接管 pointer，
+  // 渲染层只上报屏幕坐标，尺寸换算在主进程（window-resize.js 纯函数）。
+  function initWindowResizeGrips() {
+    const isWin = !!(window.ideaNote && window.ideaNote.platform === 'win32');
+    if (!isWin) return;
+    const grips = $('#win-resize-grips');
+    const ctl = window.ideaNote.windowControls || {};
+    if (!grips || !ctl.resizeStart) return;
+
+    let activeEdge = null;
+    let lastPointer = null;
+
+    grips.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (document.body.classList.contains('win-maximized')) return;
+      const el = e.target && e.target.closest ? e.target.closest('.win-grip') : null;
+      const edge = el && el.getAttribute('data-edge');
+      if (!edge) return;
+      e.preventDefault();
+      activeEdge = edge;
+      lastPointer = { x: e.screenX, y: e.screenY };
+      try { el.setPointerCapture(e.pointerId); } catch (err) { /* 捕获失败仍可靠 document 级事件 */ }
+      ctl.resizeStart(edge, e.screenX, e.screenY);
+    });
+
+    document.addEventListener('pointermove', (e) => {
+      if (!activeEdge) return;
+      lastPointer = { x: e.screenX, y: e.screenY };
+      // Chromium 的 pointermove 已按帧合并，直接转发即可（不要再套 rAF：隐藏窗口下 rAF 被节流会拖慢响应）
+      ctl.resizeMove(lastPointer.x, lastPointer.y);
+    }, true);
+
+    const endResize = () => {
+      if (!activeEdge) return;
+      activeEdge = null;
+      lastPointer = null;
+      ctl.resizeEnd();
+    };
+    document.addEventListener('pointerup', endResize, true);
+    document.addEventListener('pointercancel', endResize, true);
+    // 兜底：窗口失焦（如 Alt+Tab）时收尾，避免主进程残留 resize 会话
+    window.addEventListener('blur', endResize);
+  }
+
   // ---------- 启动 ----------
   async function init() {
+    initWindowControls();
+    initWindowResizeGrips();
     bindEvents();
     initUpdaterUi();
     await refreshMediaIndex(); // 本地图片映射：决定卡片能否显示本机缩略图

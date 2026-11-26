@@ -89,6 +89,24 @@ function loadConfig() {
   return readJsonSafe(path.join(ROOT, '.electron-release.json')) || {};
 }
 
+/**
+ * 纯函数：从 X500 Subject 取 CN 值（取不到返回 ''）。
+ * 形如 "CN=射手科技（珠海）有限公司, O=…, L=珠海, S=广东, C=CN" → "射手科技（珠海）有限公司"。
+ * 只取 CN、不带 ", "，因此可以作为单个 argv 传给 electron-builder
+ * （完整 DN 会被 runBuilder 的 findUnsafeArgs 拦下）。
+ */
+function commonNameFromSubject(subject) {
+  if (typeof subject !== 'string' || !subject.trim()) return '';
+  const m = /(?:^|,)\s*CN=([^,]*)/i.exec(subject);
+  return m ? m[1].trim() : '';
+}
+
+/** 纯函数：publisherName 是否可直接写进 app-update.yml（非空、无空白、无编码损坏字符） */
+function isUsablePublisherName(name) {
+  return typeof name === 'string' && name.trim() !== ''
+    && !/\s/.test(name) && !name.includes('\uFFFD');
+}
+
 /** 纯函数：五级解析签名来源。certs 为 null 表示宿主无法枚举（非 Windows） */
 function resolveSigning({ cli, env, config, pkgSigntool, platform, certs }) {
   const ts = (config && config.signing && config.signing.windows && config.signing.windows.timestampServer)
@@ -146,16 +164,28 @@ function resolveSigning({ cli, env, config, pkgSigntool, platform, certs }) {
   }
   if (certs.length === 1) {
     const cert = certs[0];
-    // 不注入 publisherName：证书 Subject 是完整 X500 DN（"CN=…, O=…, L=…, S=…, C=CN"），
-    // 含 ", " 分隔符，一旦经过 shell 拼串就被按空格切成多段（yargs strict 直接判
-    // Unknown arguments 退出 1）。electron-builder 未配置该项时会自己从证书取
-    // commonName（app-builder-lib codeSign/windowsSignToolManager.js），语义等价。
+    // 注入证书 CN 作为 publisherName（只取 CN，不含 ", "，不会触发 findUnsafeArgs）。
+    //
+    // 2026-11-26 事故：这里原本「不注入、交给 electron-builder 自己从证书取 commonName」
+    // 在 Windows 上会产出损坏值——app-builder 取证书 CN 时按 GBK 读出，写进 UTF-8 的
+    // app-update.yml 后中文全部变成 U+FFFD（实测 1.2.8/1.2.9 的 publisherName 都是
+    // "射手科技（珠海）有限公司" 的坏编码）。electron-updater 下载完成后拿它比对
+    // Authenticode Subject 的 CN，必然不匹配 → ERR_UPDATER_INVALID_SIGNATURE，
+    // 表现为「下载进度 100% 后提示更新失败」。显式注入 UTF-8 正确的中文 CN 可根治。
+    const cn = commonNameFromSubject(cert.subject);
     const args = [
       '--c.win.signtoolOptions.certificateSha1=' + cert.thumbprint,
       '--c.win.signtoolOptions.rfc3161TimeStampServer=' + ts
     ];
+    const cnUsable = isUsablePublisherName(cn);
+    if (cnUsable) {
+      args.push('--c.win.signtoolOptions.publisherName=' + cn);
+    } else {
+      console.warn('[win-sign] 证书 CN 不可用（' + JSON.stringify(cn) + '），未注入 publisherName；'
+        + 'finalize-win 会断言 app-update.yml 的 publisherName 是否可用');
+    }
     return { ...base, mode: 'auto', builderArgs: args, sha1: cert.thumbprint,
-      publisherName: '', cert, reason: '证书存储唯一可用证书（SimplySign 自动签名）' };
+      publisherName: cnUsable ? cn : '', cert, reason: '证书存储唯一可用证书（SimplySign 自动签名）' };
   }
   if (certs.length === 0) {
     return { ...base, mode: 'missing', canBuild: false,
@@ -358,6 +388,20 @@ function findUnsafeArgs(args) {
   return args.filter((a) => /[\s"]/.test(a));
 }
 
+function runPackageFilesCheck() {
+  const script = path.join(__dirname, 'check-package-files.js');
+  if (!fs.existsSync(script)) {
+    console.error('✗ 缺少 scripts/check-package-files.js（打包前白名单复核脚本），拒绝在未复核的情况下打包');
+    return false;
+  }
+  const r = spawnSync(process.execPath, [script], { stdio: 'inherit', cwd: ROOT });
+  if (r.error || r.status !== 0) {
+    console.error('✗ 打包前白名单复核未通过：修好 package.json 的 build.files（或根目录多出的 .js）再打包');
+    return false;
+  }
+  return true;
+}
+
 function runBuilder(builderArgs) {
   const cliJs = path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
   const args = ['--win'].concat(builderArgs);
@@ -509,6 +553,10 @@ function main() {
     if (!prewarm(resolution, resolution.timestampServer)) process.exit(3);
   }
 
+  // 打包前白名单复核（用户要求：每次打包前都要复核别漏文件）。
+  // 2026-11-26 事故：新模块漏了 build.files → asar 缺文件、Windows 包启动 Cannot find module。
+  if (!runPackageFilesCheck()) process.exit(5);
+
   if (!runBuilder(resolution.builderArgs)) process.exit(1);
 
   const allowUnsignedFinal = unsignedAccepted || resolution.mode === 'unavailable';
@@ -516,5 +564,6 @@ function main() {
   console.log('[win-sign] 完成');
 }
 
-module.exports = { resolveSigning, decideLogin, enumerateCerts, MACHINE_NAMES, DEFAULT_TIMESTAMP, findUnsafeArgs };
+module.exports = { resolveSigning, decideLogin, enumerateCerts, MACHINE_NAMES, DEFAULT_TIMESTAMP, findUnsafeArgs,
+  commonNameFromSubject, isUsablePublisherName };
 if (require.main === module) main();

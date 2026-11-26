@@ -101,6 +101,76 @@ function resolveAutoDownload(cfg) {
   return true;
 }
 
+/**
+ * 纯函数：app-update.yml 里的 publisherName 是否编码损坏（含 U+FFFD）。
+ *
+ * 2026-11-26 Windows 更新失败根因：打包环节把证书 CN 从 GBK 读成 UTF-8 写入 YAML，
+ * 中文全部变成 U+FFFD；electron-updater 下载完成后拿它比对 Authenticode Subject 的
+ * CN，永远不可能匹配 → ERR_UPDATER_INVALID_SIGNATURE（用户看到「下载 100% 后提示更新失败」）。
+ * 打包侧已修（win-sign.js 显式注入 CN），这里只做存量清单的自救降级。
+ */
+function hasBrokenPublisherName(text) {
+  if (typeof text !== 'string') return false;
+  let inList = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const inline = /^\s*publisherName\s*:\s*(.+)$/.exec(raw);
+    if (inline) {
+      if (inline[1].includes('\uFFFD')) return true;
+      inList = false;
+      continue;
+    }
+    if (/^\s*publisherName\s*:\s*$/.test(raw)) {
+      inList = true;
+      continue;
+    }
+    if (!inList) continue;
+    const item = /^\s*-\s+(.+)$/.exec(raw);
+    if (item) {
+      if (item[1].includes('\uFFFD')) return true;
+      continue;
+    }
+    if (/^\s*$/.test(raw)) continue;
+    inList = false;
+  }
+  return false;
+}
+
+/**
+ * 把升级组件抛出的原始错误归一化为可展示的短句。
+ * 原始消息常含 URL、HTTP 状态、堆栈（用户看到就是「一串很长的错误代码」），只留给日志。
+ * 纯函数，供单测与 IPC/事件共用。
+ */
+function friendlyUpdateError(err) {
+  const raw = String((err && (err.message || err.code)) || '').trim();
+  const firstLine = raw.split(/\r?\n/)[0] || '';
+  // 顺序重要：404 的原文里通常也带 latest.yml，先按「清单缺失」归类
+  if (/latest(?:-mac)?\.yml|Cannot find .*release artifacts|no (?:latest|update) (?:yaml|yml)/i.test(raw)) {
+    return '更新服务器暂未提供更新清单，请稍后再试';
+  }
+  // 5xx 要先于 404 判定：原文形如 "HttpError: 503 Service Unavailable" 不含 404，
+  // 但 "HttpError" 关键字不能单独当 404 依据
+  if (/\b5\d\d\b|Internal Server Error|Bad Gateway|Service Unavailable/i.test(raw)) {
+    return '更新服务暂时不可用，请稍后再试';
+  }
+  if (/HttpError[^\n]*\b404\b|status code 404|\b404\b/i.test(raw)) {
+    return '更新服务返回异常（HTTP 404），请稍后再试';
+  }
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo|ENETUNREACH|ECONNREFUSED|ECONNRESET/i.test(raw)) {
+    return '网络不可用，无法连接更新服务器';
+  }
+  if (/ETIMEDOUT|ESOCKETTIMEDOUT|timeout|timed out/i.test(raw)) return '连接更新服务器超时';
+  // 签名主体校验失败（原始串形如 "New version X is not signed by the application owner:
+  // publisherNames: …, raw info: {…}"）。判定放在 sha512 之前，因为 raw info 里可能带
+  // 算法名等无关字段，先按签名归类更准。
+  if (/not signed by the application owner|ERR_UPDATER_INVALID_SIGNATURE|publisherNames/i.test(raw)) {
+    return '新版本签名校验未通过，请到官网手动下载安装最新版';
+  }
+  if (/sha512|checksum|integrity/i.test(raw)) return '更新包校验失败，请稍后重试';
+  if (/EPERM|EACCES|permission denied/i.test(raw)) return '没有权限写入更新文件，请检查安装目录权限';
+  const cut = firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
+  return cut || '升级组件异常';
+}
+
 // ============ 主进程装配 ============
 
 let autoUpdater = null;
@@ -152,7 +222,7 @@ function registerIpc() {
       return { ok: true };
     } catch (err) {
       lastCheckManual = false;
-      return { ok: false, message: (err && err.message) || '检查更新失败' };
+      return { ok: false, message: friendlyUpdateError(err) };
     }
   });
 
@@ -163,7 +233,7 @@ function registerIpc() {
       if (!state.downloading) await autoUpdater.downloadUpdate();
       return { ok: true };
     } catch (err) {
-      return { ok: false, message: (err && err.message) || '下载更新失败' };
+      return { ok: false, message: friendlyUpdateError(err) };
     }
   });
 
@@ -212,10 +282,30 @@ function bindEvents() {
     state.checking = false;
     state.downloading = false;
     state.error = err;
-    emit('error', { message: (err && err.message) || '升级组件异常' });
+    // 静默检查失败不打扰用户：事件照发（渲染层只复位状态），展示文案走友好化短句，
+    // 原始长串（URL/HTTP/堆栈）只进日志。用户主动操作的失败由 IPC 返回值提示。
+    emit('error', { message: friendlyUpdateError(err), manual: lastCheckManual });
     lastCheckManual = false;
     console.warn('[updater] 错误: ' + ((err && err.message) || err));
   });
+}
+
+/** 读取安装目录的 app-update.yml；若 publisherName 编码损坏则跳过证书主体比对 */
+function tryDisableBrokenPublisherCheck(updater) {
+  try {
+    const resPath = process.resourcesPath;
+    if (!resPath) return false;
+    const file = path.join(resPath, 'app-update.yml');
+    if (!fs.existsSync(file)) return false;
+    if (!hasBrokenPublisherName(fs.readFileSync(file, 'utf8'))) return false;
+    updater.verifyUpdateCodeSignature = async () => null;
+    console.warn('[updater] app-update.yml 的 publisherName 编码损坏（U+FFFD）：'
+      + '已跳过证书主体比对，仍校验 sha512 与 HTTPS 清单来源');
+    return true;
+  } catch (e) {
+    console.warn('[updater] 检查 app-update.yml publisherName 失败: ' + e.message);
+    return false;
+  }
 }
 
 /**
@@ -260,6 +350,9 @@ function initUpdater(opts) {
   autoUpdater.autoInstallOnAppQuit = true; // 已下载但用户未点安装时，退出应用自动完成安装
   autoUpdater.logger = console;
 
+  // 存量坏清单自救（必须在 bindEvents 之前设置，下载前就要生效）
+  tryDisableBrokenPublisherCheck(autoUpdater);
+
   bindEvents();
   registerIpc();
   enabled = true;
@@ -289,5 +382,7 @@ module.exports = {
   compareVersions,
   loadUserUpdateConfig,
   normalizeFeed,
-  resolveAutoDownload
+  resolveAutoDownload,
+  friendlyUpdateError,
+  hasBrokenPublisherName
 };

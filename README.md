@@ -95,7 +95,7 @@ idea-note-desktop/
 | 本地打包 mac，不碰 git、不上传 | `npm run package` |
 | 单机完整发布（改版本 → 建 Release → 推清单到服务器 → 线上校验） | `npm run release -- patch` |
 | 多机打包（mac + win）并投放七牛 | `PLATFORM=all MODE=publish REF=main deploy/deploy.sh` |
-| 只投放七牛（在打包机上手动跑，产物在 `dist/package`） | `node scripts/qiniu-upload.js --dir dist/package` |
+| 只投放七牛（在打包机上手动跑，产物在 `dist/package`；默认只传包不动 `latest*.yml`） | `node scripts/qiniu-upload.js --dir dist/package`（要发自动升级加 `--with-manifest`） |
 | 单独上传某个产物（截图 / 报告 / QA 包，不走发版） | `npm run upload:artifact -- <文件或目录> [--dated] [--subdir qa]` |
 | 演练（不联网、不写远端） | deploy.sh 加 `DRY_RUN=1`；`upload:qiniu` 加 `--dry-run` |
 

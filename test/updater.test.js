@@ -14,7 +14,9 @@ const {
   compareVersions,
   loadUserUpdateConfig,
   normalizeFeed,
-  resolveAutoDownload
+  resolveAutoDownload,
+  friendlyUpdateError,
+  hasBrokenPublisherName
 } = require('../updater');
 
 // ============ parseVersion ============
@@ -119,4 +121,58 @@ test('resolveAutoDownload: 默认开启，配置可关闭', () => {
   assert.strictEqual(resolveAutoDownload({}), true);
   assert.strictEqual(resolveAutoDownload({ autoDownload: false }), false);
   assert.strictEqual(resolveAutoDownload({ autoDownload: true }), true);
+});
+
+// ============ friendlyUpdateError（用户报「更新失败 toast 显示一长串错误代码」）============
+test('friendlyUpdateError: 清单缺失/404 归一化为短句，不泄露 URL 与堆栈', () => {
+  const e404 = new Error(
+    'Cannot find latest.yml in the latest release artifacts (https://ideanote.7373.com.cn/autoupdates/latest.yml):\n' +
+    'HttpError: 404 Not Found\n    at GenericProvider.getLatestVersion (/app/node_modules/builder-util-runtime/out/provider.js:1:1)\n' +
+    '    at async Updater.checkForUpdates (/app/node_modules/electron-updater/out/AppUpdater.js:1:1)'
+  );
+  const msg = friendlyUpdateError(e404);
+  assert.strictEqual(msg, '更新服务器暂未提供更新清单，请稍后再试');
+  assert.ok(!/http|https|\.yml|at async/i.test(msg), '不得把 URL / 堆栈透给用户');
+});
+
+test('friendlyUpdateError: 网络 DNS 与超时分别归类', () => {
+  assert.strictEqual(friendlyUpdateError(new Error('getaddrinfo ENOTFOUND ideanote.7373.com.cn')), '网络不可用，无法连接更新服务器');
+  assert.strictEqual(friendlyUpdateError(new Error('request to https://x timed out')), '连接更新服务器超时');
+});
+
+test('friendlyUpdateError: 5xx / 校验失败 / 权限分别归类', () => {
+  assert.strictEqual(friendlyUpdateError(new Error('HttpError: 503 Service Unavailable')), '更新服务暂时不可用，请稍后再试');
+  assert.strictEqual(friendlyUpdateError(new Error('sha512 checksum mismatch, expected x got y')), '更新包校验失败，请稍后重试');
+  assert.strictEqual(friendlyUpdateError(new Error('EACCES: permission denied, open app.zip')), '没有权限写入更新文件，请检查安装目录权限');
+});
+
+test('friendlyUpdateError: 未知错误取首行并截断，空值兜底', () => {
+  const long = 'E'.repeat(200) + '\nsecond line';
+  const msg = friendlyUpdateError(new Error(long));
+  assert.ok(msg.length <= 61, '未知错误最多 60 字符 + 省略号，实际 ' + msg.length);
+  assert.ok(msg.endsWith('…'));
+  assert.strictEqual(friendlyUpdateError(null), '升级组件异常');
+  assert.strictEqual(friendlyUpdateError(new Error('')), '升级组件异常');
+});
+
+test('friendlyUpdateError: 签名主体校验失败 → 引导手动下载，不透出 publisherNames 与原始 JSON', () => {
+  // 2026-11-26 实测原文（1.2.8 客户端点更新，下载 100% 后失败）
+  const raw = 'New version 1.2.9 is not signed by the application owner: publisherNames: '
+    + '射手科技（珠海）有限公司, raw info: {"SignerCertificate":{"Subject":"CN=射手科技（珠海）有限公司, O=…"},'
+    + '"Status":0,"Path":"C:\\Users\\x\\AppData\\Local\\idea-note-local-updater\\pending\\x.exe"}';
+  const msg = friendlyUpdateError(new Error(raw));
+  assert.strictEqual(msg, '新版本签名校验未通过，请到官网手动下载安装最新版');
+  assert.ok(!/publisherNames|SignerCertificate|C:\\Users|raw info/i.test(msg), '不得把证书/路径原文透给用户');
+});
+
+test('hasBrokenPublisherName: 识别打包环节把中文 CN 写成 U+FFFD 的坏清单', () => {
+  // 打包机实测字节：UTF-8 的 YAML 里 publisherName 全是 EF BF BD
+  assert.strictEqual(hasBrokenPublisherName('publisherName:\n  - \ufffd\ufffd\ufffd\ufffd公司\n'), true);
+  assert.strictEqual(hasBrokenPublisherName('publisherName: \ufffd公司\n'), true);
+  // 正确中文 / 英文 / 缺失 都不算损坏
+  assert.strictEqual(hasBrokenPublisherName('publisherName:\n  - 射手科技（珠海）有限公司\n'), false);
+  assert.strictEqual(hasBrokenPublisherName('publisherName: Acme Inc\n'), false);
+  assert.strictEqual(hasBrokenPublisherName('provider: generic\nurl: https://x/\n'), false);
+  assert.strictEqual(hasBrokenPublisherName(''), false);
+  assert.strictEqual(hasBrokenPublisherName(null), false);
 });

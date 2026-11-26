@@ -67,5 +67,22 @@ contextBridge.exposeInMainWorld('ideaNote', {
     onStatus: (cb) => {
       ipcRenderer.on('updater:event', (_e, payload) => cb(payload));
     }
-  }
+  },
+  // 无边框窗口：右上角自绘三按钮（Windows/Linux）
+  windowControls: {
+    minimize: () => ipcRenderer.send('window:minimize'),
+    toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
+    close: () => ipcRenderer.send('window:close'),
+    // 最大化/还原状态（用于切换按钮图标）
+    onMaximized: (cb) => {
+      ipcRenderer.on('window:maximized', (_e, maximized) => cb(Boolean(maximized)));
+    },
+    // 边缘拖拽缩放：渲染层热区按下 → 主进程按屏幕坐标换算 bounds
+    resizeStart: (edge, x, y) => ipcRenderer.send('window:resize-start', { edge, x, y }),
+    resizeMove: (x, y) => ipcRenderer.send('window:resize-move', { x, y }),
+    resizeEnd: () => ipcRenderer.send('window:resize-end')
+  },
+  // 渲染层据此决定是否显示自绘三按钮（macOS 走原生交通灯）
+  // IDEA_NOTE_FORCE_WIN_CONTROLS=1 可在 macOS 上预览/冒烟测试这套按钮
+  platform: process.env.IDEA_NOTE_FORCE_WIN_CONTROLS === '1' ? 'win32' : process.platform
 });

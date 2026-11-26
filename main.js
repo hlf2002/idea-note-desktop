@@ -12,6 +12,7 @@ const path = require('path');
 const fs = require('fs');
 const { initApp } = require('./app-core');
 const { initUpdater } = require('./updater');
+const { registerWindowControls } = require('./window-controls');
 
 let mainWindow = null;
 let tray = null;
@@ -119,7 +120,7 @@ function migrateLegacyDataDir() {
 
 function createWindow() {
   const state = loadWindowState() || {};
-  mainWindow = new BrowserWindow({
+  const winOptions = {
     width: state.width || 1040,
     height: state.height || 720,
     minWidth: MIN_W,
@@ -128,20 +129,33 @@ function createWindow() {
     backgroundColor: '#f4e9d3',
     show: false,
     icon: APP_ICON(),
-    // 无边框窗口：隐藏原生标题栏，保留 macOS 红黄绿交通灯按钮
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 14 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
     }
-  });
+  };
+  if (process.platform === 'darwin') {
+    // macOS：隐藏原生标题栏，保留红黄绿交通灯按钮
+    winOptions.titleBarStyle = 'hiddenInset';
+    winOptions.trafficLightPosition = { x: 16, y: 14 };
+  } else {
+    // Windows/Linux：完全无边框（没有系统标题栏/菜单条），右上角自绘三按钮
+    winOptions.frame = false;
+  }
+  mainWindow = new BrowserWindow(winOptions);
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    pushMaximizedState();
+  });
+
+  // 最大化/还原状态推给渲染层，用于切换右上角按钮图标
+  mainWindow.on('maximize', pushMaximizedState);
+  mainWindow.on('unmaximize', pushMaximizedState);
 
   // 点击关闭按钮 -> 隐藏到托盘（保持后台快速记录能力）；隐藏/退出时保存窗口宽高
   mainWindow.on('close', (e) => {
@@ -198,6 +212,22 @@ function toggleWindow() {
   }
 }
 
+// ---- 无边框窗口（Windows/Linux）：右上角自绘三按钮 ----
+function pushMaximizedState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('window:maximized', mainWindow.isMaximized());
+}
+
+// 窗口操作 IPC（自绘三按钮 + 边缘拖拽缩放）统一由 window-controls.js 注册：
+// 抽成模块是为了 smoke-test 在自建窗口上复用同一套逻辑（能验证 setBounds 真的生效）
+function setupWindowControls() {
+  registerWindowControls({
+    getWindow: () => mainWindow,
+    onResizeEnd: saveWindowState,
+    minSize: { width: MIN_W, height: MIN_H }
+  });
+}
+
 function focusInput() {
   if (mainWindow && mainWindow.webContents) {
     mainWindow.webContents.send('app:focus-input');
@@ -221,6 +251,8 @@ function registerGlobalShortcut() {
 // ---- 应用生命周期 ----
 app.whenReady().then(async () => {
   migrateLegacyDataDir();
+  // Windows/Linux：去掉系统菜单条（File/Edit/…）；macOS 保留默认菜单（Cmd+C/V/Q 依赖它）
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
   // macOS Dock 图标（开发/运行期即替换为产品图标）
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(APP_ICON());
@@ -238,6 +270,7 @@ app.whenReady().then(async () => {
   }
   createTray();
   registerGlobalShortcut();
+  setupWindowControls();
 
   // 自动化升级：启动后自动检查、后台下载、就绪后提示重启安装（打包版生效）
   initUpdater({

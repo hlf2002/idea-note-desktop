@@ -2,7 +2,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { resolveSigning, decideLogin, DEFAULT_TIMESTAMP, findUnsafeArgs } = require('../scripts/win-sign');
+const { resolveSigning, decideLogin, DEFAULT_TIMESTAMP, findUnsafeArgs,
+  commonNameFromSubject, isUsablePublisherName } = require('../scripts/win-sign');
 
 const CLI_EMPTY = { signSha1: '', signSubject: '', publisherName: '' };
 const ENV_EMPTY = {};
@@ -81,7 +82,7 @@ test('优先级④ package.json signtoolOptions 在配置为空时生效', () =>
   assert.match(argByPrefix(r.builderArgs, 'certificateSha1'), /PKG_FPR/);
 });
 
-test('优先级⑤ 证书存储唯一可用证书 → auto：只注入指纹 + 时间戳，不注入 publisherName', () => {
+test('优先级⑤ 证书存储唯一可用证书 → auto：注入指纹 + 时间戳；CN 含空白时不注入 publisherName', () => {
   const r = resolveSigning({
     cli: CLI_EMPTY, env: ENV_EMPTY, config: CONFIG_EMPTY, pkgSigntool: PKG_EMPTY,
     platform: 'win32', certs: ONE_CERT
@@ -89,13 +90,51 @@ test('优先级⑤ 证书存储唯一可用证书 → auto：只注入指纹 + �
   assert.equal(r.mode, 'auto');
   assert.equal(r.canBuild, true);
   assert.match(argByPrefix(r.builderArgs, 'certificateSha1'), /ABC123/);
-  // 证书 Subject 是完整 X500 DN（"CN=Test Co, O=Test"，含 ", "），直接当参数值会被
-  // shell 按空格拆成多段 → yargs strict 报 Unknown arguments。交给 electron-builder
-  // 自己从证书取 commonName，语义等价且没有空白字符。
+  // CN 为 "Test Co"（含空格）：注入会被 findUnsafeArgs 判为拆词风险，因此跳过，
+  // 交给 electron-builder 自己从证书取 commonName（ASCII 证书名没有编码问题）。
   assert.equal(argByPrefix(r.builderArgs, 'publisherName'), undefined);
   assert.equal(r.publisherName, '');
   assert.deepEqual(findUnsafeArgs(r.builderArgs), []);
   assert.equal(r.timestampServer, DEFAULT_TIMESTAMP);
+});
+
+test('优先级⑤ auto：中文 CN 显式注入 publisherName（修 Windows 更新签名校验）', () => {
+  // 2026-11-26 事故：不注入时 electron-builder 从 GBK 读 CN 写进 UTF-8 的
+  // app-update.yml，中文全变 U+FFFD → electron-updater 下载完成后主体比对必失败。
+  const cnCert = [{
+    thumbprint: 'F37ADA437384D46DAA78604614E3ED9BF24F9956',
+    subject: 'CN=射手科技（珠海）有限公司, O=射手科技（珠海）有限公司, L=珠海, S=广东, C=CN',
+    notAfter: '2027-04-14T00:00:00'
+  }];
+  const r = resolveSigning({
+    cli: CLI_EMPTY, env: ENV_EMPTY, config: CONFIG_EMPTY, pkgSigntool: PKG_EMPTY,
+    platform: 'win32', certs: cnCert
+  });
+  assert.equal(r.mode, 'auto');
+  assert.equal(argByPrefix(r.builderArgs, 'publisherName'),
+    '--c.win.signtoolOptions.publisherName=射手科技（珠海）有限公司');
+  assert.equal(r.publisherName, '射手科技（珠海）有限公司');
+  // 只取 CN，不含 ", " → 不会被 findUnsafeArgs 判成拆词
+  assert.deepEqual(findUnsafeArgs(r.builderArgs), []);
+});
+
+test('commonNameFromSubject：从 X500 DN 取 CN，取不到返回空串', () => {
+  assert.equal(
+    commonNameFromSubject('CN=射手科技（珠海）有限公司, O=射手科技（珠海）有限公司, L=珠海, S=广东, C=CN'),
+    '射手科技（珠海）有限公司');
+  assert.equal(commonNameFromSubject('O=Test, CN=Test Co, C=CN'), 'Test Co');
+  assert.equal(commonNameFromSubject('O=NoCN, L=Nowhere'), '');
+  assert.equal(commonNameFromSubject(''), '');
+  assert.equal(commonNameFromSubject(null), '');
+});
+
+test('isUsablePublisherName：拒绝空白 / U+FFFD / 空值', () => {
+  assert.equal(isUsablePublisherName('射手科技（珠海）有限公司'), true);
+  assert.equal(isUsablePublisherName('射手 科技'), false);
+  assert.equal(isUsablePublisherName('射手\ufffd科技'), false);
+  assert.equal(isUsablePublisherName(''), false);
+  assert.equal(isUsablePublisherName('   '), false);
+  assert.equal(isUsablePublisherName(null), false);
 });
 
 test('findUnsafeArgs：揪出会被 shell 拆词的参数（回归样例为完整证书 DN）', () => {

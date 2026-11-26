@@ -1,6 +1,6 @@
 {
   "name": "idea-note-local",
-  "version": "1.2.5",
+  "version": "1.2.11",
   "description": "本地版 灵感笔记 —— 极简卡片式记录桌面应用",
   "main": "main.js",
   "scripts": {
@@ -33,6 +33,8 @@
       "app-core.js",
       "updater.js",
       "preload.js",
+      "window-controls.js",
+      "window-resize.js",
       "renderer/**/*",
       "assets/**/*",
       "qz/**/*"

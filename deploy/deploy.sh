@@ -116,17 +116,20 @@ case "$PLATFORM" in
 esac
 
 # MODE 决定发布渠道（对齐 q_assistant 的 mode 语义）：
-#   local           只构建
-#   publish         构建后由打包机投七牛（electron-updater 自动更新仓）
-#   publish-feishu  构建后由打包机上传 IPA + 飞书公告（不投七牛）
+#   local             只构建
+#   publish           构建后由打包机投七牛：只传安装包/blockmap，**不动 latest*.yml**
+#                     （用户 2026-11-25 要求：默认打包不触发客户端自动升级）
+#   publish-manifest  同上，但额外上传 latest*.yml —— 只有明确「发自动升级」时用
+#   publish-feishu    构建后由打包机上传 IPA + 飞书公告（不投七牛）
 # 两个发布渠道互斥，各管一个发布面。IPA 凭据读打包机本地 .release.config.json 的
 # ipa 段（appId/token）或 IPA_APP_ID / IPA_TOKEN 环境变量，跳板机不持有凭据。
 case "$MODE" in
-  local) MODE_UPLOAD=0; MODE_FEISHU=0 ;;
-  publish) MODE_UPLOAD=1; MODE_FEISHU=0 ;;
-  publish-feishu) MODE_UPLOAD=0; MODE_FEISHU=1 ;;
+  local) MODE_UPLOAD=0; MODE_FEISHU=0; MODE_MANIFEST=0 ;;
+  publish) MODE_UPLOAD=1; MODE_FEISHU=0; MODE_MANIFEST=0 ;;
+  publish-manifest) MODE_UPLOAD=1; MODE_FEISHU=0; MODE_MANIFEST=1 ;;
+  publish-feishu) MODE_UPLOAD=0; MODE_FEISHU=1; MODE_MANIFEST=0 ;;
   *)
-    printf 'MODE 仅支持 local/publish/publish-feishu，当前 MODE=%s\n' "$MODE" >&2
+    printf 'MODE 仅支持 local/publish/publish-manifest/publish-feishu，当前 MODE=%s\n' "$MODE" >&2
     exit 2
     ;;
 esac
@@ -136,6 +139,10 @@ if [ "$MODE_FEISHU" = "1" ] && [ "$UPLOAD" = "1" ]; then
   printf 'MODE=publish-feishu 与 UPLOAD=1（七牛）互斥：IPA 发布与七牛更新仓是两个独立渠道\n' >&2
   exit 2
 fi
+
+# 清单开关：只有 publish-manifest（明确要发自动升级）才带 --with-manifest
+MANIFEST_FLAG=""
+[ "$MODE_MANIFEST" = "1" ] && MANIFEST_FLAG=" --with-manifest"
 
 for flag in "$DRY_RUN" "$UPLOAD"; do
   case "$flag" in
@@ -203,8 +210,8 @@ if [ "$REF" != "main" ] &&
 fi
 
 echo "========== 构建参数 =========="
-printf 'PLATFORM=%s MODE=%s REF=%s UPLOAD=%s DRY_RUN=%s\n' \
-  "$PLATFORM" "$MODE" "$REF" "$UPLOAD" "$DRY_RUN"
+printf 'PLATFORM=%s MODE=%s REF=%s UPLOAD=%s MANIFEST=%s DRY_RUN=%s\n' \
+  "$PLATFORM" "$MODE" "$REF" "$UPLOAD" "$MODE_MANIFEST" "$DRY_RUN"
 printf 'WIN_SIMPLYSIGN_LOGIN=%s TIMEOUT=%ss\n' \
   "$WIN_SIMPLYSIGN_LOGIN" "$WIN_SIMPLYSIGN_LOGIN_TIMEOUT"
 if [ "$PLATFORM_GIVEN" = "0" ]; then
@@ -295,14 +302,18 @@ run_task() {
     if [ -n "${WIN_SIMPLYSIGN_PYTHON:-}" ]; then
       package_cmd="$package_cmd && set \"WIN_SIMPLYSIGN_PYTHON=$WIN_SIMPLYSIGN_PYTHON\""
     fi
+    # 打包前白名单复核（用户要求：每次打包前都要复核别漏文件）。
+    # 脚本不存在时跳过（兼容老 ref），存在则失败即中断打包。
+    package_cmd="$package_cmd && if exist \"scripts\\check-package-files.js\" node scripts\\check-package-files.js"
     package_cmd="$package_cmd && call npm run package:win"
-    [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package-win"
+    [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package-win${MANIFEST_FLAG}"
     [ "$MODE_FEISHU" = "1" ] && package_cmd="$package_cmd && node scripts/publish-ipa.js --platform win --dir dist/package-win"
   else
     checkout_cmd="$(remote_checkout mac "$proj")"
     # mac 校验在 release.sh 内（refresh + verify）；老 ref 无 package-mac.sh 时回退裸 npm run package
-    package_cmd="cd $proj && if [ -f scripts/package-mac.sh ]; then bash scripts/package-mac.sh; else npm run package; fi"
-    [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package"
+    # 打包前白名单复核（用户要求：每次打包前都要复核别漏文件）；脚本不存在时跳过（兼容老 ref）
+    package_cmd="cd $proj && if [ -f scripts/check-package-files.js ]; then node scripts/check-package-files.js; fi && if [ -f scripts/package-mac.sh ]; then bash scripts/package-mac.sh; else npm run package; fi"
+    [ "$UPLOAD" = "1" ] && package_cmd="$package_cmd && node scripts/qiniu-upload.js --dir dist/package${MANIFEST_FLAG}"
     [ "$MODE_FEISHU" = "1" ] && package_cmd="$package_cmd && node scripts/publish-ipa.js --platform mac --dir dist/package"
   fi
 

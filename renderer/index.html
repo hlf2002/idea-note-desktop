@@ -31,6 +31,20 @@
         <li>手机上确认后自动完成登录</li>
       </ol>
     </div>
+
+    <!-- 登录态也显示三按钮：作为 login-view（整页 drag）的后代，no-drag 才会生效 -->
+    <div class="win-controls hidden" data-win-controls="login" role="group" aria-label="窗口控制">
+      <button class="win-ctl win-min" type="button" data-tip="最小化" aria-label="最小化">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6h7"/></svg>
+      </button>
+      <button class="win-ctl win-max" type="button" data-tip="最大化" aria-label="最大化">
+        <svg class="ico-max" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="2.5" width="7" height="7" rx="1.4"/></svg>
+        <svg class="ico-restore hidden" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.2" y="4.2" width="5.8" height="5.8" rx="1.4"/><path d="M4.4 4.2V3.4a1.2 1.2 0 0 1 1.2-1.2h3.2a1.2 1.2 0 0 1 1.2 1.2v3.2a1.2 1.2 0 0 1-1.2 1.2h-.9"/></svg>
+      </button>
+      <button class="win-ctl win-close" type="button" data-tip="关闭到托盘" aria-label="关闭">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.2 3.2l5.6 5.6M8.8 3.2l-5.6 5.6"/></svg>
+      </button>
+    </div>
   </div>
 
   <!-- 主应用视图（灵感笔记桌面端 · 按模板重做） -->
@@ -120,6 +134,22 @@
           </div>
           <button id="btn-filter" class="icon-btn filter-btn" data-tip="筛选"><i class="fa-solid fa-filter"></i></button>
         </div>
+
+        <!-- 无边框窗口（Windows/Linux）：右上角自绘三按钮；macOS 用原生红黄绿交通灯，不显示。
+             必须放在可拖拽容器（header / 登录视图）内部：no-drag 是 drag 元素的后代时才一定被系统命中测试尊重，
+             放在 body 顶层会被上层 drag 区域按绘制顺序覆盖，导致鼠标点击/hover 被系统当作标题栏吞掉。 -->
+        <div class="win-controls hidden" data-win-controls="app" role="group" aria-label="窗口控制">
+          <button class="win-ctl win-min" type="button" data-tip="最小化" aria-label="最小化">
+            <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6h7"/></svg>
+          </button>
+          <button class="win-ctl win-max" type="button" data-tip="最大化" aria-label="最大化">
+            <svg class="ico-max" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="2.5" width="7" height="7" rx="1.4"/></svg>
+            <svg class="ico-restore hidden" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.2" y="4.2" width="5.8" height="5.8" rx="1.4"/><path d="M4.4 4.2V3.4a1.2 1.2 0 0 1 1.2-1.2h3.2a1.2 1.2 0 0 1 1.2 1.2v3.2a1.2 1.2 0 0 1-1.2 1.2h-.9"/></svg>
+          </button>
+          <button class="win-ctl win-close" type="button" data-tip="关闭到托盘" aria-label="关闭">
+            <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.2 3.2l5.6 5.6M8.8 3.2l-5.6 5.6"/></svg>
+          </button>
+        </div>
       </header>
 
       <!-- 固定区：输入卡片及以上（不参与滚动） -->
@@ -198,6 +228,20 @@
 
   <!-- 轻提示 -->
   <div id="toast" class="toast hidden"></div>
+
+  <!-- 无边框窗口（Windows/Linux）：八向边缘拖拽缩放热区。
+       系统只给无边框窗口内侧 5px 的缩放命中区（太窄，实际抓不到），这里用 8px 热区补足，
+       主进程按起始光标与窗口 bounds 计算新 bounds（renderer 不参与尺寸换算）。 -->
+  <div id="win-resize-grips" aria-hidden="true">
+    <div class="win-grip grip-t" data-edge="top"></div>
+    <div class="win-grip grip-b" data-edge="bottom"></div>
+    <div class="win-grip grip-l" data-edge="left"></div>
+    <div class="win-grip grip-r" data-edge="right"></div>
+    <div class="win-grip grip-tl" data-edge="top-left"></div>
+    <div class="win-grip grip-tr" data-edge="top-right"></div>
+    <div class="win-grip grip-bl" data-edge="bottom-left"></div>
+    <div class="win-grip grip-br" data-edge="bottom-right"></div>
+  </div>
 
   <script src="tags.js"></script>
   <script src="tagsuggest.js"></script>

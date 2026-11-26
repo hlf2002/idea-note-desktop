@@ -9,12 +9,13 @@
  */
 'use strict';
 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const http = require('http');
 const { initApp } = require('./app-core');
+const { registerWindowControls } = require('./window-controls');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'idea-note-smoke-'));
 app.setPath('userData', tmpDir); // 独立数据目录，不污染真实数据
@@ -207,6 +208,14 @@ app.whenReady().then(async () => {
     // 登录 IPC 必须在渲染层加载前注册（渲染层 init 会立刻调 auth:start）
     core.registerAuthIpc(() => win);
 
+    // 窗口操作 IPC（自绘三按钮 + 边缘拖拽缩放）：用与 main.js 同一模块，才能真实验证 setBounds 生效。
+    // 只在 Windows 专属模式下有意义（macOS 上自绘按钮/热区不显示），但注册本身无副作用。
+    registerWindowControls({
+      getWindow: () => win,
+      onResizeEnd: () => {},
+      minSize: { width: 760, height: 520 }
+    });
+
     win.webContents.on('console-message', (_e, level, message) => {
       console.log('[renderer]', level, message);
     });
@@ -235,6 +244,62 @@ app.whenReady().then(async () => {
       out.cardCount = document.querySelectorAll('.memo-card').length;
       out.sidebarTagCount = document.querySelectorAll('.tag-item').length;
       out.memoCount = document.getElementById('stat-memos').textContent;
+
+      // 无边框窗口三按钮（Windows 自绘；macOS 隐藏、走原生红黄绿）
+      // 关键约定：容器必须挂在 drag 容器（.main-header / #login-view）内部，
+      // body 顶层的 no-drag 会被上层拖拽区覆盖（Windows 非最大化时按钮点不动）
+      const wcs = Array.prototype.slice.call(document.querySelectorAll('.win-controls'));
+      out.winCtlBoxCount = wcs.length;
+      out.winCtlCounts = wcs.map((b) => b.querySelectorAll('.win-ctl').length);
+      out.winCtlInDragParent = wcs.map((b) => !!b.closest('.main-header, #login-view'));
+      out.winCtlSelfShown = wcs.map((b) => !b.classList.contains('hidden'));
+      out.platformWinClass = document.body.classList.contains('platform-win');
+      out.winCtlBoxRects = wcs.map((b) => {
+        const r = b.getBoundingClientRect();
+        return [Math.round(r.width), Math.round(r.height)];
+      });
+      out.winCtlRectMax = out.winCtlBoxRects.reduce((m, r) => Math.max(m, r[0]), 0);
+      out.winCtlSizes = wcs.map((b) => {
+        const btn = b.querySelector('.win-ctl');
+        if (!btn) return '';
+        const rect = btn.getBoundingClientRect();
+        return Math.round(rect.width) + 'x' + Math.round(rect.height);
+      });
+      out.winCtlRegions = wcs.map((b) => {
+        const btn = b.querySelector('.win-ctl');
+        if (!btn) return '';
+        const st = getComputedStyle(btn);
+        return st.getPropertyValue('-webkit-app-region') || st.getPropertyValue('app-region') || '';
+      });
+      out.winCtlRightGap = wcs.length
+        ? Math.round(window.innerWidth - Math.max.apply(null, wcs.map((b) => b.getBoundingClientRect().right)))
+        : -1;
+      // 可见容器的按钮必须是 36x30；祖先隐藏（登录视图在 app 态下 hidden）测不出尺寸，跳过
+      out.winCtlSizeOk = wcs.every((b) => {
+        const btn = b.querySelector('.win-ctl');
+        if (!btn) return false;
+        const r = btn.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) return true;
+        return Math.round(r.width) === 36 && Math.round(r.height) === 30;
+      });
+      out.winCtlIcons = wcs.length
+        ? Array.prototype.map.call(
+          wcs[0].querySelectorAll('.win-ctl svg'),
+          (s) => (s.classList.contains('hidden') ? 'hidden:' : '') + (s.classList.contains('ico-max') ? 'max' : s.classList.contains('ico-restore') ? 'restore' : 'plain')
+        ).join('|')
+        : '';
+
+      // 边缘拖拽缩放热区（8 条：四边 + 四角）
+      const grips = document.getElementById('win-resize-grips');
+      out.gripsExists = !!grips;
+      out.gripCount = grips ? grips.querySelectorAll('.win-grip').length : 0;
+      out.gripEdges = grips ? Array.prototype.map.call(grips.querySelectorAll('.win-grip'), (g) => g.getAttribute('data-edge')).join('|') : '';
+      out.gripCursors = grips ? Array.prototype.map.call(grips.querySelectorAll('.win-grip'), (g) => getComputedStyle(g).cursor).join('|') : '';
+      out.gripRegion = grips && grips.querySelector('.win-grip')
+        ? (getComputedStyle(grips.querySelector('.win-grip')).getPropertyValue('-webkit-app-region') || '') : '';
+      out.gripContainerPE = grips ? getComputedStyle(grips).pointerEvents : '';
+      out.gripDisplay = grips ? getComputedStyle(grips).display : '';
+      out.winCtlModeText = !!(window.ideaNote.windowControls && window.ideaNote.windowControls.resizeStart) ? 'resize-api' : 'none';
 
       // 图片渲染：mock 的 image_url 是假七牛域名（必然加载失败）→ 应降级为占位且保留原地址
       out.hasLightbox = !!document.getElementById('image-lightbox');
@@ -349,6 +414,54 @@ app.whenReady().then(async () => {
     win.focus();
     await new Promise((r) => setTimeout(r, 500));
 
+    // ---- 边缘拖拽缩放（Windows 专属交互；force 模式在 macOS 上验证 pointer → IPC → setBounds 全链路）----
+    let resizeResult = { skipped: true };
+    if (process.env.IDEA_NOTE_FORCE_WIN_CONTROLS === '1') {
+      const resizeIpc = [];
+      ipcMain.on('window:resize-start', (_e, p) => resizeIpc.push(['start', p]));
+      ipcMain.on('window:resize-move', (_e, p) => resizeIpc.push(['move', p]));
+      ipcMain.on('window:resize-end', () => resizeIpc.push(['end']));
+      const startSize = win.getSize();
+      const fsResize = await win.webContents.executeJavaScript(`(async () => {
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        const out = {};
+        try {
+          const grip = document.querySelector('.win-grip[data-edge="right"]');
+          out.gripFound = !!grip;
+          if (!grip) return out;
+          const sx = Math.round(window.screenX + window.outerWidth - 4);
+          const sy = Math.round(window.screenY + 300);
+          out.before = [window.screenX, window.screenY, window.outerWidth, window.outerHeight];
+          out.seen = [];
+          ['pointerdown', 'pointermove', 'pointerup'].forEach((t) => {
+            document.addEventListener(t, (ev) => out.seen.push(t + ':' + ((ev.target && (ev.target.className || ev.target.nodeName)) || '?')), true);
+          });
+          grip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, isPrimary: true, screenX: sx, screenY: sy }));
+          await wait(50);
+          document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, isPrimary: true, screenX: sx + 60, screenY: sy }));
+          await wait(80);
+          document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, isPrimary: true, screenX: sx + 60, screenY: sy }));
+          await wait(80);
+          out.after = [window.screenX, window.screenY, window.outerWidth, window.outerHeight];
+        } catch (e) { out.err = String((e && e.stack) || e); }
+        return out;
+      })()`);
+      await new Promise((r) => setTimeout(r, 250));
+      const endSize = win.getSize();
+      resizeResult = {
+        skipped: false,
+        gripFound: fsResize.gripFound,
+        err: fsResize.err || null,
+        ipc: resizeIpc,
+        rendererBefore: fsResize.before || null,
+        rendererAfter: fsResize.after || null,
+        startSize,
+        endSize,
+        grewRight: (endSize[0] - startSize[0]) >= 55 && endSize[1] === startSize[1]
+      };
+    }
+    console.log('SMOKE_RESIZE=' + JSON.stringify(resizeResult));
+
     // 标签联想（窗口显示后 selection/focus 才正常，隐藏窗口 addRange 不生效）：
     // 编辑卡片时内容末尾带标签 → 光标进入后下拉弹出；
     // 光标移到普通文字（非标签输入态）→ 下拉应自动关闭，不再“跟着光标永不消失”
@@ -380,6 +493,19 @@ app.whenReady().then(async () => {
               out.suggestClosedAfterMove = !!(box && box.classList.contains('hidden'));
             }
             const card = editEl.closest('.memo-edit-card');
+            // 编辑卡片工具栏 @ 按钮：与顶部输入框一致——插入 ' @' 并弹出联系人联想
+            // （旧版是占位 toast「提及 · 敬请期待」，编辑态根本没法 @ 人）
+            const atBtn = card ? card.querySelector('[data-edit-tool="at"]') : null;
+            out.editAtBtnFound = !!atBtn;
+            if (atBtn) {
+              editEl.focus();
+              atBtn.click();
+              await wait(400); // 插入后 input 事件 → loadContacts IPC → 浮层渲染
+              out.editAtInserted = (editEl.textContent || '').indexOf('@') !== -1;
+              const atBox = document.querySelector('.tag-suggest.at-suggest');
+              out.editAtShown = !!(atBox && !atBox.classList.contains('hidden'));
+              out.editAtItems = atBox ? atBox.querySelectorAll('.tag-suggest-item').length : 0;
+            }
             const cancelBtn = card ? card.querySelector('[data-edit-tool="cancel"]') : null;
             if (cancelBtn) cancelBtn.click();
             await wait(150);
@@ -470,6 +596,64 @@ app.whenReady().then(async () => {
     const pageUrlPassedToCli = /^https:\/\/ideanote\.7373\.com\.cn\/notes\/smoke_abc123$/.test(lastMsg.pageUrl || '');
     console.log('SMOKE_PAGEURL=' + JSON.stringify({ sentCount: cliMessages.length, pageUrl: lastMsg.pageUrl || '', pageUrlPassedToCli }));
 
+    // @ 联想空态要带出失败原因：用户只看到「暂无联系人」时无法判断是打包问题还是 qz CLI 未登录。
+    // 直接对一份新的 AtSuggester 挂载验证 emptyText 选项（主输入框那次已缓存联系人，无法复现失败态）
+    const atEmptyHint = await win.webContents.executeJavaScript(`(async () => {
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+      const out = {};
+      const fake = document.createElement('div');
+      fake.contentEditable = 'true';
+      fake.textContent = '@';
+      document.body.appendChild(fake);
+      const composerLike = {
+        el: fake,
+        value: () => fake.textContent,
+        rawValue: () => fake.textContent,
+        caretOffset: () => fake.textContent.length,
+        replaceText: () => {},
+        focus: () => {},
+        clear: () => {}
+      };
+      try {
+        let attempts = 0;
+        const detach = window.AtSuggester.attach(composerLike, {
+          loadContacts: () => {
+            attempts++;
+            return Promise.resolve(attempts === 1 ? [] : [{ uid: 'u1', nickname: '张三', linkType: 2 }]);
+          },
+          emptyText: () => '暂无联系人（qz CLI 未登录）'
+        });
+        await wait(200);
+        const boxes = document.querySelectorAll('.tag-suggest.at-suggest');
+        const box = boxes.length ? boxes[boxes.length - 1] : null;
+        out.shown = !!(box && !box.classList.contains('hidden'));
+        out.text = box ? (box.querySelector('.tag-suggest-empty') || {}).textContent || '' : '';
+        // 空结果不缓存：越过 1.5s 冷却后再触发一次，必须重新拉取并渲染出联系人
+        await wait(1700);
+        fake.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait(400);
+        out.retryItems = box ? box.querySelectorAll('.tag-suggest-item').length : 0;
+        out.retryFirstName = box && box.querySelector('.tag-suggest-item') ? box.querySelector('.tag-suggest-item').textContent : null;
+        detach();
+      } catch (e) {
+        out.err = String((e && e.message) || e);
+      } finally {
+        if (fake.parentNode) fake.parentNode.removeChild(fake);
+      }
+      return out;
+    })()`);
+    console.log('SMOKE_AT_EMPTY_HINT=' + JSON.stringify(atEmptyHint));
+
+    // 静默更新检查失败不应弹 toast（2026-11-26 用户报：Windows 冷启动弹「更新失败：<一长串错误码>」）
+    await win.webContents.executeJavaScript("document.getElementById('toast').classList.add('hidden'); true");
+    win.webContents.send('updater:event', { event: 'error', message: '更新服务器暂未提供更新清单，请稍后再试', manual: false });
+    await new Promise((r) => setTimeout(r, 300));
+    const silentErrorToast = await win.webContents.executeJavaScript(`(() => {
+      const t = document.getElementById('toast');
+      return { visible: !!t && !t.classList.contains('hidden'), text: t ? t.textContent : '' };
+    })()`);
+    console.log('SMOKE_UPDATER_SILENT=' + JSON.stringify(silentErrorToast));
+
     const image = await win.webContents.capturePage();
     fs.writeFileSync(path.join(__dirname, 'screenshot.png'), image.toPNG());
 
@@ -490,6 +674,27 @@ app.whenReady().then(async () => {
 
     const pass =
       result.loginHidden && result.appVisible &&
+      result.winCtlBoxCount === 2 &&
+      JSON.stringify(result.winCtlCounts) === JSON.stringify([3, 3]) &&
+      JSON.stringify(result.winCtlInDragParent) === JSON.stringify([true, true]) &&
+      result.gripsExists === true && result.gripCount === 8 &&
+      result.gripEdges === 'top|bottom|left|right|top-left|top-right|bottom-left|bottom-right' &&
+      result.gripRegion === 'no-drag' &&
+      result.gripContainerPE === 'none' &&
+      result.winCtlModeText === 'resize-api' &&
+      (process.env.IDEA_NOTE_FORCE_WIN_CONTROLS === '1'
+        ? (resizeResult.skipped === false && resizeResult.grewRight === true)
+        : resizeResult.skipped === true) &&
+      (result.platformWinClass === true
+        ? (JSON.stringify(result.winCtlSelfShown) === JSON.stringify([true, true])
+           && result.winCtlRectMax > 0
+           && result.winCtlSizeOk === true
+           && JSON.stringify(result.winCtlRegions) === JSON.stringify(['no-drag', 'no-drag'])
+           && typeof result.winCtlRightGap === 'number' && result.winCtlRightGap >= 0 && result.winCtlRightGap <= 60
+           && result.gripDisplay === 'block')
+        : (JSON.stringify(result.winCtlSelfShown) === JSON.stringify([false, false])
+           && result.winCtlRectMax === 0
+           && result.gripDisplay === 'none')) &&
       result.userName === '测试用户' &&
       result.cardCount === 2 &&
       result.sidebarTagCount === 2 &&
@@ -525,6 +730,11 @@ app.whenReady().then(async () => {
       editResult.suggestShownOnEnter === true &&
       editResult.suggestClosedAfterMove === true &&
       editResult.editCanceled === true &&
+      // 编辑卡片工具栏 @：插入 ' @' 且弹出联系人联想（此前是占位 toast）
+      editResult.editAtBtnFound === true &&
+      editResult.editAtInserted === true &&
+      editResult.editAtShown === true &&
+      editResult.editAtItems > 0 &&
       !editResult.tagSuggestErr &&
       // @联系人联想 + 提及通知
       atResult.atShown1 === true &&
@@ -538,8 +748,14 @@ app.whenReady().then(async () => {
       atResult.notifySentCount === 1 &&
       atResult.notifySentName === '测试联系人' &&
       pageUrlPassedToCli === true &&
+      // 空态提示带原因（避免只看到「暂无联系人」无法定位）+ 空结果不缓存（下次触发重试）
+      atEmptyHint.shown === true &&
+      /qz CLI 未登录/.test(atEmptyHint.text || '') &&
+      atEmptyHint.retryItems === 1 &&
       // @ 分享页删除联动：删除含 @ 笔记时 unpublish 收到对应 id
       unpublishCalls.includes(String(atResult.mentionsCreatedId || '')) &&
+      // 静默更新检查失败不弹 toast（2026-11-26 用户报 Windows 冷启动「更新失败 + 长错误码」）
+      silentErrorToast.visible === false &&
       !atResult.atErr;
 
     console.log('SMOKE_PASS=' + pass);

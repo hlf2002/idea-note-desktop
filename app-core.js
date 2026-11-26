@@ -375,8 +375,14 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
   // 联系人列表：@ 联想下拉的数据源（qz friend list）
   ipcMain.handle('mentions:contacts', () => guard(async () => {
     const av = await cli.isAvailable();
-    if (!av.ok) return { ok: false, error: av.message || 'qz CLI 不可用' };
-    return { ok: true, contacts: await cli.listContacts() };
+    if (!av.ok) {
+      // 把失败原因写进主进程日志：用户只看到「暂无联系人」时，靠这行定位是没装/没登录/超时
+      console.warn('[mentions] qz CLI 不可用: ' + (av.reason || '') + (av.message ? ' / ' + av.message : ''));
+      return { ok: false, error: av.message || 'qz CLI 不可用' };
+    }
+    const contacts = await cli.listContacts();
+    if (!contacts.length) console.warn('[mentions] qz CLI 可用但联系人列表为空（检查 qz 登录态/网络）');
+    return { ok: true, contacts };
   }));
   // 发布后通知 @ 的联系人：解析正文 @昵称 → 匹配联系人 → 逐人发私信
   // 通知内容附上网站分享页链接（先生成分享页；失败则降级为不带链接的普通通知）
