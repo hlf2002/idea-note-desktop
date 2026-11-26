@@ -493,6 +493,19 @@ app.whenReady().then(async () => {
               out.suggestClosedAfterMove = !!(box && box.classList.contains('hidden'));
             }
             const card = editEl.closest('.memo-edit-card');
+            // 编辑卡片工具栏 @ 按钮：与顶部输入框一致——插入 ' @' 并弹出联系人联想
+            // （旧版是占位 toast「提及 · 敬请期待」，编辑态根本没法 @ 人）
+            const atBtn = card ? card.querySelector('[data-edit-tool="at"]') : null;
+            out.editAtBtnFound = !!atBtn;
+            if (atBtn) {
+              editEl.focus();
+              atBtn.click();
+              await wait(400); // 插入后 input 事件 → loadContacts IPC → 浮层渲染
+              out.editAtInserted = (editEl.textContent || '').indexOf('@') !== -1;
+              const atBox = document.querySelector('.tag-suggest.at-suggest');
+              out.editAtShown = !!(atBox && !atBox.classList.contains('hidden'));
+              out.editAtItems = atBox ? atBox.querySelectorAll('.tag-suggest-item').length : 0;
+            }
             const cancelBtn = card ? card.querySelector('[data-edit-tool="cancel"]') : null;
             if (cancelBtn) cancelBtn.click();
             await wait(150);
@@ -669,6 +682,11 @@ app.whenReady().then(async () => {
       editResult.suggestShownOnEnter === true &&
       editResult.suggestClosedAfterMove === true &&
       editResult.editCanceled === true &&
+      // 编辑卡片工具栏 @：插入 ' @' 且弹出联系人联想（此前是占位 toast）
+      editResult.editAtBtnFound === true &&
+      editResult.editAtInserted === true &&
+      editResult.editAtShown === true &&
+      editResult.editAtItems > 0 &&
       !editResult.tagSuggestErr &&
       // @联系人联想 + 提及通知
       atResult.atShown1 === true &&

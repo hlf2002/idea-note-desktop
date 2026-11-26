@@ -859,9 +859,17 @@
       });
       composer.setValue(memo.content);
       // 标签联想：与顶部输入框同一套交互
-      const detachSuggester = window.TagSuggester.attach(composer, {
+      const detachTagSuggester = window.TagSuggester.attach(composer, {
         getTags: () => window.Tags.countByMemos(state.memos).map((t) => t.name)
       });
+      // @联系人联想：编辑卡片与顶部输入框行为一致（此前只挂了标签联想，编辑态无法 @ 人）
+      const detachAtSuggester = window.AtSuggester.attach(composer, {
+        loadContacts: () => window.ideaNote.mentions.contacts().then((r) => (r && r.ok ? r.contacts : []))
+      });
+      function detachSuggesters() {
+        detachTagSuggester();
+        detachAtSuggester();
+      }
 
       async function saveEdit(val) {
         // 允许纯图片笔记：没文字但有图也能保存
@@ -872,15 +880,18 @@
         }
         try {
           const updated = await window.ideaNote.sync.update(memo.id, val || '', uploadedImageIds(editImages));
-          detachSuggester();
+          detachSuggesters();
           state.editingId = null;
           upsertLocal(updated);
+          // @ 提及通知：只在本次编辑新增了 @联系人时发（原稿已有的 @ 不重复打扰）
+          const added = atNamesIn(val).filter((n) => atNamesIn(memo.content).indexOf(n) === -1);
+          if (added.length) await notifyMentions(val, memo.id);
         } catch (err) {
           handleSyncError(err, '保存失败');
         }
       }
       function cancelEdit() {
-        detachSuggester();
+        detachSuggesters();
         state.editingId = null;
         renderList();
       }
@@ -891,7 +902,7 @@
       tb.querySelector('[data-edit-tool="font"]').addEventListener('click', () => showToast('支持 Markdown 语法：**加粗**、*斜体*、`代码`'));
       tb.querySelector('[data-edit-tool="ul"]').addEventListener('click', () => composer.insertText('- '));
       tb.querySelector('[data-edit-tool="ol"]').addEventListener('click', () => composer.insertText('1. '));
-      tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => showToast('提及 · 敬请期待'));
+      tb.querySelector('[data-edit-tool="at"]').addEventListener('click', () => composer.insertText(' @'));
       tb.querySelector('[data-edit-tool="save"]').addEventListener('click', () => saveEdit(composer.value()));
       tb.querySelector('[data-edit-tool="cancel"]').addEventListener('click', cancelEdit);
       // Esc 取消（composer 只处理 Enter，这里兜底）
@@ -1896,6 +1907,45 @@
     }).observe(composerZone);
   }
 
+  /**
+   * 正文里的 @昵称（与 qz/cli.js extractMentions 同一套规则：@ 前必须独立成词，避免邮箱误判）。
+   * 仅用于渲染层判断「有没有 @ 人」/「编辑时是否新增了 @ 人」。
+   */
+  function atNamesIn(text) {
+    const s = String(text == null ? '' : text);
+    const out = [];
+    const re = /@([\u4e00-\u9fa5A-Za-z0-9_-]+)/g;
+    let m;
+    while ((m = re.exec(s))) {
+      const prev = m.index > 0 ? s.charAt(m.index - 1) : '';
+      if (prev && /[\u4e00-\u9fa5A-Za-z0-9_-]/.test(prev)) continue;
+      out.push(m[1]);
+    }
+    return out;
+  }
+
+  /**
+   * @ 提及通知（新建与编辑共用）：想法已落库后调用，通知失败/不可用不阻塞。
+   * @param {string} text 想法全文
+   * @param {string} ideaId 笔记 id（分享页联动删除用）
+   */
+  async function notifyMentions(text, ideaId) {
+    try {
+      const notify = await window.ideaNote.mentions.notify(text, ideaId);
+      if (notify && notify.ok && Array.isArray(notify.sent) && notify.sent.length) {
+        const sent = notify.sent.filter((s) => s.ok);
+        const failed = notify.sent.filter((s) => !s.ok);
+        if (sent.length && !failed.length) showToast('已通知 ' + sent.length + ' 位联系人');
+        else if (sent.length && failed.length) showToast('已通知 ' + sent.length + ' 位，' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、') + ' 未送达', 4000);
+        else showToast('@通知未送达：' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、'), 4000);
+      } else if (notify && notify.error) {
+        showToast('已保存，但 @通知不可用：' + notify.error, 4000);
+      }
+    } catch (e) {
+      console.warn('[mentions] 通知失败: ' + ((e && e.message) || e));
+    }
+  }
+
   async function saveMemo() {
     if (state.view === 'trash') return; // 回收站视图下输入区已隐藏，防御
     const val = state.composer.value();
@@ -1922,22 +1972,7 @@
         updateFeedScrollbar();
       }
       // @ 提及通知：想法已发布，通知失败/不可用不阻塞（qz CLI 仅本机可用）
-      if (/@[^\s@#]/.test(val)) {
-        try {
-          const notify = await window.ideaNote.mentions.notify(val, memo.id);
-          if (notify && notify.ok && Array.isArray(notify.sent) && notify.sent.length) {
-            const sent = notify.sent.filter((s) => s.ok);
-            const failed = notify.sent.filter((s) => !s.ok);
-            if (sent.length && !failed.length) showToast('已通知 ' + sent.length + ' 位联系人');
-            else if (sent.length && failed.length) showToast('已通知 ' + sent.length + ' 位，' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、') + ' 未送达', 4000);
-            else showToast('@通知未送达：' + failed.map((f) => f.name + (f.error ? '(' + f.error + ')' : '')).join('、'), 4000);
-          } else if (notify && notify.error) {
-            showToast('想法已发布，但 @通知不可用：' + notify.error, 4000);
-          }
-        } catch (e) {
-          console.warn('[mentions] 通知失败: ' + ((e && e.message) || e));
-        }
-      }
+      if (atNamesIn(val).length) await notifyMentions(val, memo.id);
       state.composer.focus();
     } catch (err) {
       handleSyncError(err, '保存失败');
