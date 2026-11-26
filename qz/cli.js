@@ -62,39 +62,87 @@ class QzCli {
   }
 
   /**
-   * 探测 qz CLI：固定路径 > PATH（用户已装的优先）> 应用捆绑（asar 内 dist/cmd.js，走 ELECTRON_RUN_AS_NODE）。
-   * @returns {{bin: string, bundled: boolean}|null} null 表示完全找不到
+   * 候选 qz CLI（按优先级）：用户已装（固定路径 > PATH）→ 应用捆绑（asar 内 dist/cmd.js）。
+   * 保留「用户已装优先」（版本可能更新），但它依赖系统 node 的 ABI：打包版从 Finder 启动时
+   * PATH 里只有 /opt/homebrew 的 node（ABI 137），而 qz 的 better_sqlite3.node 可能按别的
+   * node 编译（ABI 147）→ 子进程一跑就 NODE_MODULE_VERSION 崩溃。所以 run() 会按顺序降级到
+   * 下一个候选：捆绑版走 ELECTRON_RUN_AS_NODE，ABI 与 Electron 一致，不依赖系统 node。
+   * @returns {{bin: string, bundled: boolean}[]}
    */
-  resolveBin() {
-    if (this.binPath && fs.existsSync(this.binPath)) return { bin: this.binPath, bundled: false };
+  resolveCandidates() {
+    const out = [];
+    const push = (bin, bundled) => {
+      if (!bin) return;
+      if (out.some((c) => c.bin === bin)) return;
+      out.push({ bin, bundled });
+    };
+    if (this.binPath && fs.existsSync(this.binPath)) push(this.binPath, false);
     for (const p of CANDIDATE_BINS) {
       try {
         fs.accessSync(p, fs.constants.X_OK);
-        return { bin: p, bundled: false };
+        push(p, false);
       } catch (e) { /* continue */ }
     }
-    for (const dir of (process.env.PATH || '').split(':')) {
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
       if (!dir) continue;
       const p = path.join(dir, 'qz');
       if (fs.existsSync(p)) {
         try {
           fs.accessSync(p, fs.constants.X_OK);
-          return { bin: p, bundled: false };
+          push(p, false);
         } catch (e) { /* continue */ }
       }
     }
-    const entry = bundledCliEntry(this.appPath);
-    if (entry) return { bin: entry, bundled: true };
-    return null;
+    push(bundledCliEntry(this.appPath), true);
+    return out;
   }
 
-  /** 执行一条 qz 命令，解析 stdout JSON；任何异常都返回 { status:'error', ... } 不 throw */
-  run(args, timeoutMs) {
-    const found = this.resolveBin();
-    if (!found) return Promise.resolve({ status: 'error', code: 'CLI_NOT_FOUND', message: '未找到 qz CLI', data: null });
+  /**
+   * 首选 qz CLI（用户已装 > 捆绑）。
+   * @returns {{bin: string, bundled: boolean}|null} null 表示完全找不到
+   */
+  resolveBin() {
+    return this.resolveCandidates()[0] || null;
+  }
+
+  /** 执行一条 qz 命令：按候选顺序尝试，首个候选「起不来/崩了」自动降级到下一个。
+   *  业务错误（qz 正常返回 status=error 的 JSON）不降级，原样返回。
+   *  @returns {Promise<{status:string, code:string, message?:string, data:any}>} 不 throw */
+  async run(args, timeoutMs) {
+    if (!this._badBins) this._badBins = new Set();
+    const cands = this.resolveCandidates().filter((c) => !this._badBins.has(c.bin));
+    if (!cands.length) {
+      return { status: 'error', code: 'CLI_NOT_FOUND', message: '未找到可用的 qz CLI', data: null };
+    }
+    let last = null;
+    for (let i = 0; i < cands.length; i++) {
+      const found = cands[i];
+      const r = await this._runOnce(found, args, timeoutMs);
+      if (r.data && r.data.status) {
+        this._lastBin = found.bin;
+        return r; // qz 正常应答（含业务错误），不再降级
+      }
+      if (r.status === 'success') {
+        this._lastBin = found.bin;
+        return r;
+      }
+      last = r;
+      // 起不来 / 崩溃才换下一个；并记录坏候选，避免每次都重试（本次进程内）
+      const broken = r.code === 'CLI_SPAWN' || r.code === 'CLI_EXIT';
+      if (broken) {
+        this._badBins.add(found.bin);
+        const hint = /NODE_MODULE_VERSION/.test(r.message || '') ? '（原生模块 ABI 与运行 node 不匹配）' : '';
+        console.warn('[qz-cli] 候选不可用，降级到下一个: ' + found.bin + hint + ' / ' + (r.message || '').split('\n').slice(0, 3).join(' '));
+      }
+    }
+    return last;
+  }
+
+  /** 用指定候选执行一次（内部） */
+  _runOnce(found, args, timeoutMs) {
     const env = {
       ...process.env,
-      PATH: [process.env.PATH, ...EXTRA_PATH].filter(Boolean).join(':')
+      PATH: [process.env.PATH, ...EXTRA_PATH].filter(Boolean).join(path.delimiter)
     };
     // 捆绑版：cmd.js 是 Node 脚本，用当前 Electron 可执行文件以纯 Node 模式运行
     const bin = found.bundled ? process.execPath : found.bin;
@@ -147,7 +195,8 @@ class QzCli {
     if (!found) return { ok: false, reason: 'cli_not_found', binPath: '' };
     const r = await this.run(['auth', 'status']);
     if (r.status === 'success' && r.data && r.data.uid) {
-      return { ok: true, binPath: found.bin };
+      // 报告实际应答的那份 CLI（可能是降级后的捆绑版，不是首选候选）
+      return { ok: true, binPath: this._lastBin || found.bin };
     }
     return { ok: false, reason: r.code || 'auth_failed', message: r.message || 'qz CLI 未登录' };
   }

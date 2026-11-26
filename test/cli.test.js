@@ -6,6 +6,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const {
   extractMentions,
   resolveMentions,
@@ -13,7 +16,8 @@ const {
   makeNotifyText,
   sortContactsByLastActive,
   attachAgentTitles,
-  bundledCliEntry
+  bundledCliEntry,
+  QzCli
 } = require('../qz/cli');
 
 // ============ extractMentions ============
@@ -284,4 +288,60 @@ test('attachAgentTitles: 非法输入返回空数组', () => {
   assert.deepStrictEqual(attachAgentTitles(null, {}), []);
   assert.deepStrictEqual(attachAgentTitles(undefined, {}), []);
   assert.deepStrictEqual(attachAgentTitles('x', {}), []);
+});
+
+// ============ 候选降级（打包版原生模块 ABI 不匹配时自动换捆绑 CLI） ============
+/** 造一个假 appPath（含 electron-builder 打包后的捆绑入口），cmd.js 内容可控 */
+function makeFakeAppPath(cmdJs) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzcli-app-'));
+  const cliDir = path.join(dir, 'node_modules', '@qzhuli', 'qzhuli-cli', 'dist');
+  fs.mkdirSync(cliDir, { recursive: true });
+  fs.writeFileSync(path.join(cliDir, 'cmd.js'), cmdJs);
+  return dir;
+}
+
+/** 造一个假的「坏 qz」：脚本退出码 1，stderr 打 ABI 报错 */
+function makeBrokenBin(stderrText) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzcli-bin-'));
+  const bin = path.join(dir, 'qz');
+  fs.writeFileSync(bin, '#!/bin/sh\necho "' + stderrText + '" >&2\nexit 1\n');
+  fs.chmodSync(bin, 0o755);
+  return bin;
+}
+
+test('resolveCandidates: 捆绑 CLI 永远排在最后（首选候选失败才能降级）', () => {
+  const appPath = makeFakeAppPath('console.log("{}")');
+  const cli = new QzCli({ appPath });
+  const c = cli.resolveCandidates();
+  assert.ok(c.length >= 1, '至少应有捆绑候选');
+  assert.strictEqual(c[c.length - 1].bundled, true);
+  assert.ok(c[c.length - 1].bin.endsWith(path.join('node_modules', '@qzhuli', 'qzhuli-cli', 'dist', 'cmd.js')));
+});
+
+test('run: 首选候选 ABI 崩溃时自动降级，仍能拿到结果', async () => {
+  const bad = makeBrokenBin('Error: NODE_MODULE_VERSION 147');
+  const appPath = makeFakeAppPath(
+    'console.log(JSON.stringify({status:"success",code:"OK",data:{links:[{uid:"u1",nickname:"甲"}]}}))'
+  );
+  const cli = new QzCli({ appPath, binPath: bad });
+  // 固定候选为「坏 qz → 捆绑 CLI」，避免机器上真实安装的 qz 干扰断言
+  cli.resolveCandidates = () => [{ bin: bad, bundled: false }, { bin: bundledCliEntry(appPath), bundled: true }];
+  const r = await cli.run(['friend', 'list']);
+  assert.strictEqual(r.status, 'success');
+  assert.ok(r.data && r.data.links && r.data.links.length === 1, '降级后的捆绑 CLI 必须真的被执行');
+  assert.ok(cli._badBins.has(bad), '坏候选应被记录，避免每次重试');
+  assert.strictEqual(cli._lastBin, bundledCliEntry(appPath), '应记录实际应答的那份 CLI');
+});
+
+test('run: 业务错误（正常 JSON status=error）不触发降级', async () => {
+  const cli = new QzCli({
+    appPath: makeFakeAppPath('console.log(JSON.stringify({status:"success",code:"SHOULD_NOT_RUN"}))'),
+    binPath: makeBrokenBin('placeholder')
+  });
+  // 用一个「正常应答业务错误」的候选：直接覆盖 _runOnce 返回，验证不降级
+  cli.resolveCandidates = () => [{ bin: '/fake/qz-outdated', bundled: false }];
+  cli._runOnce = async () => ({ status: 'error', code: 'AUTH_EXPIRED', message: 'token 过期', data: { status: 'error', code: 'AUTH_EXPIRED' } });
+  const r = await cli.run(['auth', 'status']);
+  assert.strictEqual(r.code, 'AUTH_EXPIRED');
+  assert.strictEqual(r.data.status, 'error');
 });
