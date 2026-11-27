@@ -159,7 +159,8 @@ class QzCli {
   }
 
   /**
-   * 首选 qz CLI（用户已装 > 捆绑）。
+   * 首选 qz CLI（顺序与 resolveCandidates 一致：mac/linux 用户已装优先，Windows 绑定捆绑版优先）。
+   * 注意：这是「第一个候选」，不代表可用；run() 会按候选顺序降级。
    * @returns {{bin: string, bundled: boolean}|null} null 表示完全找不到
    */
   resolveBin() {
