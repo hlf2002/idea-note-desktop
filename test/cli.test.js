@@ -497,6 +497,45 @@ test('_log: 诊断信息落盘（Windows 安装版没有终端，只能靠文件
   assert.ok(txt.includes('测试诊断一行'));
 });
 
+test('setLogFile: 设置即落盘启动行（文件必须立刻存在，否则用户按指示找不到）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzlog-'));
+  const file = path.join(dir, 'qz-cli.log');
+  const cli = new QzCli({});
+  cli.resolveCandidates = () => [
+    { bin: '/fake/qz', bundled: false },
+    { bin: '/fake/app/node_modules/@qzhuli/qzhuli-cli/dist/cmd.js', bundled: true }
+  ];
+  cli.setLogFile(file);
+  assert.ok(fs.existsSync(file), 'setLogFile 后文件必须立刻存在');
+  const txt = fs.readFileSync(file, 'utf8');
+  assert.ok(txt.includes('诊断日志启用'), '启动行要能看出候选清单');
+  assert.ok(txt.includes('bundled'), '候选要标出捆绑版');
+});
+
+test('run: 成功路径也落日志（命令标签 + 候选 + 耗时）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzlog-'));
+  const file = path.join(dir, 'qz-cli.log');
+  const cli = new QzCli({ logFile: file });
+  cli.resolveCandidates = () => [{ bin: '/fake/bundled/cmd.js', bundled: true }];
+  cli._runOnce = async () => ({ status: 'success', code: 'OK', data: { links: [] } });
+  const r = await cli.run(['friend', 'list']);
+  assert.strictEqual(r.status, 'success');
+  const txt = fs.readFileSync(file, 'utf8');
+  assert.ok(/run friend list → ok via bundled \d+ms/.test(txt), '正常调用也要留痕: ' + txt);
+});
+
+test('run: 日志不落参数值（笔记正文/@昵称不进日志文件）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzlog-'));
+  const file = path.join(dir, 'qz-cli.log');
+  const cli = new QzCli({ logFile: file });
+  cli.resolveCandidates = () => [{ bin: '/fake/qz', bundled: false }];
+  cli._runOnce = async () => ({ status: 'success', code: 'OK', data: {} });
+  await cli.run(['message', 'send', '--role', '1', '--text', '机密正文内容']);
+  const txt = fs.readFileSync(file, 'utf8');
+  assert.ok(!txt.includes('机密正文内容'), '参数值不得写进日志');
+  assert.ok(txt.includes('run message send'), '命令标签要保留');
+});
+
 /** 造一个「延迟出二维码」的假 CLI：delayMs 后输出真实二维码样本 */
 function makeSlowQrBin(delayMs) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzslow-'));

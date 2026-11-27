@@ -86,7 +86,22 @@ class QzCli {
   /** 设置诊断日志文件（主进程按 userData 传入；每次写前做体积上限保护） */
   setLogFile(file) {
     this.logFile = String(file || '');
+    // 立刻写一行：否则「正常路径不写日志」时文件永远不存在，用户按指示找不到、没法回传。
+    if (this.logFile) {
+      let brief = 'probe-error';
+      try {
+        const c = this.resolveCandidates();
+        brief = c.length ? c.map((x) => (x.bundled ? 'bundled' : path.basename(x.bin))).join(',') : 'none';
+      } catch (e) { /* 探针失败不影响主流程 */ }
+      this._log('诊断日志启用 platform=' + this.platform + ' 候选=' + brief + ' appPath=' + (this.appPath || '-'));
+    }
     return this;
+  }
+
+  /** 命令标签：只取前两个参数（命令 + 子命令），绝不记录参数值（可能含笔记正文/@昵称） */
+  _cmdLabel(args) {
+    const a = Array.isArray(args) ? args : [];
+    return a.slice(0, 2).map((x) => String(x)).join(' ');
   }
 
   /** 写诊断日志：始终 console.warn，能写文件时一并落盘（失败静默，绝不影响主流程） */
@@ -184,15 +199,22 @@ class QzCli {
       return { status: 'error', code: 'CLI_NOT_FOUND', message: '未找到可用的 qz CLI', data: null };
     }
     let last = null;
+    const label = this._cmdLabel(args);
     for (let i = 0; i < cands.length; i++) {
       const found = cands[i];
+      const via = found.bundled ? 'bundled' : path.basename(found.bin);
+      const t0 = Date.now();
       const r = await this._runOnce(found, args, timeoutMs);
+      const ms = Date.now() - t0;
       if (r.data && r.data.status) {
         this._lastBin = found.bin;
+        // 成功路径也落日志：用户回传后能一眼确认「哪个 CLI、哪种调用、多快」
+        this._log('run ' + label + ' → qz应答 status=' + r.data.status + ' via ' + via + ' ' + ms + 'ms');
         return r; // qz 正常应答（含业务错误），不再降级
       }
       if (r.status === 'success') {
         this._lastBin = found.bin;
+        this._log('run ' + label + ' → ok via ' + via + ' ' + ms + 'ms');
         return r;
       }
       last = r;
@@ -204,6 +226,7 @@ class QzCli {
         this._log('候选不可用，降级到下一个: ' + found.bin + hint + ' / ' + (r.message || '').split('\n').slice(0, 3).join(' '));
       }
     }
+    if (last) this._log('run ' + label + ' → 全部候选失败 ' + (last.code || 'unknown'));
     return last;
   }
 
