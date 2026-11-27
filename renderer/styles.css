@@ -1061,3 +1061,57 @@ html, body {
 .win-grip.grip-tr { top: 0; right: 0; width: 16px; height: 16px; cursor: nesw-resize; }
 .win-grip.grip-bl { bottom: 0; left: 0; width: 16px; height: 16px; cursor: nesw-resize; }
 .win-grip.grip-br { bottom: 0; right: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+
+/* ===== Q助理 扫码登录浮层（qz CLI 未登录时自动发起，二维码在应用内显示） ===== */
+.qz-login-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(45, 32, 22, 0.42);
+  -webkit-app-region: no-drag;
+}
+.qz-login-card {
+  background: #fffdf8;
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 22px 24px 16px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  text-align: center;
+  max-width: 92vw;
+  max-height: 92vh;
+  overflow: auto;
+}
+.qz-login-title { font-size: 16px; color: var(--text); margin-bottom: 6px; }
+.qz-login-sub { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+/* 静区（白边）由 qrbox 的内边距 + SVG 自带 quiet zone 提供，扫码器需要 */
+.qz-login-qrbox { background: #fff; padding: 10px; border-radius: 8px; display: inline-block; }
+.qz-login-qr { display: block; line-height: 0; }
+.qz-login-qr svg { display: block; width: 260px; height: 260px; }
+/* 兜底：SVG 解析失败时直接显示终端字符（依赖等宽字体，仅作降级） */
+.qz-login-qr:not(.is-svg) {
+  font-family: Menlo, Monaco, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.2;
+  letter-spacing: 0;
+  white-space: pre;
+  color: #111;
+  background: #fff;
+  margin: 0;
+}
+.qz-login-status { font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 16px; }
+.qz-login-actions { display: flex; gap: 10px; justify-content: center; margin-top: 12px; }
+.qz-login-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-side);
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.qz-login-btn:hover { background: #efdfc4; }
+.qz-login-btn.ghost { background: transparent; color: var(--muted); }
+.qz-login-btn.ghost:hover { background: #f6ecdd; }

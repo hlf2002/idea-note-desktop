@@ -17,6 +17,9 @@ const {
   sortContactsByLastActive,
   attachAgentTitles,
   bundledCliEntry,
+  stripAnsi,
+  extractQrBlock,
+  cliErrorMessage,
   QzCli
 } = require('../qz/cli');
 
@@ -344,4 +347,59 @@ test('run: 业务错误（正常 JSON status=error）不触发降级', async () 
   const r = await cli.run(['auth', 'status']);
   assert.strictEqual(r.code, 'AUTH_EXPIRED');
   assert.strictEqual(r.data.status, 'error');
+});
+
+// ============ 扫码登录：终端二维码提取（qz auth login） ============
+// 样本取自真实 `qz auth login --method qr-code` 的 stdout（qrcode-terminal small 模式，
+// 每行 35 字符、18 行；实心字符=黑模块，浏览器里白底黑字即标准二维码）
+const QR_SAMPLE = [
+  '▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄',
+  '█ ▄▄▄▄▄ █▄▀ ▀ █▄█  █▄▀ ▄ ▄█ ▄▄▄▄▄ █',
+  '█ █   █ █   █▀ ▀▄▀▀██▄█▄█▄█ █   █ █',
+  '█ █▄▄▄█ █▄█▀ ▄ ██  █ ▀▄ ███ █▄▄▄█ █',
+  '█▄▄▄▄▄▄▄█▄█ █ █▄█ ▀ █ █ ▀▄█▄▄▄▄▄▄▄█',
+  '█ ▄▄▄▀▀▄▀ █ ▄ █ █▀▄▀▀▄ █   ▀▀▄  █ █',
+  '█ ▄▀  ▄▄ █  ▄▄▀▄▀███████▄█ ▄ ▀▀█▄ █',
+  '█▀█ ▀ █▄█▀▄▄▀ ▄ ▀▀▄▄▀██▄██▄█ ▄█▀███',
+  '█ ▄ ▀ █▄██▀▄ █▄ ▀▀█ ▄█ ▄█▄▄▀▄▄▀ ▀▀█',
+  '█ ▀▄▀▄▄▄█▄▄▀█▄ ▄▀█████▄█ ▀█ ▄  ▄█ █',
+  '██▀▀█  ▄▀ █▄▀█▄▀▄▄ ▄█▄▄▀▀▀▀ ▄▄▄▄▄██',
+  '█▀▄▄ ▀▄▄▄▀ ███▀▀▄ ▄  ▄▄ ▀  ▀▀█ █▄▀█',
+  '██▀▀▀██▄   ▄▀▀ ▄██▄▀▀▄██  ███▄▀▄█ █',
+  '█▄█▄▄▄▄▄█▀▀▄ █▄█▀▀ ▀  █▄█ ▄▄▄ ▀▀▀▄█',
+  '█ ▄▄▄▄▄ ██▀▀█ █▀███▀ ▄ ▄▄ █▄█  ▀▀▀█',
+  '█ █   █ █▀▄█▄▀▄▀▀█▀▄██▄█▄▄▄▄ ▄ ▄▀▄█',
+  '█ █▄▄▄█ █  ▄▄ █▄  ▀ █▄▄ █▀▀ ▄▀▀▄▄▀█',
+  '█▄▄▄▄▄▄▄█▄██▄█▄█▄██▄▄▄▄▄██▄▄█▄█▄███'
+];
+const QR_RAW = '\x1B[2J\x1B[H正在生成二维码...\n\x1B[2J\x1B[H扫码登录\n\n'
+  + QR_SAMPLE.join('\n') + '\n\n\n请使用 Q 助理手机 App 扫描下方二维码。\n等待扫码中... 5min\n';
+
+test('stripAnsi: 去掉清屏/定位控制序列，保留中文', () => {
+  assert.strictEqual(stripAnsi('\x1B[2J\x1B[H扫码登录'), '扫码登录');
+  assert.strictEqual(stripAnsi(null), '');
+});
+
+test('extractQrBlock: 从真实输出里取出 18 行二维码', () => {
+  const block = extractQrBlock(QR_RAW);
+  assert.strictEqual(block, QR_SAMPLE.join('\n'));
+  assert.strictEqual(block.split('\n').length, 18);
+});
+
+test('extractQrBlock: 增量输出（先半截）也能取到完整块', () => {
+  const lines = QR_RAW.split('\n');
+  const half = lines.slice(0, 3 + 5).join('\n'); // 只有开头 5 行二维码
+  assert.strictEqual(extractQrBlock(half), '');
+  assert.strictEqual(extractQrBlock(QR_RAW), QR_SAMPLE.join('\n'));
+});
+
+test('extractQrBlock: 没有二维码 / 中文提示不误判', () => {
+  assert.strictEqual(extractQrBlock('请使用 Q 助理手机 App 扫描下方二维码。'), '');
+  assert.strictEqual(extractQrBlock(''), '');
+  assert.strictEqual(extractQrBlock(null), '');
+});
+
+test('cliErrorMessage: 提取 qz 输出的 message（含转义）', () => {
+  assert.strictEqual(cliErrorMessage('{"status":"error","message":"登录已失效，请重新登录。"}'), '登录已失效，请重新登录。');
+  assert.strictEqual(cliErrorMessage('no json here'), '');
 });

@@ -37,7 +37,19 @@ contextBridge.exposeInMainWorld('ideaNote', {
   media: {
     choose: () => ipcRenderer.invoke('dialog:openImages'),
     upload: (filePath) => ipcRenderer.invoke('media:upload', filePath),
-    index: () => ipcRenderer.invoke('media:index')
+    index: () => ipcRenderer.invoke('media:index'),
+    // 远端地址兜底（老数据/其他设备上传的图）：image_id -> CDN URL，以及按需补齐
+    remote: () => ipcRenderer.invoke('media:remote'),
+    backfill: () => ipcRenderer.invoke('media:backfill')
+  },
+  // qz CLI 扫码登录（@ 提及依赖本机 qz 登录态；未登录时应用直接发起扫码）
+  qzLogin: {
+    start: () => ipcRenderer.invoke('qz:login'),
+    cancel: () => ipcRenderer.invoke('qz:login-cancel'),
+    // 订阅登录事件：{ phase: 'qr'|'success'|'expired'|'error', text?, message? }
+    onEvent: (cb) => {
+      ipcRenderer.on('qz:login-event', (_e, payload) => cb(payload));
+    }
   },
   // 桌面小组件：推送某条笔记内容到桌面小组件
   widget: {

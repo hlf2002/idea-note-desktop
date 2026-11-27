@@ -40,6 +40,11 @@
     qrStatus: $('#qr-status'),
     qrExpire: $('#qr-expire'),
     qrRefresh: $('#qr-refresh'),
+    qzLoginModal: $('#qz-login-modal'),
+    qzLoginQr: $('#qz-login-qr'),
+    qzLoginStatus: $('#qz-login-status'),
+    qzLoginRefresh: $('#qz-login-refresh'),
+    qzLoginCancel: $('#qz-login-cancel'),
     userAvatar: $('#user-avatar'),
     userName: $('#user-name'),
     syncRefresh: $('#sync-refresh'),
@@ -1052,6 +1057,15 @@
   //  - 其他设备上传的图：本机没有副本 → 显示占位徽标，不显示破图。
   const MAX_IMAGES = 9; // 与 qz/config.js 的 IMAGE_MAX_COUNT 保持一致
   let mediaIndex = {};  // imageId -> 本机图片 file:// 地址
+  let mediaRemote = {}; // imageId -> 远端 CDN 地址（本机无副本时的兜底展示）
+
+  /** 七牛 CDN 图片缩略参数（非七牛域名原样返回） */
+  function thumbOf(url) {
+    const s = String(url == null ? '' : url);
+    if (!/res\.qzhuli\.com/i.test(s)) return s;
+    const sep = s.includes('?') ? '&' : '?';
+    return s + sep + 'imageView2/2/w/360/format/jpeg';
+  }
 
   /** 拉取本地图片映射（启动、同步后调用） */
   async function refreshMediaIndex() {
@@ -1061,8 +1075,39 @@
     } catch (e) {
       mediaIndex = {};
     }
+    try {
+      const map = window.ideaNote && window.ideaNote.media && window.ideaNote.media.remote
+        ? await window.ideaNote.media.remote()
+        : {};
+      mediaRemote = (map && typeof map === 'object') ? map : {};
+    } catch (e) {
+      mediaRemote = {};
+    }
     return mediaIndex;
   }
+
+  /**
+   * 补齐「本机没有副本」的图片远端地址（老数据 / 其他设备上传）。
+   * 数据来自 qz CLI 的内部接口；未登录时静默跳过，不打扰用户。
+   * @returns {Promise<boolean>} 是否有新地址补齐（true 时需要重渲染）
+   */
+  let mediaBackfillRunning = false;
+  async function backfillMediaOnce() {
+    if (mediaBackfillRunning) return false;
+    if (!(window.ideaNote && window.ideaNote.media && window.ideaNote.media.backfill)) return false;
+    mediaBackfillRunning = true;
+    try {
+      const r = await window.ideaNote.media.backfill();
+      if (r && r.map && typeof r.map === 'object') {
+        const before = Object.keys(mediaRemote).length;
+        mediaRemote = r.map;
+        return Object.keys(mediaRemote).length > before;
+      }
+    } catch (e) { /* 静默：补齐失败不影响列表 */ }
+    finally { mediaBackfillRunning = false; }
+    return false;
+  }
+
 
   /**
    * memo -> 卡片展示用图片
@@ -1079,6 +1124,13 @@
       const url = mediaIndex[id];
       if (url) {
         if (!seen[url]) { seen[url] = true; images.push({ thumbnail: url, large: url }); }
+      } else if (mediaRemote[id]) {
+        // 本机没有副本（老数据/其他设备上传）：用内部接口给的 CDN 地址兜底展示
+        const remote = thumbOf(mediaRemote[id]);
+        if (!seen[remote]) {
+          seen[remote] = true;
+          images.push({ thumbnail: remote, large: mediaRemote[id] });
+        }
       } else {
         missing += 1;
       }
@@ -1357,6 +1409,8 @@
       // 同步后刷新本地图片映射：上传成功的那批图才能显示缩略图
       await refreshMediaIndex();
       renderAll();
+      // 本机没有副本的图（老数据/其他设备上传）：用内部接口的 CDN 地址兜底，补齐后重渲染
+      backfillMediaOnce().then((changed) => { if (changed) renderAll(); });
       cancelAuthRetry(); // 同步成功：清除自动重试
       refreshTrash();    // 后台刷新回收站计数徽标（不阻塞列表展示）
       return true;
@@ -1918,10 +1972,110 @@
         }
         lastError = (r && r.error) ? String(r.error) : 'qz CLI 不可用';
         console.warn('[mentions] 联系人加载失败: ' + lastError);
+        // qz CLI 未登录：直接调起扫码登录（用户不需要知道 qz CLI 与命令行）
+        if (r && r.reason === 'AUTH_FAILED') {
+          maybeAutoQzLogin();
+          lastError = 'Q助理未登录，正在打开扫码登录';
+        }
         return [];
       }),
       emptyText: () => (lastError ? '暂无联系人（' + lastError + '）' : '暂无联系人')
     };
+  }
+
+  // ---------- Q助理 扫码登录（本机 qz CLI 登录态；@ 提及依赖它） ----------
+  // 未登录时自动发起 `qz auth login` 并把二维码显示在应用内，绝不提示用户去终端跑命令。
+  let qzLoginVisible = false;
+  let qzLoginAutoAt = 0;
+
+  function setQzLoginStatus(text) {
+    if (el.qzLoginStatus) el.qzLoginStatus.textContent = text || '';
+  }
+
+  function openQzLoginModal() {
+    if (el.qzLoginModal) el.qzLoginModal.classList.remove('hidden');
+    qzLoginVisible = true;
+  }
+
+  function closeQzLoginModal() {
+    if (el.qzLoginModal) el.qzLoginModal.classList.add('hidden');
+    if (el.qzLoginQr) el.qzLoginQr.textContent = '';
+    qzLoginVisible = false;
+  }
+
+  /** 发起扫码登录（主进程 spawn qz CLI，二维码经 qz:login-event 推回来） */
+  async function startQzLogin() {
+    const api = window.ideaNote && window.ideaNote.qzLogin;
+    if (!api) return;
+    openQzLoginModal();
+    if (el.qzLoginQr) el.qzLoginQr.textContent = '';
+    setQzLoginStatus('正在生成二维码…');
+    try {
+      const r = await api.start();
+      if (r && r.ok === false) setQzLoginStatus(r.error || '无法发起登录');
+    } catch (e) {
+      setQzLoginStatus('无法发起登录');
+    }
+  }
+
+  /** 由 @ 联系人加载失败自动触发；1 分钟内不重复弹，避免反复打断输入 */
+  function maybeAutoQzLogin() {
+    if (qzLoginVisible) return;
+    if (Date.now() - qzLoginAutoAt < 60000) return;
+    qzLoginAutoAt = Date.now();
+    startQzLogin();
+  }
+
+  function initQzLoginUi() {
+    const api = window.ideaNote && window.ideaNote.qzLogin;
+    if (!api) return;
+    api.onEvent((p) => {
+      if (!p) return;
+      if (p.phase === 'qr') {
+        // 终端二维码字符 → 精确 SVG 模块（不依赖字体度量，手机一定可扫）；解析失败降级为文本
+        const svg = (window.QrCode && typeof window.QrCode.render === 'function')
+          ? window.QrCode.render(p.text, { moduleSize: 8, quiet: 4 })
+          : '';
+        if (el.qzLoginQr) {
+          if (svg) {
+            el.qzLoginQr.innerHTML = svg;
+            el.qzLoginQr.classList.add('is-svg');
+          } else {
+            el.qzLoginQr.textContent = p.text || '';
+            el.qzLoginQr.classList.remove('is-svg');
+          }
+        }
+        setQzLoginStatus('用 Q助理 App 扫一扫（5 分钟内有效）');
+        openQzLoginModal();
+        return;
+      }
+      if (p.phase === 'success') {
+        closeQzLoginModal();
+        showToast('Q助理 已登录，现在可以 @ 联系人');
+        return;
+      }
+      if (p.phase === 'expired') {
+        setQzLoginStatus('二维码已过期，点「刷新二维码」重新获取');
+        return;
+      }
+      if (p.phase === 'cancelled') {
+        closeQzLoginModal();
+        return;
+      }
+      setQzLoginStatus((p && p.message) || '登录失败，请重试');
+    });
+    if (el.qzLoginRefresh) {
+      el.qzLoginRefresh.addEventListener('click', () => {
+        api.cancel();
+        startQzLogin();
+      });
+    }
+    if (el.qzLoginCancel) {
+      el.qzLoginCancel.addEventListener('click', () => {
+        api.cancel();
+        closeQzLoginModal();
+      });
+    }
   }
 
   /**
@@ -2083,6 +2237,7 @@
     initWindowResizeGrips();
     bindEvents();
     initUpdaterUi();
+    initQzLoginUi();
     await refreshMediaIndex(); // 本地图片映射：决定卡片能否显示本机缩略图
     // 旧版内部接口登录态无法续期到开放平台：提示重新扫码一次
     try {

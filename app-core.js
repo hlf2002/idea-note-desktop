@@ -21,6 +21,7 @@ const { AuthStore } = require('./qz/auth');
 const { QzOpenApi } = require('./qz/openapi');
 const { IdeaSync } = require('./qz/sync');
 const { MediaStore, validateImage } = require('./qz/media');
+const { RemoteMediaStore, pairImageUrls } = require('./qz/media-remote');
 const { QzCli } = require('./qz/cli');
 const { publishNotePage, unpublishNotePages } = require('./qz/notes-page');
 const {
@@ -87,6 +88,10 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
   const mediaStore = new MediaStore({
     dir: path.join(baseDir, 'media'),
     indexFile: path.join(baseDir, 'media-index.json')
+  });
+  // 远端图片地址兜底（image_id → CDN URL）：本机副本优先，老数据/其他设备上传的图靠它展示
+  const remoteMediaStore = new RemoteMediaStore({
+    file: path.join(baseDir, 'media-remote.json')
   });
   // 本机 qz CLI（@ 提及通知用；spawn 子进程，不可用时不阻塞发布）
   // appPath 用于探测应用捆绑的 qzhuliCLI（asar 内 dist/cmd.js，ELECTRON_RUN_AS_NODE 运行）；
@@ -220,10 +225,40 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
     return { state };
   }
 
-  /** 注册登录相关 IPC（需要主窗口句柄） */
+  // ---------- qz CLI 扫码登录（@ 提及等本机能力依赖 qz 登录态） ----------
+  // 用户不知道 qz CLI 存在，未登录时绝不提示「请运行 qz auth login」——应用直接发起扫码登录，
+  // 二维码渲染在应用内（终端半块字符，白底黑字即可扫）。扫码成功后 CLI 自己落盘凭据。
+  let qzLoginHandle = null;
+  function cancelQzLogin() {
+    if (qzLoginHandle) {
+      try { qzLoginHandle.cancel(); } catch (e) { /* noop */ }
+      qzLoginHandle = null;
+    }
+  }
+
+  /** 注册登录相关 IPC（需要主窗口句柄）：开放平台授权登录 + qz CLI 扫码登录 */
   function registerAuthIpc(getWindow) {
     ipcMain.handle('auth:start', () => guard(() => startLogin(getWindow)));
     ipcMain.handle('auth:cancel', () => { cancelLogin(); return true; });
+    // 发起 qz CLI 扫码登录：事件经 qz:login-event 推给渲染层（qr / success / expired / error）
+    ipcMain.handle('qz:login', () => {
+      if (qzLoginHandle) return { ok: true, already: true };
+      if (typeof cli.startQrLogin !== 'function') return { ok: false, error: '当前版本不支持自动登录 qz CLI' };
+      const push = (payload) => {
+        if (payload && payload.phase !== 'qr') qzLoginHandle = null;
+        const win = getWindow && getWindow();
+        if (win && !win.isDestroyed()) win.webContents.send('qz:login-event', payload);
+      };
+      qzLoginHandle = cli.startQrLogin({ onEvent: push });
+      return { ok: true };
+    });
+    ipcMain.handle('qz:login-cancel', () => {
+      cancelQzLogin();
+      // 取消后统一通知渲染层关闭浮层（不论调用方是「以后再说」还是外部 API）
+      const win = getWindow && getWindow();
+      if (win && !win.isDestroyed()) win.webContents.send('qz:login-event', { phase: 'cancelled' });
+      return true;
+    });
   }
 
   // ---------- 灵感笔记同步（需登录） ----------
@@ -350,6 +385,64 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
     }
     return out;
   });
+  // 远端图片地址（image_id -> CDN URL）：本机无副本时的兜底展示
+  ipcMain.handle('media:remote', () => remoteMediaStore.map());
+
+  // ---------- 远端图片地址补齐（老数据/其他设备上传的图） ----------
+  // 开放平台只给 image_id，没有访问 URL；内部接口（qz CLI `note get <id>`）返回真实 CDN 地址。
+  // 只读查询，未登录/失败静默跳过（缺的图继续显示占位，不影响列表）。
+  let backfillPromise = null;
+  /**
+   * 补齐远端图片地址，结果写 media-remote.json（幂等，重复调用只查缺的）。
+   * @param {{limit?: number}} [opts] 单次最多处理多少条笔记（默认 20，防一次 500 条全查）
+   * @returns {Promise<{ok: boolean, fetched: number, pending: number, error: string, map: object}>}
+   */
+  function backfillRemoteMedia(opts = {}) {
+    if (backfillPromise) return backfillPromise;
+    const limit = Number(opts.limit) > 0 ? Number(opts.limit) : 20;
+    backfillPromise = (async () => {
+      const local = mediaStore.map();
+      const remote = remoteMediaStore.map();
+      const memos = sync.loadCache();
+      const needUrl = (m) => Array.isArray(m.imageIds) && m.imageIds.some((id) => id && !local[id] && !remote[id]);
+      const todo = memos.filter(needUrl);
+      if (!todo.length) return { ok: true, fetched: 0, pending: 0, error: '', map: remote };
+      if (typeof cli.noteImageUrls !== 'function') {
+        return { ok: false, fetched: 0, pending: todo.length, error: 'qz CLI 不可用', map: remote };
+      }
+      let fetched = 0;
+      let firstErr = '';
+      let done = 0;
+      for (const m of todo.slice(0, limit)) {
+        done += 1;
+        const urls = await cli.noteImageUrls(m.id);
+        if (!urls) { if (!firstErr) firstErr = 'qz CLI 未登录或查询失败'; continue; }
+        // 必须用完整 imageIds 配对（不是待补的子集）：否则第二次查询时数量恰好相等，
+        // 会把「已补齐那张」的 URL 顺序错配给另一张（错位比缺图更糟）
+        const paired = pairImageUrls(m.imageIds, urls);
+        const missing = m.imageIds.filter((id) => id && !local[id] && !remote[id]);
+        const byId = {};
+        for (const id of Object.keys(paired.byId)) {
+          if (missing.includes(id)) byId[id] = paired.byId[id];
+        }
+        const n = Object.keys(byId).length;
+        if (n) { remoteMediaStore.merge(byId); fetched += n; }
+        if (paired.leftovers.length) {
+          console.warn('[media] 笔记 ' + m.id + ' 有 ' + paired.leftovers.length + ' 张图无法对应 image_id，已跳过（避免错位）');
+        }
+      }
+      return {
+        ok: fetched > 0,
+        fetched,
+        pending: Math.max(0, todo.length - done),
+        error: fetched > 0 ? '' : firstErr,
+        map: remoteMediaStore.map()
+      };
+    })().finally(() => { backfillPromise = null; });
+    return backfillPromise;
+  }
+  ipcMain.handle('media:backfill', () => guard(() => backfillRemoteMedia()));
+
 
   // ---------- 其它 ----------
   ipcMain.handle('app:getDataPath', () => path.join(dataDir, 'idea-cache.json'));
@@ -378,7 +471,17 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
     if (!av.ok) {
       // 把失败原因写进主进程日志：用户只看到「暂无联系人」时，靠这行定位是没装/没登录/超时
       console.warn('[mentions] qz CLI 不可用: ' + (av.reason || '') + (av.message ? ' / ' + av.message : ''));
-      return { ok: false, error: av.message || 'qz CLI 不可用' };
+      // reason 供渲染层判断要不要直接拉起扫码登录；error 是给用户看的话术（绝不出现命令行）
+      const reason = String(av.reason || '');
+      let error = 'qz CLI 不可用';
+      if (reason === 'AUTH_FAILED' || /auth login|未登录|sessionExpired/i.test(String(av.message || ''))) {
+        error = 'Q助理未登录';
+      } else if (reason === 'cli_not_found' || reason === 'CLI_NOT_FOUND') {
+        error = '未找到 qz CLI';
+      } else if (reason === 'CLI_TIMEOUT') {
+        error = 'qz CLI 响应超时';
+      }
+      return { ok: false, reason, error };
     }
     const contacts = await cli.listContacts();
     if (!contacts.length) console.warn('[mentions] qz CLI 可用但联系人列表为空（检查 qz 登录态/网络）');
@@ -408,7 +511,7 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
     api.ensureFresh().catch((err) => console.warn('[auth] 启动续期失败: ' + (err && err.message)));
   }
 
-  return { authStore, api, sync, registerAuthIpc, cancelLogin };
+  return { authStore, api, sync, registerAuthIpc, cancelLogin, cancelQzLogin, backfillRemoteMedia };
 }
 
 module.exports = { initApp };

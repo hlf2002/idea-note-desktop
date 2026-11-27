@@ -229,6 +229,23 @@
   <!-- 轻提示 -->
   <div id="toast" class="toast hidden"></div>
 
+  <!-- Q助理 扫码登录（@ 提及依赖本机 qz 登录态；未登录时应用自动发起，不给用户看命令行）
+       二维码是 qz CLI 输出的半块字符矩阵，白底黑字 + 等宽字体（line-height 1.2）即为标准二维码 -->
+  <div id="qz-login-modal" class="qz-login-modal hidden">
+    <div class="qz-login-card">
+      <h2 class="qz-login-title">登录 Q助理</h2>
+      <p class="qz-login-sub">@ 提及好友需要本机 Q助理 登录，用手机 App 扫码即可</p>
+      <div class="qz-login-qrbox">
+        <div id="qz-login-qr" class="qz-login-qr"></div>
+      </div>
+      <div id="qz-login-status" class="qz-login-status"></div>
+      <div class="qz-login-actions">
+        <button id="qz-login-refresh" class="qz-login-btn" type="button">刷新二维码</button>
+        <button id="qz-login-cancel" class="qz-login-btn ghost" type="button">以后再说</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 无边框窗口（Windows/Linux）：八向边缘拖拽缩放热区。
        系统只给无边框窗口内侧 5px 的缩放命中区（太窄，实际抓不到），这里用 8px 热区补足，
        主进程按起始光标与窗口 bounds 计算新 bounds（renderer 不参与尺寸换算）。 -->
@@ -244,6 +261,7 @@
   </div>
 
   <script src="tags.js"></script>
+  <script src="qr.js"></script>
   <script src="tagsuggest.js"></script>
   <script src="atsuggest.js"></script>
   <script src="md.js"></script>

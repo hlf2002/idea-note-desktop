@@ -201,6 +201,138 @@ class QzCli {
     return { ok: false, reason: r.code || 'auth_failed', message: r.message || 'qz CLI 未登录' };
   }
 
+  /**
+   * 扫码登录（qz auth login --method qr-code）：把终端二维码通过 onEvent 交给渲染层。
+   * 为什么不等用户自己去终端跑：桌面端用户不知道 qz CLI 存在；未登录时应用直接发起登录，
+   * 二维码显示在应用内（白底黑字即可扫），扫码成功后 CLI 自己落盘 ~/.qzhuli-cli/ 凭据。
+   *
+   * 候选降级：首选用户已装 CLI，起不来（ABI 崩/未安装）时换捆绑版；
+   * 3 秒内没有任何二维码输出就判该候选不可用（正常候选几百毫秒就出图）。
+   *
+   * @param {{onEvent?: (e: {phase: 'qr'|'success'|'error'|'expired', text?: string, message?: string}) => void, timeoutMs?: number}} handlers
+   * @returns {{cancel: () => void}}
+   */
+  startQrLogin(handlers = {}) {
+    const emit = (p) => { try { if (typeof handlers.onEvent === 'function') handlers.onEvent(p); } catch (e) { /* noop */ } };
+    // 二维码 5 分钟过期（CLI 侧），留 30s 余量后判过期
+    const timeoutMs = Number(handlers.timeoutMs) > 0 ? Number(handlers.timeoutMs) : 330000;
+    if (!this._badBins) this._badBins = new Set();
+    const state = { cancelled: false, done: false, child: null, timer: null };
+    const kill = (child) => { try { if (child) child.kill('SIGKILL'); } catch (e) { /* noop */ } };
+    const stop = (payload) => {
+      if (state.done) return;
+      state.done = true;
+      if (state.timer) clearTimeout(state.timer);
+      state.timer = null;
+      kill(state.child);
+      state.child = null;
+      if (!state.cancelled) emit(payload);
+    };
+
+    const cands = this.resolveCandidates().filter((c) => !this._badBins.has(c.bin));
+    let idx = 0;
+    const tryNext = () => {
+      if (state.cancelled || state.done) return;
+      const found = cands[idx];
+      idx += 1;
+      if (!found) {
+        stop({ phase: 'error', message: '未找到可用的 qz CLI，无法发起扫码登录' });
+        return;
+      }
+      let child;
+      try {
+        child = this._spawnLoginChild(found);
+      } catch (e) {
+        tryNext();
+        return;
+      }
+      state.child = child;
+      let out = '';
+      let qrText = '';
+      let settled = false;
+      // 3 秒内没出二维码 → 判该候选不可用，换下一个
+      const probeTimer = setTimeout(() => {
+        if (settled || qrText || state.done) return;
+        settled = true;
+        this._badBins.add(found.bin);
+        kill(child);
+        console.warn('[qz-cli] 扫码登录候选无响应，降级到下一个: ' + found.bin);
+        tryNext();
+      }, 3000);
+      const onChunk = (chunk) => {
+        out += String(chunk);
+        const block = extractQrBlock(out);
+        if (block && block !== qrText) {
+          qrText = block;
+          if (!settled) { settled = true; clearTimeout(probeTimer); }
+          this._lastBin = found.bin;
+          emit({ phase: 'qr', text: block });
+        }
+        if (/"code"\s*:\s*"AUTH_LOGIN_SUCCESS"/.test(out)) {
+          clearTimeout(probeTimer);
+          stop({ phase: 'success' });
+        }
+      };
+      child.stdout.on('data', onChunk);
+      child.stderr.on('data', onChunk);
+      child.on('error', () => {
+        clearTimeout(probeTimer);
+        if (!qrText) { this._badBins.add(found.bin); tryNext(); }
+      });
+      child.on('close', () => {
+        clearTimeout(probeTimer);
+        if (qrText) {
+          stop({ phase: 'error', message: cliErrorMessage(out) || '扫码登录中断，请重试' });
+        } else if (!state.done) {
+          this._badBins.add(found.bin);
+          tryNext();
+        }
+      });
+    };
+
+    state.timer = setTimeout(() => stop({ phase: 'expired' }), timeoutMs);
+    tryNext();
+    return {
+      cancel: () => {
+        state.cancelled = true;
+        state.done = true;
+        if (state.timer) clearTimeout(state.timer);
+        kill(state.child);
+        state.child = null;
+      }
+    };
+  }
+
+  /** 用指定候选 spawn 扫码登录子进程（内部；与 _runOnce 的 env 规则保持一致） */
+  _spawnLoginChild(found) {
+    const env = {
+      ...process.env,
+      PATH: [process.env.PATH, ...EXTRA_PATH].filter(Boolean).join(path.delimiter)
+    };
+    const bin = found.bundled ? process.execPath : found.bin;
+    const args = found.bundled
+      ? [found.bin, 'auth', 'login', '--method', 'qr-code']
+      : ['auth', 'login', '--method', 'qr-code'];
+    if (found.bundled) env.ELECTRON_RUN_AS_NODE = '1';
+    return spawn(bin, args, { cwd: this.cwd, env });
+  }
+
+  /**
+   * 单条笔记的远端图片地址（qz note get <id> → data.images）。
+   * 开放平台只给 image_id；内部接口返回真实 CDN URL，用于「本机没有副本」的图兜底展示。
+   * 未登录 / 网络失败 / 笔记不存在一律返回 null（调用方静默跳过，不影响列表渲染）。
+   * @param {string|number} noteId
+   * @returns {Promise<string[]|null>}
+   */
+  async noteImageUrls(noteId) {
+    const id = String(noteId == null ? '' : noteId).trim();
+    if (!id || !/^[0-9]+$/.test(id)) return null;
+    const r = await this.run(['note', 'get', id, '--jq', '.data.images']);
+    if (!r || r.status !== 'success') return null;
+    if (!Array.isArray(r.data)) return [];
+    return r.data.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u));
+  }
+
   /** 联系人列表（qz friend list），按最后沟通时间倒序（越新越靠前）；读不到时间则保持原顺序。 */
   async listContacts() {
     const r = await this.run(['friend', 'list', '--jq', '.data.links']);
@@ -434,6 +566,47 @@ class QzCli {
 
 // ---------- 纯函数（单测覆盖） ----------
 
+/** 去掉终端控制序列（清屏 ESC[2J / 定位 ESC[H 等）与回车；保留二维码字符与中文 */
+function stripAnsi(raw) {
+  return String(raw == null ? '' : raw)
+    .replace(/\x1B\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\x1B\][^\x07]*\x07/g, '')
+    .replace(/\r/g, '');
+}
+
+/** 二维码行：只由半块字符 █ / ▀ / ▄ 与空格组成（qrcode-terminal small 模式输出） */
+const QR_LINE_RE = /^[\u2588\u2580\u2584 ]+$/;
+
+/**
+ * 从 qz CLI 的 stdout 里提取二维码文本块（最长的一段连续二维码行）。
+ * 取不到返回 ''。渲染层直接用 <pre> 白底黑字显示即可扫（实心字符=黑模块）。
+ * @param {string} raw
+ * @returns {string}
+ */
+function extractQrBlock(raw) {
+  const lines = stripAnsi(raw).split('\n');
+  let run = [];
+  let best = [];
+  const flush = () => {
+    if (run.length > best.length) best = run;
+    run = [];
+  };
+  for (const line of lines) {
+    const isQr = line.length >= 15 && QR_LINE_RE.test(line) && /[\u2588\u2580\u2584]/.test(line);
+    if (isQr) run.push(line);
+    else flush();
+  }
+  flush();
+  return best.length >= 10 ? best.join('\n') : '';
+}
+
+/** 从 qz CLI 输出里取错误 message（取不到返回 ''） */
+function cliErrorMessage(raw) {
+  const m = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(stripAnsi(raw));
+  if (!m) return '';
+  try { return JSON.parse('"' + m[1] + '"'); } catch (e) { return m[1]; }
+}
+
 /**
  * 把「会话归属助理」附加到联系人：agentByUid 为 Map/对象 uid → {title, ts}；
  * 命中则复制一份并加 agentTitle 字段，未命中保持原对象不变。
@@ -540,5 +713,8 @@ module.exports = {
   makeNotifyText,
   sortContactsByLastActive,
   attachAgentTitles,
-  bundledCliEntry
+  bundledCliEntry,
+  stripAnsi,
+  extractQrBlock,
+  cliErrorMessage
 };
