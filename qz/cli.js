@@ -337,8 +337,10 @@ class QzCli {
   async listContacts() {
     const r = await this.run(['friend', 'list', '--jq', '.data.links']);
     if (r.status !== 'success' || !Array.isArray(r.data)) return [];
+    // 0.7.x 起 friend list 的 links 里会带上自己（link_type 0）：@ 自己没有意义且会给自己发私信
+    const myUid = await this._ownerUid();
     const contacts = r.data
-      .filter((l) => l && l.uid)
+      .filter((l) => l && l.uid && (!myUid || String(l.uid) !== myUid))
       .map((l) => ({
         uid: l.uid,
         nickname: l.nickname || '',
@@ -408,8 +410,12 @@ class QzCli {
 
   /** 当前登录账号的 owner uid（qz auth status） */
   async _ownerUid() {
+    if (this._ownerUidCache) return this._ownerUidCache;
     const r = await this.run(['auth', 'status']);
-    if (r.status === 'success' && r.data && r.data.uid) return String(r.data.uid);
+    if (r.status === 'success' && r.data && r.data.uid) {
+      this._ownerUidCache = String(r.data.uid);
+      return this._ownerUidCache;
+    }
     return '';
   }
 

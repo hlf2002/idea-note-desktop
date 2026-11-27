@@ -403,3 +403,45 @@ test('cliErrorMessage: 提取 qz 输出的 message（含转义）', () => {
   assert.strictEqual(cliErrorMessage('{"status":"error","message":"登录已失效，请重新登录。"}'), '登录已失效，请重新登录。');
   assert.strictEqual(cliErrorMessage('no json here'), '');
 });
+
+// ============ listContacts：过滤自己（qz 0.7.x 行为） ============
+test('listContacts: 过滤掉自己（0.7.x 的 friend list 会把自己列进 links）', async () => {
+  const cli = new QzCli({});
+  cli.resolveCandidates = () => [{ bin: '/fake/qz', bundled: false }];
+  cli._runOnce = async (found, args) => {
+    const cmd = (args || []).join(' ');
+    if (cmd.startsWith('auth status')) {
+      return { status: 'success', code: 'AUTH_LOGIN_SUCCESS', data: { uid: 'me-uid' } };
+    }
+    if (cmd.startsWith('friend list')) {
+      return {
+        status: 'success',
+        code: 'FRIENDS_LIST',
+        data: [
+          { uid: 'me-uid', nickname: '我自己', friend_name: '', link_type: 0 },
+          { uid: 'other-uid', nickname: '别人', friend_name: '备注乙', link_type: 5 }
+        ]
+      };
+    }
+    return { status: 'error', code: 'CLI_EXIT', message: 'unexpected args: ' + cmd, data: null };
+  };
+  const list = await cli.listContacts();
+  assert.deepStrictEqual(list.map((c) => c.uid), ['other-uid'], '自己必须被过滤掉');
+  assert.strictEqual(list[0].linkType, 5, '在职同事关系保留');
+  assert.strictEqual(list[0].remark, '备注乙', '备注字段保留');
+});
+
+test('listContacts: 拿不到自己 uid 时不过滤（保持旧行为，避免空列表）', async () => {
+  const cli = new QzCli({});
+  cli.resolveCandidates = () => [{ bin: '/fake/qz', bundled: false }];
+  cli._runOnce = async (found, args) => {
+    const cmd = (args || []).join(' ');
+    if (cmd.startsWith('auth status')) return { status: 'error', code: 'AUTH_FAILED', data: { status: 'error', code: 'AUTH_FAILED' } };
+    if (cmd.startsWith('friend list')) {
+      return { status: 'success', code: 'FRIENDS_LIST', data: [{ uid: 'a', nickname: '甲' }] };
+    }
+    return { status: 'error', code: 'CLI_EXIT', message: 'x', data: null };
+  };
+  const list = await cli.listContacts();
+  assert.deepStrictEqual(list.map((c) => c.uid), ['a']);
+});
