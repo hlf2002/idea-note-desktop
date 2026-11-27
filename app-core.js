@@ -99,6 +99,10 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
   const cli = qzCliOverride || new QzCli({
     appPath: (app && typeof app.getAppPath === 'function') ? app.getAppPath() : process.cwd()
   });
+  // 诊断日志落盘：Windows 安装版没有终端，qz CLI 的降级/崩溃原因只能靠文件回传定位
+  if (typeof cli.setLogFile === 'function') {
+    cli.setLogFile(path.join(baseDir, 'qz-cli.log'));
+  }
 
   // ---------- 登录态 ----------
   ipcMain.handle('auth:get', () => {
@@ -478,6 +482,8 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
         error = 'Q助理未登录';
       } else if (reason === 'cli_not_found' || reason === 'CLI_NOT_FOUND') {
         error = '未找到 qz CLI';
+      } else if (reason === 'CLI_UNAVAILABLE') {
+        error = 'qz CLI 启动失败，请稍后重试';
       } else if (reason === 'CLI_TIMEOUT') {
         error = 'qz CLI 响应超时';
       }

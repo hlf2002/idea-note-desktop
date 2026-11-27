@@ -30,14 +30,28 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-/** macOS GUI 应用启动 PATH 不含 /opt/homebrew/bin，必须按固定路径探测 */
-const CANDIDATE_BINS = ['/opt/homebrew/bin/qz', '/usr/local/bin/qz', '/usr/bin/qz'];
+/** macOS/Linux GUI 应用启动 PATH 不含 /opt/homebrew/bin，必须按固定路径探测 */
+const POSIX_CANDIDATE_BINS = ['/opt/homebrew/bin/qz', '/usr/local/bin/qz', '/usr/bin/qz'];
+/**
+ * Windows 固定路径：只认可直接 spawn 的 .exe。
+ * npm 全局安装生成的是 qz.cmd / qz.ps1（批处理与脚本），spawn 不能直调，
+ * 走 cmd.exe /c 又会让「想法全文」进 shell（& | % 都是注入面）——所以一律不用。
+ */
+const WIN_QZ_EXE_NAMES = ['qz.exe'];
 /** 子进程 PATH 补充（防止 qz 依赖的同名命令找不到） */
 const EXTRA_PATH = ['/opt/homebrew/bin', '/usr/local/bin'];
-/** qz CLI 缓存库（SQLite，macOS 自带 sqlite3 直读；读不到就降级为不排序） */
+/** qz CLI 缓存库（SQLite，macOS 自带 sqlite3 直读；Windows 无 sqlite3 → 降级为不排序） */
 const SQLITE3_BIN = '/usr/bin/sqlite3';
 /** 缓存同步新鲜度：12 小时内同步过就不再 cache sync（避免每次 @ 都等几秒） */
 const SYNC_FRESH_MS = 12 * 3600 * 1000;
+/**
+ * 扫码登录「多久没出二维码就判该候选不可用」。
+ * Windows 下捆绑版要走 ELECTRON_RUN_AS_NODE 冷启动 Electron + 读 asar 里的 CLI，
+ * 实测比 macOS 慢得多（杀毒软件/机械盘再叠加），3 秒会误杀可用候选。
+ */
+const QR_PROBE_MS_POSIX = 3000;
+const QR_PROBE_MS_WIN = 12000;
+
 
 /** 应用捆绑 qzhuliCLI 的入口（electron-builder 把 dependencies 打进 asar，此处探测 dist/cmd.js） */
 function bundledCliEntry(appPath) {
@@ -59,14 +73,48 @@ class QzCli {
     this.cwd = opts.cwd || os.homedir();
     this.timeoutMs = opts.timeoutMs || 15000;
     this.appPath = opts.appPath || '';
+    /** 平台可注入（单测用）：Windows 与 POSIX 的候选探测规则不同 */
+    this.platform = opts.platform || process.platform;
+    /** 诊断日志文件（Windows 安装版没有终端，console.warn 用户看不到） */
+    this.logFile = opts.logFile || '';
+    /** 扫码登录出码等待时间（可注入，单测用） */
+    this.qrProbeMs = Number(opts.qrProbeMs) > 0
+      ? Number(opts.qrProbeMs)
+      : (this.platform === 'win32' ? QR_PROBE_MS_WIN : QR_PROBE_MS_POSIX);
+  }
+
+  /** 设置诊断日志文件（主进程按 userData 传入；每次写前做体积上限保护） */
+  setLogFile(file) {
+    this.logFile = String(file || '');
+    return this;
+  }
+
+  /** 写诊断日志：始终 console.warn，能写文件时一并落盘（失败静默，绝不影响主流程） */
+  _log(msg) {
+    const line = '[qz-cli] ' + msg;
+    try { console.warn(line); } catch (e) { /* noop */ }
+    if (!this.logFile) return;
+    try {
+      if (fs.existsSync(this.logFile) && fs.statSync(this.logFile).size > 256 * 1024) {
+        fs.renameSync(this.logFile, this.logFile + '.1');
+      }
+      fs.appendFileSync(this.logFile, new Date().toISOString() + ' ' + line + '\n', 'utf-8');
+    } catch (e) { /* noop */ }
   }
 
   /**
-   * 候选 qz CLI（按优先级）：用户已装（固定路径 > PATH）→ 应用捆绑（asar 内 dist/cmd.js）。
+   * 候选 qz CLI（按优先级）。
+   *
+   * POSIX（mac/linux）：用户已装（固定路径 > PATH）→ 应用捆绑（asar 内 dist/cmd.js）。
    * 保留「用户已装优先」（版本可能更新），但它依赖系统 node 的 ABI：打包版从 Finder 启动时
    * PATH 里只有 /opt/homebrew 的 node（ABI 137），而 qz 的 better_sqlite3.node 可能按别的
    * node 编译（ABI 147）→ 子进程一跑就 NODE_MODULE_VERSION 崩溃。所以 run() 会按顺序降级到
    * 下一个候选：捆绑版走 ELECTRON_RUN_AS_NODE，ABI 与 Electron 一致，不依赖系统 node。
+   *
+   * Windows：**捆绑版优先**。用户 npm 全局装的 qz 是 qz.cmd 批处理（spawn 不能直调，
+   * 经 cmd.exe /c 会把想法全文交给 shell 解析），且其 better_sqlite3.node 按系统 node 编译，
+   * 与 Electron ABI 不匹配；捆绑版（ELECTRON_RUN_AS_NODE）实测可运行、读同一份
+   * ~/.qzhuli-cli 登录态。不带扩展名的 `qz`（npm 生成的 POSIX 脚本）在 Windows 上永远不可执行。
    * @returns {{bin: string, bundled: boolean}[]}
    */
   resolveCandidates() {
@@ -76,8 +124,21 @@ class QzCli {
       if (out.some((c) => c.bin === bin)) return;
       out.push({ bin, bundled });
     };
+    const bundled = bundledCliEntry(this.appPath);
+    if (this.platform === 'win32') {
+      push(bundled, true);
+      if (this.binPath && fs.existsSync(this.binPath)) push(this.binPath, false);
+      const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+      for (const dir of pathDirs) {
+        for (const name of WIN_QZ_EXE_NAMES) {
+          const p = path.join(dir, name);
+          if (fs.existsSync(p)) push(p, false);
+        }
+      }
+      return out;
+    }
     if (this.binPath && fs.existsSync(this.binPath)) push(this.binPath, false);
-    for (const p of CANDIDATE_BINS) {
+    for (const p of POSIX_CANDIDATE_BINS) {
       try {
         fs.accessSync(p, fs.constants.X_OK);
         push(p, false);
@@ -93,7 +154,7 @@ class QzCli {
         } catch (e) { /* continue */ }
       }
     }
-    push(bundledCliEntry(this.appPath), true);
+    push(bundled, true);
     return out;
   }
 
@@ -110,8 +171,15 @@ class QzCli {
    *  @returns {Promise<{status:string, code:string, message?:string, data:any}>} 不 throw */
   async run(args, timeoutMs) {
     if (!this._badBins) this._badBins = new Set();
-    const cands = this.resolveCandidates().filter((c) => !this._badBins.has(c.bin));
+    const all = this.resolveCandidates();
+    const cands = all.filter((c) => !this._badBins.has(c.bin));
     if (!cands.length) {
+      // 「没装」和「装了但起不来」要分开：Windows 打包版曾因一次慢启动被永久标坏，
+      // 用户看到「未找到 qz CLI」完全误导（日志里才有真因）
+      if (all.length) {
+        this._log('候选全部不可用（进程内已标记坏）: ' + Array.from(this._badBins).join(' | '));
+        return { status: 'error', code: 'CLI_UNAVAILABLE', message: 'qz CLI 启动失败（候选均不可用）', data: null };
+      }
       return { status: 'error', code: 'CLI_NOT_FOUND', message: '未找到可用的 qz CLI', data: null };
     }
     let last = null;
@@ -132,7 +200,7 @@ class QzCli {
       if (broken) {
         this._badBins.add(found.bin);
         const hint = /NODE_MODULE_VERSION/.test(r.message || '') ? '（原生模块 ABI 与运行 node 不匹配）' : '';
-        console.warn('[qz-cli] 候选不可用，降级到下一个: ' + found.bin + hint + ' / ' + (r.message || '').split('\n').slice(0, 3).join(' '));
+        this._log('候选不可用，降级到下一个: ' + found.bin + hint + ' / ' + (r.message || '').split('\n').slice(0, 3).join(' '));
       }
     }
     return last;
@@ -191,12 +259,12 @@ class QzCli {
 
   /** qz CLI 是否可用（存在 + 已登录） */
   async isAvailable() {
-    const found = this.resolveBin();
-    if (!found) return { ok: false, reason: 'cli_not_found', binPath: '' };
+    const all = this.resolveCandidates();
+    if (!all.length) return { ok: false, reason: 'cli_not_found', binPath: '' };
     const r = await this.run(['auth', 'status']);
     if (r.status === 'success' && r.data && r.data.uid) {
       // 报告实际应答的那份 CLI（可能是降级后的捆绑版，不是首选候选）
-      return { ok: true, binPath: this._lastBin || found.bin };
+      return { ok: true, binPath: this._lastBin || all[0].bin };
     }
     return { ok: false, reason: r.code || 'auth_failed', message: r.message || 'qz CLI 未登录' };
   }
@@ -249,16 +317,25 @@ class QzCli {
       state.child = child;
       let out = '';
       let qrText = '';
-      let settled = false;
-      // 3 秒内没出二维码 → 判该候选不可用，换下一个
+      let settled = false;      // 已收到二维码块
+      let attemptDone = false;  // 本候选已收尾（超时/退出/错误），防重复 tryNext
+      const probeMs = this.qrProbeMs;
+      // 超时没出二维码 → 放弃本候选、换下一个。
+      // **不标记为坏候选**，且**没有下一个候选时干脆不杀**：Windows 冷启动 Electron +
+      // 读 asar 里的 CLI 明显更慢（实测 6s 还没出码），杀一次就把捆绑版永久踢掉，
+      // 用户之后每次 @ 都显示「找不到 qz CLI」。唯一候选继续等它自己出码，总超时兜底。
       const probeTimer = setTimeout(() => {
-        if (settled || qrText || state.done) return;
+        if (settled || qrText || state.done || attemptDone) return;
         settled = true;
-        this._badBins.add(found.bin);
+        if (idx >= cands.length) {
+          this._log('扫码登录唯一候选 ' + probeMs + 'ms 未出码，继续等待（不杀进程，由总超时兜底）: ' + found.bin);
+          return;
+        }
+        attemptDone = true;
+        this._log('扫码登录候选 ' + probeMs + 'ms 未出二维码，尝试下一个: ' + found.bin);
         kill(child);
-        console.warn('[qz-cli] 扫码登录候选无响应，降级到下一个: ' + found.bin);
         tryNext();
-      }, 3000);
+      }, probeMs);
       const onChunk = (chunk) => {
         out += String(chunk);
         const block = extractQrBlock(out);
@@ -275,16 +352,23 @@ class QzCli {
       };
       child.stdout.on('data', onChunk);
       child.stderr.on('data', onChunk);
-      child.on('error', () => {
+      child.on('error', (err) => {
         clearTimeout(probeTimer);
-        if (!qrText) { this._badBins.add(found.bin); tryNext(); }
+        if (attemptDone || qrText) return;
+        attemptDone = true;
+        this._badBins.add(found.bin);
+        this._log('扫码登录候选无法启动，降级到下一个: ' + found.bin + ' / ' + ((err && err.message) || err));
+        tryNext();
       });
       child.on('close', () => {
         clearTimeout(probeTimer);
+        if (attemptDone) return;
+        attemptDone = true;
         if (qrText) {
           stop({ phase: 'error', message: cliErrorMessage(out) || '扫码登录中断，请重试' });
         } else if (!state.done) {
           this._badBins.add(found.bin);
+          this._log('扫码登录候选退出且没有二维码，降级到下一个: ' + found.bin + ' / ' + (cliErrorMessage(out) || ''));
           tryNext();
         }
       });
@@ -403,7 +487,7 @@ class QzCli {
       }
       return map.size ? map : null;
     } catch (err) {
-      console.warn('[qz-cli] 读取最后沟通时间失败，联系人按原顺序展示: ' + ((err && err.message) || err));
+      this._log('读取最后沟通时间失败，联系人按原顺序展示: ' + ((err && err.message) || err));
       return null;
     }
   }

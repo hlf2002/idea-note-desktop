@@ -445,3 +445,103 @@ test('listContacts: 拿不到自己 uid 时不过滤（保持旧行为，避免�
   const list = await cli.listContacts();
   assert.deepStrictEqual(list.map((c) => c.uid), ['a']);
 });
+
+// ============ Windows 平台候选探测 / 错误码区分 / 诊断日志 ============
+test('resolveCandidates: win32 平台捆绑版优先，且不把无扩展名的 qz（POSIX 脚本）当候选', () => {
+  const appPath = makeFakeAppPath('console.log("{}")');
+  const exeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzwin-'));
+  const exe = path.join(exeDir, 'qz.exe');
+  fs.writeFileSync(exe, 'placeholder');
+  // npm 全局安装在 Windows 生成的 POSIX 脚本（无扩展名）：spawn 直调必然失败
+  const bare = path.join(exeDir, 'qz');
+  fs.writeFileSync(bare, '#!/bin/sh\nexit 0\n');
+  const oldPath = process.env.PATH;
+  process.env.PATH = exeDir + path.delimiter + (oldPath || '');
+  try {
+    const cli = new QzCli({ appPath, platform: 'win32' });
+    const c = cli.resolveCandidates();
+    assert.ok(c.length >= 2, '捆绑版 + qz.exe 至少两个候选');
+    assert.strictEqual(c[0].bundled, true, 'Windows 上捆绑版必须排第一（ABI 与 Electron 一致）');
+    assert.ok(c.some((x) => x.bin === exe), 'PATH 里的 qz.exe 作为兜底候选');
+    assert.ok(!c.some((x) => x.bin === bare), '无扩展名的 qz 不得进入候选');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+});
+
+test('run: 候选全部被标记坏时返回 CLI_UNAVAILABLE（与「没装」区分，避免误导文案）', async () => {
+  const bad = makeBrokenBin('boom');
+  const cli = new QzCli({ binPath: bad });
+  cli.resolveCandidates = () => [{ bin: bad, bundled: false }];
+  const r1 = await cli.run(['auth', 'status']);
+  assert.strictEqual(r1.code, 'CLI_EXIT', '首次失败是真实的执行错误');
+  assert.ok(cli._badBins.has(bad), '坏候选应被记录');
+  const r2 = await cli.run(['auth', 'status']);
+  assert.strictEqual(r2.code, 'CLI_UNAVAILABLE', '全部候选被标坏后必须报「启动失败」而不是「未找到」');
+});
+
+test('isAvailable: 完全没有候选时 reason=cli_not_found', async () => {
+  const cli = new QzCli({});
+  cli.resolveCandidates = () => [];
+  const av = await cli.isAvailable();
+  assert.strictEqual(av.ok, false);
+  assert.strictEqual(av.reason, 'cli_not_found');
+});
+
+test('_log: 诊断信息落盘（Windows 安装版没有终端，只能靠文件回传）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzlog-'));
+  const file = path.join(dir, 'qz-cli.log');
+  const cli = new QzCli({ logFile: file });
+  cli._log('测试诊断一行');
+  const txt = fs.readFileSync(file, 'utf8');
+  assert.ok(txt.includes('测试诊断一行'));
+});
+
+/** 造一个「延迟出二维码」的假 CLI：delayMs 后输出真实二维码样本 */
+function makeSlowQrBin(delayMs) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzslow-'));
+  const qrFile = path.join(dir, 'qr.txt');
+  fs.writeFileSync(qrFile, QR_SAMPLE.join('\n'));
+  const bin = path.join(dir, 'qz');
+  fs.writeFileSync(
+    bin,
+    '#!/usr/bin/env node\n' +
+    'setTimeout(function(){process.stdout.write(require("fs").readFileSync(' + JSON.stringify(qrFile) + ', "utf8"))}, ' + delayMs + ')\n'
+  );
+  fs.chmodSync(bin, 0o755);
+  return bin;
+}
+
+test('startQrLogin: 唯一候选超过阈值仍继续等待出码（不杀进程、不标记坏）', async () => {
+  const bin = makeSlowQrBin(700);
+  const cli = new QzCli({ binPath: bin, qrProbeMs: 250 });
+  cli.resolveCandidates = () => [{ bin, bundled: false }];
+  const events = [];
+  cli.startQrLogin({ onEvent: (e) => events.push(e) });
+  await new Promise((r) => setTimeout(r, 1800));
+  assert.ok(events.some((e) => e.phase === 'qr'), '唯一候选超时后应继续等到出码（Windows 冷启动慢）');
+  assert.ok(!cli._badBins.has(bin), '探针超时不得把候选标坏（否则之后每次 @ 都显示「找不到 qz CLI」）');
+});
+
+test('startQrLogin: 多候选时慢候选超时换下一个，且不标记坏', async () => {
+  const slow = makeSlowQrBin(3000);
+  const fast = makeSlowQrBin(120);
+  const cli = new QzCli({ binPath: slow, qrProbeMs: 250 });
+  cli.resolveCandidates = () => [{ bin: slow, bundled: false }, { bin: fast, bundled: false }];
+  const events = [];
+  cli.startQrLogin({ onEvent: (e) => events.push(e) });
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.ok(events.some((e) => e.phase === 'qr'), '应降级到第二个候选并出码');
+  assert.ok(!cli._badBins.has(slow), '超时换候选不得把慢候选标坏');
+});
+
+test('startQrLogin: 阈值内出码时正常展示二维码（Windows 阈值已放宽）', async () => {
+  const bin = makeSlowQrBin(700);
+  const cli = new QzCli({ binPath: bin, qrProbeMs: 3000 });
+  cli.resolveCandidates = () => [{ bin, bundled: false }];
+  const events = [];
+  cli.startQrLogin({ onEvent: (e) => events.push(e) });
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.ok(events.some((e) => e.phase === 'qr'), '700ms 出码在 3s 阈值内应正常展示');
+  assert.ok(!cli._badBins.has(bin));
+});
