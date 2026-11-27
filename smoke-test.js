@@ -799,6 +799,48 @@ const QR_SAMPLE = [
     })()`);
     console.log('SMOKE_UPDATER_SILENT=' + JSON.stringify(silentErrorToast));
 
+    // 下载完成 → 顶部常驻提示「重要更新已安装(win: 已下载)」+ 按钮「启用新版」（用户 2026-11-27 要求：
+    // 一直显示、可手动关闭）。verifies：后续 available/downloading/error 事件不得覆盖或隐藏它；
+    // 用户按 × 后同版本不再重弹，换新版本仍会弹。
+    const expectReadyText = (process.env.IDEA_NOTE_FORCE_WIN_CONTROLS === '1' || process.platform === 'win32')
+      ? '重要更新已下载' : '重要更新已安装';
+    const readBar = () => win.webContents.executeJavaScript(`(() => {
+      const bar = document.getElementById('update-bar');
+      const btn = document.getElementById('update-action');
+      const txt = document.getElementById('update-text');
+      return {
+        visible: !!bar && !bar.classList.contains('hidden'),
+        text: txt ? txt.textContent : '',
+        actionText: btn ? btn.textContent : '',
+        actionVisible: !!btn && !btn.classList.contains('hidden'),
+        iconHidden: !btn || btn.classList.contains('hidden')
+      };
+    })()`);
+    win.webContents.send('updater:event', { event: 'downloaded', version: '9.9.9' });
+    await new Promise((r) => setTimeout(r, 300));
+    const readyBar1 = await readBar();
+    // 干扰事件：后续检查/进度/错误都不能把常驻提示顶掉
+    win.webContents.send('updater:event', { event: 'available', version: '9.9.9' });
+    win.webContents.send('updater:event', { event: 'downloading', percent: 40 });
+    win.webContents.send('updater:event', { event: 'error', message: '某错误', manual: false });
+    await new Promise((r) => setTimeout(r, 300));
+    const readyBar2 = await readBar();
+    // 手动关闭：点 × 后隐藏
+    await win.webContents.executeJavaScript("document.getElementById('update-close').click(); true");
+    await new Promise((r) => setTimeout(r, 200));
+    const readyBarClosed = await readBar();
+    // 同版本不再重弹
+    win.webContents.send('updater:event', { event: 'downloaded', version: '9.9.9' });
+    await new Promise((r) => setTimeout(r, 200));
+    const readyBarRepeat = await readBar();
+    // 新版本仍会弹（也用于截图呈现）
+    win.webContents.send('updater:event', { event: 'downloaded', version: '9.9.10' });
+    await new Promise((r) => setTimeout(r, 200));
+    const readyBarNext = await readBar();
+    console.log('SMOKE_UPDATER_READY=' + JSON.stringify({
+      expectReadyText, readyBar1, readyBar2, readyBarClosed, readyBarRepeat, readyBarNext
+    }));
+
     const image = await win.webContents.capturePage();
     fs.writeFileSync(path.join(__dirname, 'screenshot.png'), image.toPNG());
 
@@ -943,6 +985,14 @@ const QR_SAMPLE = [
       c96: // 静默更新检查失败不弹 toast（2026-11-26 用户报 Windows 冷启动「更新失败 + 长错误码」）
       silentErrorToast.visible === false,
       c97: !atResult.atErr,
+      // 下载完成后的常驻「启用新版」提示（2026-11-27 用户要求）
+      c98: readyBar1.visible === true,
+      c99: readyBar1.text === expectReadyText,
+      c100: readyBar1.actionText === '启用新版' && readyBar1.actionVisible === true,
+      c101: readyBar2.visible === true && readyBar2.text === expectReadyText, // 后续事件不覆盖
+      c102: readyBarClosed.visible === false,                                 // 可手动关闭
+      c103: readyBarRepeat.visible === false,                                 // 同版本不重弹
+      c104: readyBarNext.visible === true && readyBarNext.text === expectReadyText,
     };
     const failed = Object.keys(checks).filter((k) => !checks[k]);
     if (failed.length) console.log('SMOKE_FAILED=' + JSON.stringify(failed));

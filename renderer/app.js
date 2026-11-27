@@ -981,6 +981,18 @@
   let updateActionMode = null;        // 'download' | 'restart'
   let checkUpdateState = 'idle';      // 侧边栏「检查更新」链接状态：'idle' | 'downloading' | 'downloaded'
   let downloadDismissed = false;      // 用户点 x 关闭下载进度提示后，不再刷新进度文案
+  let updateReadyVersion = null;      // 已下载完成、等待启用新版的版本（非空即「常驻提示」状态）
+
+  // 下载完成后的提示文案按平台区分（用户 2026-11-27 明确要求）：
+  // macOS 安装包已落到替换位置（quitAndInstall 直接换新版）→「重要更新已安装」；
+  // Windows 安装包只落在待安装目录，尚未替换 →「重要更新已下载」。
+  function isWindowsPlatform() {
+    return !!(window.ideaNote && window.ideaNote.platform === 'win32');
+  }
+
+  function readyNoticeText() {
+    return isWindowsPlatform() ? '重要更新已下载' : '重要更新已安装';
+  }
 
   function showUpdateBar(text, mode) {
     el.updateBar.classList.remove('hidden');
@@ -988,7 +1000,7 @@
     if (mode) {
       updateActionMode = mode;
       el.updateAction.classList.remove('hidden');
-      el.updateAction.textContent = (mode === 'restart') ? '重启并安装' : '下载更新';
+      el.updateAction.textContent = (mode === 'restart') ? '启用新版' : '下载更新';
     } else {
       updateActionMode = null;
       el.updateAction.classList.add('hidden');
@@ -1007,12 +1019,14 @@
     if (ev === 'checking') {
       // 检查过程不再弹 toast，结果由下方事件与「检查更新」链接状态反馈
     } else if (ev === 'available') {
+      if (updateReadyVersion) return;  // 已下载待启用：常驻提示不被后续检查覆盖
       if (payload.version && payload.version === updateDismissedVersion) return;
       if (payload.version && payload.version === updaterInfo.currentVersion) return; // 防御：版本未变
       updateShownVersion = payload.version;
       showUpdateBar('发现新版本 v' + payload.version,
         updaterInfo.autoDownload ? null : 'download');
     } else if (ev === 'downloading') {
+      if (updateReadyVersion) return;  // 已下载待启用：不再隐藏常驻提示
       // 下载进度改由侧边栏「检查更新」链接展示，隐藏顶部提示条避免重复
       hideUpdateBar();
       checkUpdateState = 'downloading';
@@ -1021,15 +1035,24 @@
         el.checkUpdateX.classList.remove('hidden');
       }
     } else if (ev === 'downloaded') {
-      hideUpdateBar();
+      // 下载完成 → 顶部常驻提示「重要更新已安装/已下载 + 启用新版」（用户 2026-11-27 要求：
+      // 一直显示，直到用户点「启用新版」或手动关闭 ×）。侧边栏同步为可点击的重启入口。
       updateShownVersion = payload.version;
+      updateReadyVersion = payload.version || updateShownVersion;
       downloadDismissed = false;
       checkUpdateState = 'downloaded';
       el.checkUpdateLabel.textContent = '重启并安装';
       el.checkUpdateX.classList.add('hidden');
+      if (updateReadyVersion && updateReadyVersion === updateDismissedVersion) {
+        hideUpdateBar();   // 用户对这个版本按过 ×，不再重复弹
+      } else {
+        showUpdateBar(readyNoticeText(), 'restart');
+      }
     } else if (ev === 'not-available') {
+      if (updateReadyVersion) return;
       if (payload.manual) showToast('已是最新版本');
     } else if (ev === 'error') {
+      if (updateReadyVersion) return;  // 已就绪后出错不回退提示（避免提示闪烁消失）
       // 静默检查（启动 10s 后 / 每 4 小时）失败不弹 toast：用户没主动操作，不该被打扰，
       // 也不该看到升级组件那一串 URL/HTTP/堆栈。手动检查/下载的失败走 IPC 返回值提示。
       hideUpdateBar();
