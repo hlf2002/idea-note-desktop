@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('ideaNote', {
   qzLogin: {
     start: () => ipcRenderer.invoke('qz:login'),
     cancel: () => ipcRenderer.invoke('qz:login-cancel'),
+    // qz CLI 登录态快查：{ ok, reason, message }（点图片占位时判断要不要拉起扫码）
+    status: () => ipcRenderer.invoke('qz:status'),
     // 订阅登录事件：{ phase: 'qr'|'success'|'expired'|'error', text?, message? }
     onEvent: (cb) => {
       ipcRenderer.on('qz:login-event', (_e, payload) => cb(payload));

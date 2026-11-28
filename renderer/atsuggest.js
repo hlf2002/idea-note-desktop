@@ -96,6 +96,8 @@
     return LINK_TYPE_LABELS[linkType] || '';
   }
 
+  var liveInstances = []; // 已挂载实例的联系人缓存失效钩子（qz CLI 登录成功后要重新拉取）
+
   /**
    * 给 MarkdownComposer 实例挂载 @联系人联想。
    * composer 需具备：el / value() / rawValue() / caretOffset() / replaceText(start,end,text) / focus()
@@ -341,6 +343,16 @@
     // 初次挂载时若光标已在 @ 后（例如编辑态回填内容），立即检测
     refresh();
 
+    var handle = {
+      // qz CLI 登录成功：丢掉旧缓存与重试冷却；若用户此刻正在 @ 输入态，立即重新拉取
+      invalidate: function () {
+        contacts = null;
+        lastAttemptAt = 0;
+        if (queryState) refresh();
+      }
+    };
+    liveInstances.push(handle);
+
     return function detach() {
       if (detached) return;
       detached = true;
@@ -354,7 +366,16 @@
       if (rafId) { window.cancelAnimationFrame(rafId); rafId = null; }
       if (box && box.parentNode) box.parentNode.removeChild(box);
       box = null;
+      var idx = liveInstances.indexOf(handle);
+      if (idx >= 0) liveInstances.splice(idx, 1);
     };
+  }
+
+  /** 让所有已挂载实例的联系人缓存失效（qz CLI 登录成功后调用，避免要重启才看到联系人） */
+  function invalidateAll() {
+    liveInstances.forEach(function (h) {
+      try { h.invalidate(); } catch (e) { /* 单个实例出错不影响其它 */ }
+    });
   }
 
   return {
@@ -362,6 +383,7 @@
     filterContacts: filterContacts,
     limitContacts: limitContacts,
     linkTypeLabel: linkTypeLabel,
-    attach: attach
+    attach: attach,
+    invalidateAll: invalidateAll
   };
 });

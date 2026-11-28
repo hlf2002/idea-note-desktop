@@ -432,20 +432,13 @@
         // 图片加载失败（本机副本被清理 / 远端地址失效）→ 降级为占位徽标，
         // 原始地址留在 data-src 便于排查，绝不显示破图图标
         imgEl.addEventListener('error', () => {
-          const ph = document.createElement('span');
-          ph.className = 'memo-image-missing';
-          ph.setAttribute('data-src', imgEl.getAttribute('src') || '');
-          ph.innerHTML = '<i class="fa-regular fa-image"></i><span>图片已不在本机</span>';
+          const ph = makeMissingImageBadge('图片未加载 · 点击重试', { src: imgEl.getAttribute('src') || '' });
           if (imgEl.parentNode) imgEl.parentNode.replaceChild(ph, imgEl);
         });
         imagesWrap.appendChild(imgEl);
       });
       if (media.missing > 0) {
-        const ph = document.createElement('span');
-        ph.className = 'memo-image-missing';
-        ph.innerHTML = '<i class="fa-regular fa-image"></i><span></span>';
-        ph.querySelector('span').textContent = media.missing + ' 张图片 · 在 Q助理 App 查看';
-        imagesWrap.appendChild(ph);
+        imagesWrap.appendChild(makeMissingImageBadge(media.missing + ' 张图片 · 点击加载'));
       }
       card.appendChild(imagesWrap);
     }
@@ -745,20 +738,13 @@
         // 图片加载失败（本机副本被清理 / 远端地址失效）→ 降级为占位徽标，
         // 原始地址留在 data-src 便于排查，绝不显示破图图标
         imgEl.addEventListener('error', () => {
-          const ph = document.createElement('span');
-          ph.className = 'memo-image-missing';
-          ph.setAttribute('data-src', imgEl.getAttribute('src') || '');
-          ph.innerHTML = '<i class="fa-regular fa-image"></i><span>图片已不在本机</span>';
+          const ph = makeMissingImageBadge('图片未加载 · 点击重试', { src: imgEl.getAttribute('src') || '' });
           if (imgEl.parentNode) imgEl.parentNode.replaceChild(ph, imgEl);
         });
         imagesWrap.appendChild(imgEl);
       });
       if (media.missing > 0) {
-        const ph = document.createElement('span');
-        ph.className = 'memo-image-missing';
-        ph.innerHTML = '<i class="fa-regular fa-image"></i><span></span>';
-        ph.querySelector('span').textContent = media.missing + ' 张图片 · 在 Q助理 App 查看';
-        imagesWrap.appendChild(ph);
+        imagesWrap.appendChild(makeMissingImageBadge(media.missing + ' 张图片 · 点击加载'));
       }
       card.appendChild(imagesWrap);
     }
@@ -1172,6 +1158,49 @@
       images.push({ thumbnail: u, large: u });
     }
     return { images, missing };
+  }
+
+  /**
+   * 图片占位徽标（本机无副本、远端地址也补不出来时显示）。
+   * 可点击：点击重试补齐；若原因是 qz CLI 未登录，直接拉起扫码登录（用户不需要知道 CLI 的存在）。
+   * @param {string} text 徽标文案
+   * @param {{src?: string}} [opts] src 会写进 data-src，便于排查是哪张图
+   */
+  function makeMissingImageBadge(text, opts) {
+    const ph = document.createElement('span');
+    ph.className = 'memo-image-missing is-clickable';
+    if (opts && opts.src) ph.setAttribute('data-src', opts.src);
+    ph.title = '点击重试加载';
+    ph.innerHTML = '<i class="fa-regular fa-image"></i><span></span>';
+    ph.querySelector('span').textContent = text;
+    ph.addEventListener('click', (e) => {
+      e.stopPropagation();
+      retryMissingImages();
+    });
+    return ph;
+  }
+
+  let retryingImages = false;
+  /** 点击占位：补齐远端地址并重渲染；补不出来再判 qz CLI 登录态，未登录就拉起扫码 */
+  async function retryMissingImages() {
+    if (retryingImages) return;
+    retryingImages = true;
+    try {
+      const changed = await backfillMediaOnce();
+      await refreshMediaIndex();
+      renderAll();
+      if (changed) { showToast('图片地址已补齐'); return; }
+      let st = null;
+      try {
+        st = window.ideaNote && window.ideaNote.qzLogin ? await window.ideaNote.qzLogin.status() : null;
+      } catch (e) { st = null; }
+      if (st && !st.ok) { maybeAutoQzLogin(true); return; }
+      showToast('这张图片暂时取不到地址，请稍后重试');
+    } catch (err) {
+      showToast('图片加载失败：' + ((err && err.message) || '请稍后重试'));
+    } finally {
+      retryingImages = false;
+    }
   }
 
   /**
@@ -2041,10 +2070,13 @@
     }
   }
 
-  /** 由 @ 联系人加载失败自动触发；1 分钟内不重复弹，避免反复打断输入 */
-  function maybeAutoQzLogin() {
+  /**
+   * 自动触发扫码登录。@ 联系人加载失败时自动调用（1 分钟内不重复弹，避免反复打断输入）；
+   * 用户主动点「图片占位」徽标时传 force=true —— 这是明确意图，冷却不生效。
+   */
+  function maybeAutoQzLogin(force) {
     if (qzLoginVisible) return;
-    if (Date.now() - qzLoginAutoAt < 60000) return;
+    if (!force && Date.now() - qzLoginAutoAt < 60000) return;
     qzLoginAutoAt = Date.now();
     startQzLogin();
   }
@@ -2074,7 +2106,19 @@
       }
       if (p.phase === 'success') {
         closeQzLoginModal();
-        showToast('Q助理 已登录，现在可以 @ 联系人');
+        showToast('Q助理 已登录，正在刷新联系人和图片…');
+        // qz CLI 刚登录：联系人缓存立即失效，否则要重启应用才能看到 @ 列表
+        if (window.AtSuggester && typeof window.AtSuggester.invalidateAll === 'function') {
+          window.AtSuggester.invalidateAll();
+        }
+        // 未登录时远端地址补不出来（图片一直占位）：登录后立刻重跑补齐并重渲染
+        refreshMediaIndex()
+          .then(() => backfillMediaOnce())
+          .then((changed) => {
+            renderAll();
+            if (changed) showToast('图片已刷新');
+          })
+          .catch(() => { renderAll(); });
         return;
       }
       if (p.phase === 'expired') {

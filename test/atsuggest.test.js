@@ -6,7 +6,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { detectAtQuery, filterContacts, limitContacts, linkTypeLabel } = require('../renderer/atsuggest');
+const { detectAtQuery, filterContacts, limitContacts, linkTypeLabel, invalidateAll } = require('../renderer/atsuggest');
 
 // ============ detectAtQuery ============
 test('detectAtQuery: 行首 @ 后中文昵称', () => {
@@ -124,4 +124,10 @@ test('linkTypeLabel: 未知类型返回空', () => {
   assert.strictEqual(linkTypeLabel(99), '');
   assert.strictEqual(linkTypeLabel(null), '');
   assert.strictEqual(linkTypeLabel(undefined), '');
+});
+
+// ============ invalidateAll（qz CLI 登录成功后联系人缓存失效入口） ============
+test('invalidateAll: 已导出且无挂载实例时调用不抛错', () => {
+  assert.strictEqual(typeof invalidateAll, 'function');
+  assert.doesNotThrow(() => invalidateAll());
 });

@@ -140,7 +140,11 @@ const cliState = {
   qrLoginStarts: 0,
   qrLoginCancels: 0,
   qrLoginHandlers: null,
-  contactsAuthFailed: false
+  contactsAuthFailed: false,
+  // qz CLI「已登录」后内部接口才给得出第二张图的 CDN 地址：
+  // 用来验证「扫码成功后无需重启应用就自动补齐图片」
+  afterQzLogin: false,
+  authCacheResets: 0
 };
 function makeMockCli() {
   const sentMessages = [];
@@ -165,13 +169,22 @@ function makeMockCli() {
         ...extra
       ];
     },
-    // 远端图片地址：笔记 1 的 img_mock_1 有 CDN 地址，img_mock_no_url 没有（保持占位）
+    // 远端图片地址：笔记 1 的 img_mock_1 有 CDN 地址；img_mock_no_url 只有「已登录」后才给地址
     async noteImageUrls(noteId) {
       cliState.imageUrlCalls.push(String(noteId));
       if (String(noteId) === '1') {
-        return ['https://res.qzhuli.com/open_platform/user_media/img_mock_1.png'];
+        const urls = ['https://res.qzhuli.com/open_platform/user_media/img_mock_1.png'];
+        if (cliState.afterQzLogin) {
+          urls.push('https://res.qzhuli.com/open_platform/user_media/img_mock_no_url.png');
+        }
+        return urls;
       }
       return [];
+    },
+    // qz CLI 扫码成功 → 主进程重置进程内登录缓存（联系人不按旧 uid 过滤）
+    resetAuthCache() {
+      cliState.authCacheResets += 1;
+      return this;
     },
     // 扫码登录：保存 onEvent 供主进程手动推事件（不真起 qz 子进程）
     startQrLogin({ onEvent }) {
@@ -604,6 +617,102 @@ const QR_SAMPLE = [
       cancel: qzCancelResult, restartOk: !!(qzRestart && qzRestart.ok), view: qzSuccessView,
       starts: cliState.qrLoginStarts, cancels: cliState.qrLoginCancels
     }));
+    // ---- 场景：qz CLI 扫码成功后，联系人与图片要立即刷新，不需重启应用（2026-11-28 用户报）----
+    cliState.contactsAuthFailed = true;
+    const reloginBefore = await win.webContents.executeJavaScript(`(async () => {
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+      const out = {};
+      try {
+        const composerEl = document.getElementById('composer');
+        composerEl.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(composerEl);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('insertText', false, ' @');
+        await wait(900); // 未登录 → 空态
+        const box = document.querySelector('.at-suggest');
+        out.shown = !!(box && !box.classList.contains('hidden'));
+        out.items = box ? box.querySelectorAll('.tag-suggest-item').length : 0;
+        out.placeholder = document.querySelectorAll('.memo-image-missing').length;
+      } catch (e) { out.err = String((e && e.message) || e); }
+      return out;
+    })()`);
+    // 模拟扫码完成：CLI 变已登录 → 推 success 事件（渲染层应立刻失效联系人缓存 + 重补图片）
+    cliState.contactsAuthFailed = false;
+    cliState.afterQzLogin = true;
+    if (cliState.qrLoginHandlers) cliState.qrLoginHandlers({ phase: 'success' });
+    // 联系人重拉是异步的（IPC + 渲染），轮询等待最多 3s，避免时序抖动造成假失败
+    let reloginAfter = null;
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      reloginAfter = await win.webContents.executeJavaScript(`(() => {
+        const box = document.querySelector('.at-suggest');
+        const badges = Array.from(document.querySelectorAll('.memo-image-missing'));
+        return {
+          shown: !!(box && !box.classList.contains('hidden')),
+          items: box ? box.querySelectorAll('.tag-suggest-item').length : 0,
+          placeholder: badges.length,
+          // 加载失败降级时原始地址留在 data-src：用它证明渲染层已拿到登录后才有的新地址
+          badgeSrcs: badges.map((b) => b.getAttribute('data-src') || ''),
+          remoteSrc: Array.from(document.querySelectorAll('img.memo-image-thumb')).map((i) => i.getAttribute('src') || '')
+        };
+      })()`);
+      if (reloginAfter.items > 0) break;
+    }
+    const reloginRemoteMap = fs.existsSync(path.join(tmpDir, 'media-remote.json'))
+      ? JSON.parse(fs.readFileSync(path.join(tmpDir, 'media-remote.json'), 'utf8')) : {};
+    console.log('SMOKE_QZ_RELOGIN=' + JSON.stringify({
+      before: reloginBefore, after: reloginAfter, cacheResets: cliState.authCacheResets,
+      remoteKey: !!reloginRemoteMap.img_mock_no_url
+    }));
+
+    // ---- 场景：点图片占位 → 补齐失败且 qz CLI 未登录 → 直接拉起扫码登录（2026-11-28 用户要求）----
+    await win.webContents.executeJavaScript(`(() => {
+      const el = document.getElementById('composer');
+      if (el) { el.innerHTML = ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
+      return true;
+    })()`);
+    cliState.contactsAuthFailed = true; // qz:status 回 ok:false
+    cliState.afterQzLogin = false;      // 该图地址已给不出来 → 占位重现
+    {
+      const mrFile = path.join(tmpDir, 'media-remote.json');
+      const cur = fs.existsSync(mrFile) ? JSON.parse(fs.readFileSync(mrFile, 'utf8')) : {};
+      delete cur.img_mock_no_url;
+      fs.writeFileSync(mrFile, JSON.stringify(cur, null, 2), 'utf8');
+    }
+    await win.webContents.executeJavaScript("document.getElementById('sync-refresh').click(); true");
+    await new Promise((r) => setTimeout(r, 1600));
+    const missingInfo = await win.webContents.executeJavaScript(`(() => {
+      const badges = Array.from(document.querySelectorAll('.memo-image-missing'));
+      return {
+        count: badges.length,
+        clickable: badges.filter((b) => b.classList.contains('is-clickable')).length,
+        texts: badges.map((b) => (b.textContent || '').trim())
+      };
+    })()`);
+    const startsBeforeClick = cliState.qrLoginStarts;
+    await win.webContents.executeJavaScript(`(async () => {
+      const badge = document.querySelector('.memo-image-missing.is-clickable');
+      if (badge) badge.click();
+      await new Promise(r => setTimeout(r, 1200));
+      return true;
+    })()`);
+    const missingClick = await win.webContents.executeJavaScript(`(() => {
+      const m = document.getElementById('qz-login-modal');
+      return {
+        modalShown: !!(m && !m.classList.contains('hidden')),
+        status: (document.getElementById('qz-login-status') || {}).textContent || ''
+      };
+    })()`);
+    console.log('SMOKE_MISSING_CLICK=' + JSON.stringify({
+      missingInfo, startsBeforeClick, starts: cliState.qrLoginStarts, click: missingClick
+    }));
+    await win.webContents.executeJavaScript("(() => { const b = document.getElementById('qz-login-cancel'); if (b) b.click(); return true; })()");
+    await new Promise((r) => setTimeout(r, 200));
+
     cliState.contactsAuthFailed = false; // 恢复，后续步骤按已登录预期
 
     // 标签联想（窗口显示后 selection/focus 才正常，隐藏窗口 addRange 不生效）：
@@ -993,6 +1102,15 @@ const QR_SAMPLE = [
       c102: readyBarClosed.visible === false,                                 // 可手动关闭
       c103: readyBarRepeat.visible === false,                                 // 同版本不重弹
       c104: readyBarNext.visible === true && readyBarNext.text === expectReadyText,
+      // qz CLI 扫码成功后无需重启：联系人立即重拉、图片立即补齐（2026-11-28 用户报）
+      c105: reloginBefore.items === 0 && reloginBefore.placeholder >= 1,
+      c106: reloginAfter.items > 0,
+      c107: reloginAfter.badgeSrcs.some((s) => s.indexOf('img_mock_no_url') !== -1) && !!reloginRemoteMap.img_mock_no_url,
+      c108: cliState.authCacheResets >= 1,
+      // 点图片占位：可点击 → 补不出来且未登录 → 直接拉起扫码登录
+      c109: missingInfo.count >= 1 && missingInfo.clickable === missingInfo.count,
+      c110: cliState.qrLoginStarts > startsBeforeClick,
+      c111: missingClick.modalShown === true,
     };
     const failed = Object.keys(checks).filter((k) => !checks[k]);
     if (failed.length) console.log('SMOKE_FAILED=' + JSON.stringify(failed));

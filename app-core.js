@@ -250,12 +250,22 @@ function initApp({ authFile, cacheFile, legacyFile, dataDir, apiOverride, qzCliO
       if (typeof cli.startQrLogin !== 'function') return { ok: false, error: '当前版本不支持自动登录 qz CLI' };
       const push = (payload) => {
         if (payload && payload.phase !== 'qr') qzLoginHandle = null;
+        // 扫码成功：立刻重置 CLI 的进程内登录缓存，否则联系人仍按「未登录时的空 uid」过滤、
+        // 默认助理也查不到，用户必须重启应用才能恢复
+        if (payload && payload.phase === 'success' && typeof cli.resetAuthCache === 'function') {
+          cli.resetAuthCache();
+        }
         const win = getWindow && getWindow();
         if (win && !win.isDestroyed()) win.webContents.send('qz:login-event', payload);
       };
       qzLoginHandle = cli.startQrLogin({ onEvent: push });
       return { ok: true };
     });
+    // qz CLI 登录态快查：渲染层点「图片占位」时据此决定是否拉起扫码登录
+    ipcMain.handle('qz:status', () => guard(async () => {
+      const av = await cli.isAvailable();
+      return { ok: !!av.ok, reason: String(av.reason || ''), message: String(av.message || '') };
+    }));
     ipcMain.handle('qz:login-cancel', () => {
       cancelQzLogin();
       // 取消后统一通知渲染层关闭浮层（不论调用方是「以后再说」还是外部 API）

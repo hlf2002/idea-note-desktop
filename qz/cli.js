@@ -281,6 +281,19 @@ class QzCli {
     });
   }
 
+  /**
+   * 登录态变化后重置进程内缓存（qz CLI 刚扫码登录成功时调用）。
+   * 不清缓存的话：联系人仍按「未登录时的空 uid」过滤、默认助理仍查不到，
+   * 用户必须重启应用才能恢复——正是「登录后图片和 @ 列表都不刷新」的一半原因。
+   */
+  resetAuthCache() {
+    this._ownerUidCache = null;
+    this._defaultAgent = null;
+    // 登录成功说明候选本身能用：把此前因冷启动/超时误标的坏候选一并恢复
+    if (this._badBins) this._badBins.clear();
+    return this;
+  }
+
   /** qz CLI 是否可用（存在 + 已登录） */
   async isAvailable() {
     const all = this.resolveCandidates();

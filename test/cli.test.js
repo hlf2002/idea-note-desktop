@@ -584,3 +584,21 @@ test('startQrLogin: 阈值内出码时正常展示二维码（Windows 阈值已�
   assert.ok(events.some((e) => e.phase === 'qr'), '700ms 出码在 3s 阈值内应正常展示');
   assert.ok(!cli._badBins.has(bin));
 });
+
+// ============ 登录态缓存重置（qz CLI 扫码成功后无需重启应用） ============
+test('resetAuthCache: 清掉 ownerUid / 默认助理缓存与误标的坏候选', () => {
+  const cli = new QzCli({ appPath: makeFakeAppPath('console.log("{}")') });
+  cli._ownerUidCache = 'u-old';
+  cli._defaultAgent = { id: 'a1', title: '旧助理' };
+  cli._badBins = new Set(['/fake/qz']);
+  cli.resetAuthCache();
+  assert.strictEqual(cli._ownerUidCache, null, '旧账号 uid 必须清掉，否则联系人按旧 uid 过滤');
+  assert.strictEqual(cli._defaultAgent, null);
+  assert.strictEqual(cli._badBins.size, 0, '登录成功说明候选可用，误标的坏候选要恢复');
+});
+
+test('resetAuthCache: 未创建坏候选集合时也不抛错', () => {
+  const cli = new QzCli({ appPath: makeFakeAppPath('console.log("{}")') });
+  assert.doesNotThrow(() => cli.resetAuthCache());
+  assert.strictEqual(cli._ownerUidCache, null);
+});

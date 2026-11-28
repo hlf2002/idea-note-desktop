@@ -967,6 +967,13 @@ html, body {
 }
 .memo-image-missing i { font-size: 12px; }
 
+/* 可点击占位（点击重试补齐；qz CLI 未登录时会拉起扫码登录） */
+.memo-image-missing.is-clickable {
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.memo-image-missing.is-clickable:hover { background: #e6d6b4; color: #6f5a3f; }
+
 /* ===== 无边框窗口（Windows/Linux）：右上角自绘三按钮 ===== */
 /* 设计语言沿用应用本体：纸底透出的暖棕描边图标、hover 才浮出浅棕底，关闭按钮 hover 用主题橙棕 */
 /* 关键：容器必须挂在可拖拽容器（.main-header / #login-view）内部。Chromium 的拖拽区命中测试
