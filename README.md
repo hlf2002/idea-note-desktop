@@ -4,7 +4,7 @@
 
 [官网](https://ideanote.7373.com.cn) · [下载安装](https://ideanote.7373.com.cn/#download) · [Windows / macOS 桌面端](#下载与安装)
 
-![灵感笔记界面](screenshot.png)
+![灵感笔记界面](docs/screenshot.png)
 
 ## 核心特性
 
