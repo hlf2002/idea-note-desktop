@@ -644,8 +644,11 @@ html, body {
 .memo-image-thumb:hover { opacity: .82; }
 
 /* 图片大图 lightbox（支持按钮缩放 / 鼠标拖拽平移 / 滚轮缩放） */
+/* z-index 必须高于无边框窗口的右上角三按钮（.win-controls 1200）与边缘拖拽热区
+   （#win-resize-grips 1300）：大图是模态浮层，蒙层要连系统窗口按钮一起挡住，
+   否则看图时误点会直接最小化/关闭窗口（用户 2026-11-28 明确要求）。 */
 #image-lightbox {
-  position: fixed; inset: 0; z-index: 1000;
+  position: fixed; inset: 0; z-index: 1500;
   display: none; flex-direction: column;
 }
 #image-lightbox.open { display: flex; }
@@ -693,7 +696,25 @@ html, body {
   -webkit-app-region: no-drag;
 }
 .lb-btn:hover { background: rgba(255,255,255,.22); }
-.lb-btn.lb-close { margin-left: 4px; }
+/* 关闭按钮固定右上角（用户 2026-11-28 要求：不要放底部工具栏）
+   尺寸比工具栏按钮略大，方便一眼找到；hover 用暖红，与窗口关闭按钮同语义。 */
+.lb-btn.lb-close {
+  position: absolute;
+  top: 16px; right: 16px;
+  z-index: 20;                 /* 高于 .lightbox-stage（1），不被图片/舞台盖住 */
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  font-size: 16px;
+  background: rgba(20,20,20,.55);
+  border: 1px solid rgba(255,255,255,.12);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.lb-btn.lb-close:hover {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff9f0;
+}
 .lb-scale {
   color: rgba(255,255,255,.85);
   font-size: 12.5px;

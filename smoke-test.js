@@ -205,6 +205,15 @@ function makeMockCli() {
   };
 }
 
+/** 读取远端图片索引（可能不存在或写到一半）：读失败返回 {}，不抛错打断冒烟 */
+function readRemoteMapSafe(file) {
+  try {
+    if (!fs.existsSync(file)) return {};
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_e) { return {}; }
+}
+
 app.whenReady().then(async () => {
   try {
     // 假七牛上传服务先起来（media.upload 会真实 POST 到这里）
@@ -259,6 +268,10 @@ app.whenReady().then(async () => {
       onResizeEnd: () => {},
       minSize: { width: 760, height: 520 }
     });
+    // 记录「隐藏/恢复窗口按钮」IPC（大图浮层期间 mac 原生交通灯要被藏起来）；
+    // 注册在 registerWindowControls 之后 → 与真实 handler 并存，只观察不干扰
+    const buttonsVisibleCalls = [];
+    ipcMain.on('window:buttons-visible', (_e, v) => buttonsVisibleCalls.push(Boolean(v)));
 
     win.webContents.on('console-message', (_e, level, message) => {
       console.log('[renderer]', level, message);
@@ -433,7 +446,40 @@ app.whenReady().then(async () => {
           const lbEl = document.getElementById('image-lightbox');
           out.lightboxOpen = !!(lbEl && lbEl.classList.contains('open'));
           const closeBtn = document.querySelector('#image-lightbox [data-action="close"]');
-          if (closeBtn) closeBtn.click();
+          if (closeBtn) {
+            // 关闭按钮必须独立在右上角（用户 2026-11-28 要求：不放底部工具栏）
+            const r = closeBtn.getBoundingClientRect();
+            out.lbClosePos = {
+              top: Math.round(r.top),
+              right: Math.round(window.innerWidth - r.right),
+              w: Math.round(r.width),
+              h: Math.round(r.height)
+            };
+            out.lbCloseInToolbar = !!closeBtn.closest('.lightbox-toolbar');
+            out.lbCloseOnTop = !out.lbCloseInToolbar && r.top < 80 && (window.innerWidth - r.right) < 80;
+            out.lbCloseBtnToolbarClose = document.querySelectorAll('.lightbox-toolbar [data-action="close"]').length;
+            // 蒙层必须挡住窗口右上角三按钮（模态浮层，看图时不能误点最小化/关闭）
+            out.lbZIndex = parseInt(getComputedStyle(lbEl).zIndex, 10) || 0;
+            const wctls = Array.prototype.slice.call(document.querySelectorAll('.win-controls'));
+            const visibleWctl = wctls.filter((c) => c.getBoundingClientRect().width > 0)[0] || null;
+            out.lbWinCtlZIndex = visibleWctl ? (parseInt(getComputedStyle(visibleWctl).zIndex, 10) || 0) : null;
+            out.lbGripZIndex = (function () {
+              const g = document.getElementById('win-resize-grips');
+              return g ? (parseInt(getComputedStyle(g).zIndex, 10) || 0) : null;
+            })();
+            out.lbCoversWinControls = null; // 三按钮不可见（默认 mac 模式）时不做断言
+            out.lbHitIsWinCtl = null;
+            if (visibleWctl) {
+              const ctl = visibleWctl.querySelector('.win-ctl');
+              const cr = ctl ? ctl.getBoundingClientRect() : null;
+              if (cr && cr.width > 0) {
+                const hit = document.elementFromPoint(cr.left + cr.width / 2, cr.top + cr.height / 2);
+                out.lbHitIsWinCtl = !!(hit && hit.closest && hit.closest('.win-ctl'));
+                out.lbCoversWinControls = !!(hit && hit.closest && hit.closest('#image-lightbox'));
+              }
+            }
+            closeBtn.click();
+          }
           out.lightboxClosed = !!(lbEl && !lbEl.classList.contains('open'));
         }
 
@@ -644,9 +690,12 @@ const QR_SAMPLE = [
     cliState.contactsAuthFailed = false;
     cliState.afterQzLogin = true;
     if (cliState.qrLoginHandlers) cliState.qrLoginHandlers({ phase: 'success' });
-    // 联系人重拉是异步的（IPC + 渲染），轮询等待最多 3s，避免时序抖动造成假失败
+    // 联系人重拉与远端图片补齐都是异步的（IPC + 渲染 + 写盘）。
+    // 轮询到「联系人已回来 + media-remote.json 已写进登录后才给的地址」两个信号都到才算完成，
+    // 只等联系人会在图片补齐前提前 break，让 c107 变成偶发假失败（实测过）。
     let reloginAfter = null;
-    for (let i = 0; i < 10; i++) {
+    let reloginRemoteMap = {};
+    for (let i = 0; i < 12; i++) {
       await new Promise((r) => setTimeout(r, 300));
       reloginAfter = await win.webContents.executeJavaScript(`(() => {
         const box = document.querySelector('.at-suggest');
@@ -660,10 +709,9 @@ const QR_SAMPLE = [
           remoteSrc: Array.from(document.querySelectorAll('img.memo-image-thumb')).map((i) => i.getAttribute('src') || '')
         };
       })()`);
-      if (reloginAfter.items > 0) break;
+      reloginRemoteMap = readRemoteMapSafe(path.join(tmpDir, 'media-remote.json'));
+      if (reloginAfter.items > 0 && reloginRemoteMap.img_mock_no_url) break;
     }
-    const reloginRemoteMap = fs.existsSync(path.join(tmpDir, 'media-remote.json'))
-      ? JSON.parse(fs.readFileSync(path.join(tmpDir, 'media-remote.json'), 'utf8')) : {};
     console.log('SMOKE_QZ_RELOGIN=' + JSON.stringify({
       before: reloginBefore, after: reloginAfter, cacheResets: cliState.authCacheResets,
       remoteKey: !!reloginRemoteMap.img_mock_no_url
@@ -1111,6 +1159,16 @@ const QR_SAMPLE = [
       c109: missingInfo.count >= 1 && missingInfo.clickable === missingInfo.count,
       c110: cliState.qrLoginStarts > startsBeforeClick,
       c111: missingClick.modalShown === true,
+      // 大图 lightbox：关闭按钮在右上角（不在底部工具栏）、蒙层挡住窗口三按钮（2026-11-28 用户要求）
+      c112: result.lbCloseOnTop === true,
+      c113: result.lbCloseBtnToolbarClose === 0,
+      c114: result.lbZIndex >= 1500 && (result.lbWinCtlZIndex === null || result.lbZIndex > result.lbWinCtlZIndex),
+      c115: result.lbGripZIndex === null || result.lbZIndex > result.lbGripZIndex,
+      c116: result.lbCoversWinControls === null
+        ? result.lbHitIsWinCtl === null          // 默认 mac 模式：三按钮不显示，无从断言
+        : (result.lbCoversWinControls === true && result.lbHitIsWinCtl === false),
+      // mac 原生交通灯在 DOM 之上，必须经 IPC 隐藏：打开时 false、关闭时 true
+      c117: buttonsVisibleCalls.indexOf(false) !== -1 && buttonsVisibleCalls.indexOf(true) !== -1,
     };
     const failed = Object.keys(checks).filter((k) => !checks[k]);
     if (failed.length) console.log('SMOKE_FAILED=' + JSON.stringify(failed));

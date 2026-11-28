@@ -26,7 +26,8 @@ function registerWindowControls(opts) {
   // 幂等：先摘掉同名监听，避免重复注册导致一次移动执行多次 setBounds
   const CHANNELS = [
     'window:minimize', 'window:toggle-maximize', 'window:close',
-    'window:resize-start', 'window:resize-move', 'window:resize-end'
+    'window:resize-start', 'window:resize-move', 'window:resize-end',
+    'window:buttons-visible'
   ];
   CHANNELS.forEach((ch) => ipcMain.removeAllListeners(ch));
 
@@ -46,6 +47,16 @@ function registerWindowControls(opts) {
   ipcMain.on('window:close', () => {
     const win = getWindow();
     if (alive(win)) win.close();
+  });
+
+  // macOS 原生交通灯（红黄绿）绘制在窗口最上层，渲染层蒙层永远盖不住它：
+  // 打开大图等模态浮层时必须经此 IPC 隐藏，关闭时再恢复（Windows/Linux 的自绘三按钮
+  // 由渲染层 z-index 遮挡，无需隐藏）。方法在非 mac 平台不存在，按能力探测后忽略。
+  ipcMain.on('window:buttons-visible', (_e, visible) => {
+    const win = getWindow();
+    if (!alive(win)) return;
+    if (typeof win.setWindowButtonVisibility !== 'function') return;
+    try { win.setWindowButtonVisibility(visible !== false); } catch (_err) { /* 平台不支持：忽略 */ }
   });
 
   // ---- 边缘拖拽缩放 ----

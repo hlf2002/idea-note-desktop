@@ -94,7 +94,9 @@ contextBridge.exposeInMainWorld('ideaNote', {
     // 边缘拖拽缩放：渲染层热区按下 → 主进程按屏幕坐标换算 bounds
     resizeStart: (edge, x, y) => ipcRenderer.send('window:resize-start', { edge, x, y }),
     resizeMove: (x, y) => ipcRenderer.send('window:resize-move', { x, y }),
-    resizeEnd: () => ipcRenderer.send('window:resize-end')
+    resizeEnd: () => ipcRenderer.send('window:resize-end'),
+    // macOS：隐藏/恢复原生交通灯（DOM 蒙层盖不住原生绘制，大图浮层期间要藏起来）
+    setButtonsVisible: (visible) => ipcRenderer.send('window:buttons-visible', visible !== false)
   },
   // 渲染层据此决定是否显示自绘三按钮（macOS 走原生交通灯）
   // IDEA_NOTE_FORCE_WIN_CONTROLS=1 可在 macOS 上预览/冒烟测试这套按钮

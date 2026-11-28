@@ -583,12 +583,13 @@
       '<div class="lightbox-stage">' +
         '<img class="lightbox-img" alt="" draggable="false" />' +
       '</div>' +
+      // 关闭按钮独立放右上角（用户 2026-11-28 要求：不要放底部工具栏）
+      '<button type="button" class="lb-btn lb-close" data-action="close" title="关闭（Esc）"><i class="fa-solid fa-xmark"></i></button>' +
       '<div class="lightbox-toolbar">' +
         '<button type="button" class="lb-btn" data-action="zoom-out" title="缩小"><i class="fa-solid fa-magnifying-glass-minus"></i></button>' +
         '<span class="lb-scale">100%</span>' +
         '<button type="button" class="lb-btn" data-action="zoom-in" title="放大"><i class="fa-solid fa-magnifying-glass-plus"></i></button>' +
         '<button type="button" class="lb-btn" data-action="reset" title="适应窗口">适应</button>' +
-        '<button type="button" class="lb-btn lb-close" data-action="close" title="关闭"><i class="fa-solid fa-xmark"></i></button>' +
       '</div>';
     document.body.appendChild(lightboxEl);
 
@@ -598,9 +599,9 @@
     // 点击遮罩关闭（点击图片/舞台不关闭）
     lightboxEl.querySelector('.lightbox-backdrop').addEventListener('click', closeLightbox);
 
-    // 工具栏按钮：逐个直接绑定（不用事件委托，避免 e.target 边界问题）
+    // 工具栏/右上角按钮：逐个直接绑定（不用事件委托，避免 e.target 边界问题）
     const bindLbBtn = (action, handler) => {
-      const btn = lightboxEl.querySelector('.lightbox-toolbar [data-action="' + action + '"]');
+      const btn = lightboxEl.querySelector('[data-action="' + action + '"]');
       if (btn) btn.addEventListener('click', (e) => {
         e.stopPropagation();
         e.preventDefault();
@@ -665,12 +666,24 @@
     img.addEventListener('error', lbResetView, { once: true });
     img.src = src || '';
     box.classList.add('open');
+    // 蒙层要连系统窗口按钮一起挡住（mac 原生交通灯需隐藏）
+    setSystemButtonsVisible(false);
     // 图片已缓存时立即计算适应比例
     if (img.complete && img.naturalWidth > 0) lbResetView();
   }
 
   function closeLightbox() {
     if (lightboxEl) lightboxEl.classList.remove('open');
+    setSystemButtonsVisible(true);
+  }
+
+  // macOS 原生交通灯在窗口最上层，DOM 蒙层盖不住 → 看图期间经 IPC 隐藏，关掉再恢复；
+  // Windows/Linux 自绘三按钮由 lightbox 的 z-index（1500 > 1200）遮挡即可。
+  function setSystemButtonsVisible(visible) {
+    try {
+      const wc = window.ideaNote && window.ideaNote.windowControls;
+      if (wc && typeof wc.setButtonsVisible === 'function') wc.setButtonsVisible(visible);
+    } catch (e) { /* 忽略：老版本 preload 无此能力，不影响看图 */ }
   }
 
   function buildCard(memo) {
