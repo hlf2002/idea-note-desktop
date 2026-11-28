@@ -312,6 +312,15 @@ function makeBrokenBin(stderrText) {
   return bin;
 }
 
+/** 造一个「能启动但业务失败」的假 qz：stdout 打裸 undefined，退出码 1（模拟 --jq 的错误路径） */
+function makeUndefBin() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qzcli-undef-'));
+  const bin = path.join(dir, 'qz');
+  fs.writeFileSync(bin, '#!/bin/sh\necho "undefined"\nexit 1\n');
+  fs.chmodSync(bin, 0o755);
+  return bin;
+}
+
 test('resolveCandidates: 捆绑 CLI 永远排在最后（首选候选失败才能降级）', () => {
   const appPath = makeFakeAppPath('console.log("{}")');
   const cli = new QzCli({ appPath });
@@ -470,7 +479,8 @@ test('resolveCandidates: win32 平台捆绑版优先，且不把无扩展名的 
 });
 
 test('run: 候选全部被标记坏时返回 CLI_UNAVAILABLE（与「没装」区分，避免误导文案）', async () => {
-  const bad = makeBrokenBin('boom');
+  // 真坏候选 = ABI 不匹配（不是普通业务失败）
+  const bad = makeBrokenBin('Error: NODE_MODULE_VERSION 147');
   const cli = new QzCli({ binPath: bad });
   cli.resolveCandidates = () => [{ bin: bad, bundled: false }];
   const r1 = await cli.run(['auth', 'status']);
@@ -478,6 +488,43 @@ test('run: 候选全部被标记坏时返回 CLI_UNAVAILABLE（与「没装」�
   assert.ok(cli._badBins.has(bad), '坏候选应被记录');
   const r2 = await cli.run(['auth', 'status']);
   assert.strictEqual(r2.code, 'CLI_UNAVAILABLE', '全部候选被标坏后必须报「启动失败」而不是「未找到」');
+});
+
+// 2026-11-28 Windows 用户机实测回归：qz 的 --jq 在错误路径（未登录/笔记不存在）会把 stdout
+// 打成裸 undefined 并退出 1。旧代码把这种 CLI_EXIT 当「候选坏了」，一次 note get 失败就把
+// 唯一捆绑候选永久踢掉 → 图片占位、@ 提及、扫码登录全报「未找到可用的 qz CLI」。
+test('run: 业务失败（stdout=undefined, exit 1）不得把候选标坏', async () => {
+  const bin = makeUndefBin();
+  const cli = new QzCli({ binPath: bin });
+  cli.resolveCandidates = () => [{ bin, bundled: false }];
+  const r1 = await cli.run(['note', 'get', '1']);
+  assert.strictEqual(r1.code, 'CLI_EXIT', '进程起来了只是失败，属于业务错误');
+  assert.ok(!cli._badBins.has(bin), '业务失败不能永久踢掉候选');
+  const r2 = await cli.run(['note', 'get', '1']);
+  assert.strictEqual(r2.code, 'CLI_EXIT', '第二次仍是同一业务失败，不能变成 CLI_UNAVAILABLE');
+  assert.match(r2.message, /undefined/, 'message 要保留原始输出线索，便于排查');
+});
+
+test('noteImageUrls: 不带 --jq（错误路径会输出裸 undefined），从 data.images 取 CDN 地址', async () => {
+  const cli = new QzCli({});
+  cli.resolveCandidates = () => [{ bin: '/fake/qz', bundled: false }];
+  const seen = [];
+  cli._runOnce = async (found, args) => {
+    seen.push((args || []).join(' '));
+    return {
+      status: 'success',
+      code: 'OK',
+      data: { images: ['https://cdn.example.com/a.jpg', 'ftp://bad/x', null] }
+    };
+  };
+  const urls = await cli.noteImageUrls('123');
+  assert.deepStrictEqual(urls, ['https://cdn.example.com/a.jpg'], '只保留 http(s) 地址');
+  assert.ok(!seen[0].includes('--jq'), '不得再用 --jq');
+  // 失败路径：静默返回 null（调用方跳过，不影响列表渲染）
+  cli._runOnce = async () => ({ status: 'error', code: 'CLI_EXIT', message: 'x', data: null });
+  assert.strictEqual(await cli.noteImageUrls('123'), null);
+  // 非数字 id 不查询
+  assert.strictEqual(await cli.noteImageUrls('abc'), null);
 });
 
 test('isAvailable: 完全没有候选时 reason=cli_not_found', async () => {

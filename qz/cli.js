@@ -218,8 +218,13 @@ class QzCli {
         return r;
       }
       last = r;
-      // 起不来 / 崩溃才换下一个；并记录坏候选，避免每次都重试（本次进程内）
-      const broken = r.code === 'CLI_SPAWN' || r.code === 'CLI_EXIT';
+      // 起不来 / 环境级失败才换下一个；并记录坏候选，避免每次都重试（本次进程内）
+      // CLI_EXIT 只算「进程起来了但没拿到正常 JSON」——qz 用退出码 1 表示业务失败（未登录、
+      // 笔记不存在），且 --jq 在错误路径上会把 stdout 打成字面量 undefined。这类失败绝不能
+      // 永久标坏候选：Windows 只有捆绑候选，一次 note get 失败就会把它踢掉，扫码登录/图片/
+      // @ 提及全瘫（2026-11-28 用户机器实测）。只有 ABI 不匹配/模块缺失/文件不可执行才算真坏。
+      const broken = r.code === 'CLI_SPAWN'
+        || (r.code === 'CLI_EXIT' && /NODE_MODULE_VERSION|Cannot find module|ENOENT|EACCES/.test(r.message || ''));
       if (broken) {
         this._badBins.add(found.bin);
         const hint = /NODE_MODULE_VERSION/.test(r.message || '') ? '（原生模块 ABI 与运行 node 不匹配）' : '';
@@ -276,7 +281,10 @@ class QzCli {
         try { data = JSON.parse(out); } catch (e) { data = null; }
         if (data && data.status) { resolve(data); return; }
         if (code === 0) { resolve({ status: 'success', code: 'OK', data }); return; }
-        resolve({ status: 'error', code: 'CLI_EXIT', message: errOut.trim() || out.trim() || 'qz CLI 执行失败(exit ' + code + ')', data });
+        const rawOut = out.trim();
+        // qz 的 --jq 在错误路径上把 `JSON.stringify(undefined)` 直接打到 stdout，即字面量 undefined
+        const outText = rawOut === 'undefined' ? 'qz 命令失败（--jq 无值，stdout=undefined）' : rawOut;
+        resolve({ status: 'error', code: 'CLI_EXIT', message: errOut.trim() || outText || 'qz CLI 执行失败(exit ' + code + ')', data });
       });
     });
   }
@@ -448,10 +456,13 @@ class QzCli {
   async noteImageUrls(noteId) {
     const id = String(noteId == null ? '' : noteId).trim();
     if (!id || !/^[0-9]+$/.test(id)) return null;
-    const r = await this.run(['note', 'get', id, '--jq', '.data.images']);
+    // 不用 --jq：qz 在错误路径上（未登录/笔记不存在）会往 stdout 打裸 undefined 并退出 1，
+    // 拿不到结构化错误；拿完整 JSON 自己取 data.images 更稳。
+    const r = await this.run(['note', 'get', id]);
     if (!r || r.status !== 'success') return null;
-    if (!Array.isArray(r.data)) return [];
-    return r.data.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u));
+    const imgs = r.data && Array.isArray(r.data.images) ? r.data.images : null;
+    if (!imgs) return [];
+    return imgs.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u));
   }
 
   /** 联系人列表（qz friend list），按最后沟通时间倒序（越新越靠前）；读不到时间则保持原顺序。 */
